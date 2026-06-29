@@ -276,11 +276,15 @@ void Renderer::rgb(AVFrame *frame)
 
 void Renderer::nv(AVFrame *frame)
 {
+#if SDL_VERSION_ATLEAST(2, 0, 16)
     SDL_UpdateNVTexture(
         _texture,
         nullptr,
         frame->data[0], frame->linesize[0],
         frame->data[1], frame->linesize[1]);
+#else
+    nvAlternative(frame);
+#endif
 }
 
 void Renderer::nvAlternative(AVFrame *frame)

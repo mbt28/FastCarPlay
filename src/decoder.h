@@ -10,21 +10,19 @@ extern "C"
 #include <atomic>
 #include <thread>
 
-#include "struct/video_buffer.h"
+#include "idecoder.h"
 #include "struct/atomic_queue.h"
 #include "protocol/message.h"
 
-class Decoder
+class Decoder : public IDecoder
 {
 public:
     Decoder();
     ~Decoder();
 
-    void start(AtomicQueue<Message> *data, AVCodecID codecId);
-    void stop();
-    void flush();
-
-    VideoBuffer buffer;
+    void start(AtomicQueue<Message> *data, AVCodecID codecId) override;
+    void stop() override;
+    void flush() override;
 
 private:
     void runner();

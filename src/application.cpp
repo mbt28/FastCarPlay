@@ -5,6 +5,8 @@
 #include <sstream>
 #include <chrono>
 #include <thread>
+#include <memory>
+#include <csignal>
 
 #include "struct/video_buffer.h"
 #include "common/logger.h"
@@ -12,6 +14,14 @@
 #include "settings.h"
 #include "interface.h"
 #include "decoder.h"
+#ifdef USE_CEDRUS
+#include "cedrus_decoder.h" // mainline cedrus (ffmpeg v4l2-request) HW decoder (F1C200s)
+#endif
+#ifdef USE_CEDAR
+#include "cedar_decoder.h" // Allwinner Cedar HW H.264 decoder (F1C200s)
+#include "serial_input.h"  // TEST-only serial-console navigation (F1C200s)
+#include "touch_input.h"   // GT911 / evdev touchscreen (F1C200s headless)
+#endif
 #include "pcm_audio.h"
 #include "common/functions.h"
 
@@ -55,23 +65,34 @@ Application::Application(/* args */) : _window(nullptr),
     if (!setAudioDriver())
         throw std::runtime_error("Unsupported audio driver " + std::string(Settings::audioDriver.value));
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_AUDIO) != 0)
+    // Without a renderer we need no video subsystem, fonts or display mode.
+    Uint32 sdlSubsystems = SDL_INIT_TIMER | SDL_INIT_AUDIO;
+    if (!Settings::noRenderer())
+        sdlSubsystems |= SDL_INIT_VIDEO;
+    if (SDL_Init(sdlSubsystems) != 0)
         throw std::runtime_error(std::string("SDL initialisation failed > ") + SDL_GetError());
 
-    if (TTF_Init() != 0)
+    if (!Settings::noRenderer())
     {
-        SDL_Quit();
-        throw std::runtime_error(std::string("TTF initialisation failed > ") + TTF_GetError());
-    }
+        if (TTF_Init() != 0)
+        {
+            SDL_Quit();
+            throw std::runtime_error(std::string("TTF initialisation failed > ") + TTF_GetError());
+        }
 
-    if (SDL_GetCurrentDisplayMode(0, &_displayMode) != 0)
+        if (SDL_GetCurrentDisplayMode(0, &_displayMode) != 0)
+        {
+            TTF_Quit();
+            SDL_Quit();
+            throw std::runtime_error(std::string("SDL get display mode failed > ") + SDL_GetError());
+        }
+
+        log_i("SDL screen %dx%d@%d, audio driver %s", _displayMode.w, _displayMode.h, _displayMode.refresh_rate, SDL_GetCurrentAudioDriver());
+    }
+    else
     {
-        TTF_Quit();
-        SDL_Quit();
-        throw std::runtime_error(std::string("SDL get display mode failed > ") + SDL_GetError());
+        log_i("No renderer; audio driver %s", SDL_GetCurrentAudioDriver());
     }
-
-    log_i("SDL screen %dx%d@%d, audio driver %s", _displayMode.w, _displayMode.h, _displayMode.refresh_rate, SDL_GetCurrentAudioDriver());
 }
 
 Application::~Application()
@@ -95,6 +116,14 @@ void Application::start(const char *title)
 {
     log_d("Initialising");
 
+    if (Settings::noRenderer())
+    {
+        log_v("Starting (no renderer)");
+        loopHeadless();
+        log_v("Stopped");
+        return;
+    }
+
     // Create SDL window centered on screen
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, Settings::fastScale ? "nearest" : "best");
 
@@ -115,8 +144,15 @@ void Application::start(const char *title)
     if (!Settings::cursor)
         SDL_ShowCursor(SDL_DISABLE);
 
-    // Create accelerated renderer for the window
+    // Create renderer for the window
+#ifdef USE_CEDAR
+    // F1C200s has no GPU and SDL has no usable display backend; video is painted
+    // directly to /dev/fb0 by CedarDecoder. SDL just needs a (software) renderer
+    // for the UI; run it with SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy.
+    Uint32 flags = SDL_RENDERER_SOFTWARE;
+#else
     Uint32 flags = SDL_RENDERER_ACCELERATED;
+#endif
     if (Settings::vsync)
         flags |= SDL_RENDERER_PRESENTVSYNC;
 
@@ -343,6 +379,76 @@ bool Application::processFrameEvents(AtomicQueue<Message> &queue, Renderer &rend
     return result;
 }
 
+namespace
+{
+// The SDL loop relies on SDL turning SIGINT into an SDL_QUIT event; the headless
+// loop has no SDL event pump, so install our own handler for a clean Ctrl-C.
+volatile std::sig_atomic_t g_quit = 0;
+void onQuitSignal(int) { g_quit = 1; }
+} // namespace
+
+std::unique_ptr<IDecoder> Application::makeDecoder()
+{
+    // Cedar HW decoder is selectable at runtime but only linked in on USE_CEDAR
+    // builds; otherwise (and by default) the software avcodec Decoder is used.
+#ifdef USE_CEDRUS
+    if (Settings::cedrus)
+        return std::make_unique<CedrusDecoder>();
+#endif
+#ifdef USE_CEDAR
+    if (Settings::cedar)
+        return std::make_unique<CedarDecoder>();
+#endif
+    return std::make_unique<Decoder>();
+}
+
+// No-renderer path: no SDL window/renderer/fonts are created. The decoder
+// presents frames itself (Cedar -> /dev/fb0) and navigation comes from the
+// serial console. Keeps the process alive and drives the protocol state.
+void Application::loopHeadless()
+{
+    Connection protocol;
+    std::unique_ptr<IDecoder> decoder = makeDecoder();
+    PcmAudio audioMain("main"), audioAux("aux");
+
+    decoder->start(&protocol.videoStream, AV_CODEC_ID_H264);
+    audioMain.start(&protocol.audioStreamMain);
+    audioAux.start(&protocol.audioStreamAux, &audioMain);
+    protocol.start();
+
+#ifdef USE_CEDAR
+    SerialInput serialInput(protocol); // serial-console navigation
+    TouchInput touchInput(protocol);   // GT911 / evdev touchscreen
+#endif
+
+    // Clean exit on Ctrl-C / SIGTERM; the SerialInput dtor then restores the tty.
+    g_quit = 0;
+    std::signal(SIGINT, onQuitSignal);
+    std::signal(SIGTERM, onQuitSignal);
+
+    auto lastState = PROTOCOL_STATUS_UNKNOWN;
+    AVFrame *frame = nullptr;
+    uint32_t frameId = 0;
+    while (_active && !g_quit)
+    {
+        auto state = protocol.state();
+        if (state != lastState)
+        {
+            if (state == PROTOCOL_STATUS_CONNECTED)
+            {
+                decoder->flush();
+                decoder->buffer.reset();
+                protocol.send(Message::Control(BTN_SCREEN_REFRESH));
+            }
+            lastState = state;
+        }
+        // Drain the buffer so a buffering (software) decoder can't stall; the
+        // Cedar decoder presents to fb directly and leaves this empty.
+        decoder->buffer.consume(&frame, &frameId);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
 void Application::loop()
 {
     // Prepare home screen
@@ -363,13 +469,13 @@ void Application::loop()
     interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
 
     Connection protocol;
-    Decoder decoder;
+    std::unique_ptr<IDecoder> decoder = makeDecoder();
     PcmAudio audioMain("main"), audioAux("aux");
 
     if (Settings::keyPipe.value.length() > 2)
         _keyListener = new PipeListener(Settings::keyPipe.value.c_str());
 
-    decoder.start(&protocol.videoStream, AV_CODEC_ID_H264);
+    decoder->start(&protocol.videoStream, AV_CODEC_ID_H264);
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
@@ -421,8 +527,8 @@ void Application::loop()
             // On connect
             if (protocol.state() == PROTOCOL_STATUS_CONNECTED)
             {
-                decoder.flush();
-                decoder.buffer.reset();
+                decoder->flush();
+                decoder->buffer.reset();
             }
             _state.latestState = protocol.state();
         }
@@ -430,7 +536,7 @@ void Application::loop()
         if (_state.latestState == PROTOCOL_STATUS_CONNECTED)
         {
             uint32_t latestFrameId = 0;
-            if (decoder.buffer.consume(&frame, &latestFrameId))
+            if (decoder->buffer.consume(&frame, &latestFrameId))
             {
                 newFrame = latestFrameId != frameId;
                 if (newFrame || _state.dirty)
@@ -495,8 +601,8 @@ void Application::loop()
                           "BUFF: video [%u] audio[main %u aux %u] out [%u]",
                           status().c_str(),
                           frameId,
-                          decoder.buffer.latestId(),
-                          decoder.buffer.latestId() - frameId,
+                          decoder->buffer.latestId(),
+                          decoder->buffer.latestId() - frameId,
                           dropframes,
                           frameTime,
                           frameDelay,
@@ -515,7 +621,7 @@ void Application::loop()
         frameStart = now;
         if (_active && !Settings::vsync && !_state.dirty)
         {
-            frameDelay = (frameTarget - frameTime) * ((decoder.buffer.latestId() == frameId) ? 1.0 : 0.9);
+            frameDelay = (frameTarget - frameTime) * ((decoder->buffer.latestId() == frameId) ? 1.0 : 0.9);
             if (frameDelay > 0)
             {
                 std::this_thread::sleep_for(std::chrono::microseconds(frameDelay));

@@ -1,5 +1,10 @@
 # Compiler
-CXX := g++
+CXX ?= g++
+PKG_CONFIG ?= pkg-config
+HOST_XXD ?= xxd
+INSTALL ?= install
+PREFIX ?= /usr
+SYSCONFDIR ?= /etc
 SRC_DIR := ./src
 OUT_DIR := ./out
 RES_DIR := $(SRC_DIR)/resource
@@ -19,14 +24,29 @@ TARGET_NAME := app
 # Build types
 .PHONY: all debug release clean build
 
-all: debug
+all: release
 
-LDOPTIONS := -lSDL2 -lSDL2_ttf -lavformat -lavcodec -lavutil -lswscale -lusb-1.0 -lssl -lcrypto
-LDFLAGS := 
+LDOPTIONS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl) -pthread
+LDFLAGS :=
 CXXCOMMON := -Wall -std=c++17 -Isrc
 
+# Allwinner Cedar hardware H.264 decode (F1C200s). Enable with USE_CEDAR=1;
+# libcedarc headers come from the (cross) sysroot, libs are linked here. libdrm
+# is for the optional DE backend UYVY plane (renderer = drm).
+ifeq ($(USE_CEDAR),1)
+CXXCOMMON += -DUSE_CEDAR $(shell $(PKG_CONFIG) --cflags libdrm)
+LDOPTIONS += -lvdecoder -lcdc_base -lMemAdapter -lVE -lvideoengine -ldl -lrt $(shell $(PKG_CONFIG) --libs libdrm)
+endif
+
+# Mainline cedrus HW H.264 decode via ffmpeg's V4L2-Request hwaccel (F1C200s),
+# blob-free: no libcedarc, only libdrm + libav* (already linked). Enable USE_CEDRUS=1.
+ifeq ($(USE_CEDRUS),1)
+CXXCOMMON += -DUSE_CEDRUS $(shell $(PKG_CONFIG) --cflags libdrm)
+LDOPTIONS += -lrt $(shell $(PKG_CONFIG) --libs libdrm)
+endif
+
 debug: BUILD_TYPE := debug
-debug: CXXFLAGS := -g -O0 -DPROTOCOL_DEBUG -fsanitize=address -fno-omit-frame-pointer 
+debug: CXXFLAGS := -g -O0 -DPROTOCOL_DEBUG -fsanitize=address -fno-omit-frame-pointer
 debug: LDFLAGS += -fsanitize=address -fno-omit-frame-pointer
 debug: TARGET := $(TARGET_NAME)-debug
 debug: prepare
@@ -35,13 +55,13 @@ ifeq ($(shell uname -s), Darwin)
     # macOS / clang
     PLATFORM_LDFLAGS :=
 else
-    # Linux / GCC (Pi or other)
+    # Linux / GCC (cross or native)
     PLATFORM_LDFLAGS := -Wl,--gc-sections -Wl,--as-needed
 endif
 
 release: BUILD_TYPE := release
-release: CXXFLAGS := -O2 -ffast-math -march=native -fno-plt -fno-rtti -flto=jobserver -fdata-sections -ffunction-sections -ffunction-sections -fomit-frame-pointer -fvisibility=hidden -pipe -DNDEBUG
-release: LDFLAGS += -O2 -ffast-math -march=native -flto=jobserver -Wl,-O1 $(PLATFORM_LDFLAGS)
+release: CXXFLAGS ?= -O2 -ffast-math -fno-rtti -fdata-sections -ffunction-sections -fomit-frame-pointer -fvisibility=hidden -pipe -DNDEBUG
+release: LDFLAGS += -O2 -ffast-math -Wl,-O1 $(PLATFORM_LDFLAGS)
 release: TARGET := $(TARGET_NAME)
 release: prepare
 
@@ -52,7 +72,7 @@ build: $(TARGET)
 
 $(GEN_DIR)/%.cpp: $(RES_DIR)/%
 	@mkdir -p $(GEN_DIR)
-	xxd -i -n $(basename $(notdir $<)) $< > $@
+	$(HOST_XXD) -i -n $(basename $(notdir $<)) $< > $@
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(OUT_DIR)
@@ -61,7 +81,11 @@ $(TARGET): $(OBJS)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXCOMMON) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXCOMMON) $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl) $(CXXFLAGS) -c $< -o $@
+
+install:
+	$(INSTALL) -D -m 0755 $(OUT_DIR)/$(TARGET_NAME) $(DESTDIR)$(PREFIX)/bin/fastcarplay
+	$(INSTALL) -D -m 0644 settings.txt $(DESTDIR)$(SYSCONFDIR)/fastcarplay/settings.txt
 
 clean:
 	@rm -rf $(OUT_DIR)

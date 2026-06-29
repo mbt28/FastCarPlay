@@ -38,6 +38,27 @@ public:
     static inline Setting<int> fontSize{"font-size", 40};
     static inline Setting<bool> vsync{"vsync", false};
     static inline Setting<bool> hwDecode{"hw-decode", true};
+    // Use the Allwinner Cedar hardware decoder (libcedarc) instead of ffmpeg.
+    // Only honoured on builds compiled with USE_CEDAR (e.g. the F1C200s).
+    static inline Setting<bool> cedar{"cedar-decode", false};
+    // Use the mainline cedrus decoder via ffmpeg's V4L2-Request hwaccel (blob-free,
+    // no libcedarc). Decodes to a tiled-NV12 dma-buf presented on the DEFE.
+    // Only honoured on builds compiled with USE_CEDRUS (e.g. the F1C200s).
+    static inline Setting<bool> cedrus{"cedrus-decode", false};
+    // Display backend. "sdl" = the SDL renderer (default). "none" = no renderer
+    // at all (lightest): no window/textures/TTF are created and a minimal loop is
+    // used; the decoder is expected to present frames itself (Cedar -> /dev/fb0).
+    static inline Setting<std::string> renderer{"renderer", "sdl"};
+    // Anything other than "sdl" (none, drm, ...) runs the headless path: no SDL
+    // window/renderer/video subsystem. The decoder presents frames itself.
+    static inline bool noRenderer() { return renderer.value != "sdl"; }
+    // Touchscreen for the headless DRM/DEFE path (read directly from evdev).
+    // Empty device = auto-detect the first node with an absolute-position axis
+    // (e.g. the GT911). swap/invert are for panel orientation calibration.
+    static inline Setting<std::string> touchDevice{"touch-device", ""};
+    static inline Setting<bool> touchSwapXY{"touch-swap-xy", false};
+    static inline Setting<bool> touchInvertX{"touch-invert-x", false};
+    static inline Setting<bool> touchInvertY{"touch-invert-y", false};
     static inline Setting<int> renderingBuffer{"rendering-buffer", 5};
     static inline Setting<int> eventsSkip{"draw-skip-events", 3};
     static inline Setting<int> forceRedraw{"force-redraw", 0};

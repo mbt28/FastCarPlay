@@ -6,8 +6,7 @@
 #include "settings.h"
 
 Decoder::Decoder()
-    : buffer(Settings::renderingBuffer),
-      _context(nullptr),
+    : _context(nullptr),
       _active(false),
       _data(nullptr)
 {

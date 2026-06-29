@@ -2,6 +2,7 @@
 #define SRC_APPLICATION
 
 #include <SDL2/SDL.h>
+#include <memory>
 
 #include "protocol/protocol_const.h"
 
@@ -39,6 +40,8 @@ private:
     const std::string status() const;
 
     void loop();
+    void loopHeadless(); // no-renderer path: decoder presents to fb itself
+    std::unique_ptr<class IDecoder> makeDecoder();
 
     SDL_Window *_window;
     SDL_Renderer *_renderer;

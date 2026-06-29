@@ -5,7 +5,7 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "libavcodec/defs.h"
+#include "libavcodec/avcodec.h"
 
 #include "protocol/message.h"
 #include "common/logger.h"

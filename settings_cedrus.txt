@@ -5,20 +5,20 @@
 # Dongle configuration (use lsusb to find yours)
 # Note that vendor id and product id are in decimals, not hex here
 #vendor-id = 4884 # 0x1314
-#product-id = 5408 # 0x1520
+product-id = 5409 # 0x1521
 
 # Requested image resolution
-#width = 1024
-#height = 576
+width = 480
+height = 272
 
 # Requested image refresh rate
-#source-fps = 60
+source-fps = 60
 
 # Application window mode
 # 0 - windowed
 # 1 - fullscreen
 # 2 - headless linux (in case of direct output to screen without window manager)
-#window-mode = 0
+window-mode = 2
 
 # Show mouse pointer
 #cursor = false
@@ -31,7 +31,7 @@
 # 4 - Debug
 # 5 - Verbose
 # 6 - Protocol dump
-#log-level = 2
+log-level = 2
 
 ##############################################################################
 # 2.Device configurations
@@ -41,15 +41,15 @@
 # From 2024 Carlinkit has an optinal USB protocol encryption
 # It can happened that it will become mandatory and device will not work withou it
 # So if you have updated your device and it stop working try to enable encryption
-#encryption = false
+encryption = true
 
 # Enable automatic connection to wireless devices
-#autoconnect = true
+autoconnect = true
 
 # Eanble weak charging current (standart usb 0.5A).
 # If you have a powerfull poswer supply you can try to disable this.
 # If you have troubles with wired connection try to enable this, cause it might be cause of power lack.
-#weak-charge = true
+weak-charge = true
 
 # Driving position, true for left hand drive, false for right hand drive
 #left-hand-drive = true
@@ -58,7 +58,7 @@
 #night-mode = 2
 
 # Enable 5Ghz wifi. Otherwise will use 2,4Ghz
-#wifi-5 = true
+wifi-5 = true
 
 # Enable bluetooth audio. If enables the audio will be played not through the dongle but through bluetooth connection
 #bluetooth-audio = false
@@ -67,10 +67,10 @@
 # 1 - Car
 # 2 - Box
 # 3 - Phone
-#mic-type = 1
+mic-type = 3
 
 # Requested image DPI (Android auto scale)
-#android-dpi = 120
+android-dpi = 135
 
 # Android auto resolution mode.
 # Android is always streaming one of fixed resolutions
@@ -82,7 +82,7 @@
 # 1 - 480p => 800x480
 # 2 - 720p => 1280x720
 # 3 - 1080p => 1920x1080
-#android-resolution = 1
+android-resolution = 1
 
 # Media delay for android auto
 #android-media-delay = 300
@@ -102,14 +102,12 @@
 # This is happening or Raspberry Pi Zero 2W. Disable this to use SW decoding for that case.
 #hw-decode = true
 
-# Use the Allwinner Cedar hardware decoder (libcedarc) instead of ffmpeg.
-# Only effective on builds compiled with USE_CEDAR (e.g. Allwinner F1C200s);
-# ignored on other builds. Default off.
-#cedar-decode = true
-
-# Display backend: "sdl" (default) or "none". With "none" no SDL window/renderer
-# is created at all (lightest); the decoder presents frames itself (Cedar fb0).
-#renderer = sdl
+# Allwinner F1C200s, blob-free: mainline cedrus via ffmpeg's V4L2-Request hwaccel.
+# The decoder drives the in-kernel sunxi-cedrus decoder and presents the decoded
+# tiled-NV12 dma-buf on the DEFE front-end itself (HW de-tile+CSC+scale), so no
+# SDL renderer is created (renderer = none = headless). Navigation: serial console.
+cedrus-decode = true
+renderer = none
 
 # Rendeing buffer size, increse for smoothness but can introduce lag. Minimum size is 3
 #rendering-buffer = 5
@@ -138,11 +136,11 @@
 # USB read pipeline tuning, number of libusb bulk transfers kept in flight and size of each USB transfer
 # Increase amount of async-usb-calls if you have issues with audio and video lagging behind
 # If you have mallformed message errors on RPI try to increase async-usb-calls
-#async-usb-calls = 32
-#usb-buffer-size = 2048
+async-usb-calls = 64
+usb-buffer-size = 4096
 
 # Number of buffered USB data slots queued for processing
-#usb-buffer = 128
+usb-buffer = 256
 
 # Size of video and audio buffers. Increase if you see artifacts
 #video-buffer-size = 64
