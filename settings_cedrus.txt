@@ -172,7 +172,7 @@ usb-buffer = 256
 # alsa - Not supporting multiple channels, navigation over music will not work
 # pulseaudio
 # pipewire
-#audio-driver = 
+audio-driver = dummy
 
 # Run script or app on phone connected and disconnected.
 # This script/app should be fast, otherwise it will block system.
