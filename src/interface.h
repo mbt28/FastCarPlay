@@ -11,6 +11,7 @@ public:
     ~Interface();
     bool render(AVFrame *frame);
     bool drawHome(bool force, int state, std::string name);
+    bool drawOsd();
     void debug(const char *text);
     void showToast(const std::string &text);
     void hideToast();

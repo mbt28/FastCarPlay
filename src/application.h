@@ -41,6 +41,7 @@ private:
 
     void loop();
     void loopHeadless(); // no-renderer path: decoder presents to fb itself
+    void loopDrm();      // DRM path: decoder presents video, UI on the overlay plane
     std::unique_ptr<class IDecoder> makeDecoder();
 
     SDL_Window *_window;

@@ -26,9 +26,9 @@ extern "C"
 #include <linux/fb.h>
 }
 
-#include <xf86drm.h>
-#include <xf86drmMode.h>
 #include <drm_fourcc.h>
+
+#include "drm_display.h"
 
 // ---- direct /dev/fb0 output ----------------------------------------------
 // This board has no GL/SDL display path, so decoded frames are de-tiled
@@ -124,209 +124,25 @@ void fb_show(VideoPicture *p)
 extern "C" int ion_alloc_get_dmabuf_fd(void *vir_addr);
 
 bool use_drm = false;
-int drm_fd = -1;
-uint32_t drm_crtc = 0, drm_plane = 0, drm_conn = 0, drm_cw = 0, drm_ch = 0;
-uint32_t drm_prev_fb = 0, drm_mode_blob = 0;
-drmModeModeInfo drm_mode;
-bool drm_modeset_done = false;
-uint32_t P_plane_fb, P_plane_crtc, P_plane_sx, P_plane_sy, P_plane_sw, P_plane_sh,
-    P_plane_cx, P_plane_cy, P_plane_cw, P_plane_ch, P_crtc_mode, P_crtc_active, P_conn_crtc;
 
-// Resolve a property id by name on a DRM object (plane/crtc/connector).
-uint32_t prop_id(uint32_t obj_id, uint32_t obj_type, const char *name)
-{
-    drmModeObjectProperties *props = drmModeObjectGetProperties(drm_fd, obj_id, obj_type);
-    uint32_t id = 0;
-    if (props)
-    {
-        for (uint32_t i = 0; i < props->count_props && !id; i++)
-        {
-            drmModePropertyRes *pr = drmModeGetProperty(drm_fd, props->props[i]);
-            if (pr)
-            {
-                if (!strcmp(pr->name, name)) id = pr->prop_id;
-                drmModeFreeProperty(pr);
-            }
-        }
-        drmModeFreeObjectProperties(props);
-    }
-    return id;
-}
-
-uint64_t plane_type(uint32_t plane_id)
-{
-    drmModeObjectProperties *props = drmModeObjectGetProperties(drm_fd, plane_id, DRM_MODE_OBJECT_PLANE);
-    uint64_t type = (uint64_t)-1;
-    if (props)
-    {
-        for (uint32_t i = 0; i < props->count_props; i++)
-        {
-            drmModePropertyRes *pr = drmModeGetProperty(drm_fd, props->props[i]);
-            if (pr)
-            {
-                if (!strcmp(pr->name, "type")) type = props->prop_values[i];
-                drmModeFreeProperty(pr);
-            }
-        }
-        drmModeFreeObjectProperties(props);
-    }
-    return type;
-}
-
-bool drm_open()
-{
-    drm_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-    if (drm_fd < 0) { perror("[Cedar] open /dev/dri/card0"); return false; }
-    drmSetMaster(drm_fd);
-    drmSetClientCap(drm_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
-    // The tiled plane only routes through the DEFE front-end via the atomic API
-    // (sun4i decides in atomic_check); legacy SetPlane lands on the back-end.
-    if (drmSetClientCap(drm_fd, DRM_CLIENT_CAP_ATOMIC, 1) != 0)
-    { fprintf(stderr, "[Cedar] DRM atomic unavailable\n"); return false; }
-
-    drmModeRes *res = drmModeGetResources(drm_fd);
-    if (!res) return false;
-    drmModeConnector *conn = nullptr;
-    for (int i = 0; i < res->count_connectors; i++)
-    {
-        drmModeConnector *c = drmModeGetConnector(drm_fd, res->connectors[i]);
-        if (c && c->connection == DRM_MODE_CONNECTED && c->count_modes > 0) { conn = c; break; }
-        if (c) drmModeFreeConnector(c);
-    }
-    if (!conn) { fprintf(stderr, "[Cedar] no connected DRM connector\n"); return false; }
-    drm_conn = conn->connector_id;
-    drm_mode = conn->modes[0];
-
-    drmModeEncoder *enc = drmModeGetEncoder(drm_fd, conn->encoder_id);
-    drm_crtc = enc ? enc->crtc_id : (res->count_crtcs ? res->crtcs[0] : 0);
-    drmModeCrtc *crtc = drmModeGetCrtc(drm_fd, drm_crtc);
-    drm_cw = (crtc && crtc->mode.hdisplay) ? crtc->mode.hdisplay : drm_mode.hdisplay;
-    drm_ch = (crtc && crtc->mode.vdisplay) ? crtc->mode.vdisplay : drm_mode.vdisplay;
-
-    int crtc_idx = 0;
-    for (int i = 0; i < res->count_crtcs; i++)
-        if (res->crtcs[i] == drm_crtc) { crtc_idx = i; break; }
-
-    // Prefer the primary plane (clean full modeset) that can take NV12.
-    uint32_t fallback = 0;
-    drmModePlaneRes *prr = drmModeGetPlaneResources(drm_fd);
-    for (uint32_t i = 0; i < prr->count_planes && !drm_plane; i++)
-    {
-        drmModePlane *pl = drmModeGetPlane(drm_fd, prr->planes[i]);
-        if (pl && (pl->possible_crtcs & (1 << crtc_idx)))
-        {
-            bool ok = false;
-            for (uint32_t f = 0; f < pl->count_formats; f++)
-                if (pl->formats[f] == DRM_FORMAT_NV12) { ok = true; break; }
-            if (ok)
-            {
-                if (!fallback) fallback = pl->plane_id;
-                if (plane_type(pl->plane_id) == DRM_PLANE_TYPE_PRIMARY) drm_plane = pl->plane_id;
-            }
-        }
-        if (pl) drmModeFreePlane(pl);
-    }
-    if (!drm_plane) drm_plane = fallback;
-    if (!drm_plane) { fprintf(stderr, "[Cedar] no NV12 plane found\n"); return false; }
-
-    P_plane_fb    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "FB_ID");
-    P_plane_crtc  = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
-    P_plane_sx    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "SRC_X");
-    P_plane_sy    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "SRC_Y");
-    P_plane_sw    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "SRC_W");
-    P_plane_sh    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "SRC_H");
-    P_plane_cx    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "CRTC_X");
-    P_plane_cy    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
-    P_plane_cw    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "CRTC_W");
-    P_plane_ch    = prop_id(drm_plane, DRM_MODE_OBJECT_PLANE, "CRTC_H");
-    P_crtc_mode   = prop_id(drm_crtc,  DRM_MODE_OBJECT_CRTC,  "MODE_ID");
-    P_crtc_active = prop_id(drm_crtc,  DRM_MODE_OBJECT_CRTC,  "ACTIVE");
-    P_conn_crtc   = prop_id(drm_conn,  DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
-    if (!P_plane_fb || !P_plane_crtc || !P_crtc_mode || !P_crtc_active || !P_conn_crtc)
-    { fprintf(stderr, "[Cedar] missing atomic properties\n"); return false; }
-    if (drmModeCreatePropertyBlob(drm_fd, &drm_mode, sizeof(drm_mode), &drm_mode_blob))
-    { perror("[Cedar] CreatePropertyBlob"); return false; }
-
-    fprintf(stderr, "[Cedar] DRM crtc=%u %ux%u plane=%u (DEFE NV12 tiled, HW)\n",
-            drm_crtc, drm_cw, drm_ch, drm_plane);
-    return true;
-}
-
+// Present one MB32-tiled picture on the shared DRM video plane: Cedar's two
+// ION buffers (Y + interleaved UV) import as one NV12 + ALLWINNER_TILED fb;
+// drm_display routes it through the DEFE (HW de-tile + CSC + scale) and the
+// UI overlay shares the same DRM session.
 void drm_show(VideoPicture *p)
 {
-    // Import Cedar's Y and UV ION buffers (separate dmabufs) as one tiled NV12 fb.
-    // ion_alloc_get_dmabuf_fd() returns each buffer's CACHED dma-buf fd (owned by
-    // the ion allocator, one per pool buffer) -- it must NOT be closed. drmPrime
-    // also caches a GEM handle per dmabuf, so both stay bounded to the frame pool.
-    uint32_t hy = 0, hc = 0;
-    int fy = ion_alloc_get_dmabuf_fd(p->pData0);
-    int fc = ion_alloc_get_dmabuf_fd(p->pData1);
-    if (fy < 0 || fc < 0) return;
-    if (drmPrimeFDToHandle(drm_fd, fy, &hy) || drmPrimeFDToHandle(drm_fd, fc, &hc))
-    { perror("[Cedar] drmPrimeFDToHandle"); return; }
+    int fds[2] = {ion_alloc_get_dmabuf_fd(p->pData0), ion_alloc_get_dmabuf_fd(p->pData1)};
+    if (fds[0] < 0 || fds[1] < 0) return;
 
     const int W = p->nWidth, H = p->nHeight;
     uint32_t pitch = (W + 31) & ~31;
-    uint32_t handles[4] = {hy, hc, 0, 0};
-    uint32_t pitches[4] = {pitch, pitch, 0, 0};
-    uint32_t offsets[4] = {0, 0, 0, 0};
-    uint64_t mods[4] = {DRM_FORMAT_MOD_ALLWINNER_TILED, DRM_FORMAT_MOD_ALLWINNER_TILED, 0, 0};
-    uint32_t fb = 0;
-    if (drmModeAddFB2WithModifiers(drm_fd, W, H, DRM_FORMAT_NV12, handles, pitches, offsets,
-                                   mods, &fb, DRM_MODE_FB_MODIFIERS))
-    { perror("[Cedar] AddFB2WithModifiers"); return; }
-
+    uint32_t pitches[2] = {pitch, pitch};
+    uint32_t offsets[2] = {0, 0};
     const int dispW = (p->nRightOffset  > 0 && p->nRightOffset  <= W) ? p->nRightOffset  : W;
     const int dispH = (p->nBottomOffset > 0 && p->nBottomOffset <= H) ? p->nBottomOffset : H;
 
-    drmModeAtomicReq *req = drmModeAtomicAlloc();
-    uint32_t flags = 0;
-    if (!drm_modeset_done)
-    {
-        drmModeAtomicAddProperty(req, drm_conn, P_conn_crtc,  drm_crtc);
-        drmModeAtomicAddProperty(req, drm_crtc, P_crtc_mode,  drm_mode_blob);
-        drmModeAtomicAddProperty(req, drm_crtc, P_crtc_active, 1);
-        flags = DRM_MODE_ATOMIC_ALLOW_MODESET;
-    }
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_fb,   fb);
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_crtc, drm_crtc);
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_sx,   0);
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_sy,   0);
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_sw,   (uint64_t)dispW << 16);
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_sh,   (uint64_t)dispH << 16);
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_cx,   0);
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_cy,   0);
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_cw,   drm_cw);  // scale crop -> panel
-    drmModeAtomicAddProperty(req, drm_plane, P_plane_ch,   drm_ch);
-
-    int crc = drmModeAtomicCommit(drm_fd, req, flags, nullptr);
-    drmModeAtomicFree(req);
-    if (crc)
-    {
-        static bool warned = false;
-        if (!warned) { warned = true; fprintf(stderr, "[Cedar] atomic commit failed: %s\n", strerror(errno)); }
-        drmModeRmFB(drm_fd, fb);
-        return;
-    }
-    drm_modeset_done = true;
-    // Retire the previous frame's fb (a new fb is created each frame); the GEM
-    // handles are cached per dmabuf by drmPrime, so they don't accumulate.
-    if (drm_prev_fb) drmModeRmFB(drm_fd, drm_prev_fb);
-    drm_prev_fb = fb;
-
-    static int frames = 0;
-    static int64_t t0 = 0;
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-    if (t0 == 0) t0 = now;
-    if (++frames >= 60 || now - t0 >= 2000)
-    {
-        if (now > t0)
-            fprintf(stderr, "[Cedar] decode %.1f fps  %dx%d (DEFE)\n",
-                    frames * 1000.0 / (now - t0), dispW, dispH);
-        frames = 0;
-        t0 = now;
-    }
+    drm_display::showVideo(DRM_FORMAT_NV12, W, H, dispW, dispH, 2, fds,
+                           pitches, offsets, DRM_FORMAT_MOD_ALLWINNER_TILED, "Cedar");
 }
 } // namespace
 
@@ -411,7 +227,7 @@ bool CedarDecoder::setup()
     }
     if (Settings::renderer.value == "drm")
     {
-        use_drm = drm_open();
+        use_drm = drm_display::open("Cedar");
         if (!use_drm)
             fprintf(stderr, "[Cedar] DRM DEFE plane unavailable; falling back to /dev/fb0\n");
     }
@@ -423,6 +239,11 @@ bool CedarDecoder::setup()
 
 void CedarDecoder::teardown()
 {
+    if (use_drm)
+    {
+        drm_display::close();
+        use_drm = false;
+    }
     if (_dec)
     {
         DestroyVideoDecoder(static_cast<VideoDecoder *>(_dec));

@@ -45,13 +45,17 @@ public:
     // no libcedarc). Decodes to a tiled-NV12 dma-buf presented on the DEFE.
     // Only honoured on builds compiled with USE_CEDRUS (e.g. the F1C200s).
     static inline Setting<bool> cedrus{"cedrus-decode", false};
-    // Display backend. "sdl" = the SDL renderer (default). "none" = no renderer
-    // at all (lightest): no window/textures/TTF are created and a minimal loop is
-    // used; the decoder is expected to present frames itself (Cedar -> /dev/fb0).
+    // Display backend. "sdl" = the SDL renderer (default). "drm" = the decoder
+    // presents video on the DRM/DEFE plane and the UI (home screen, toasts,
+    // debug) is drawn on an ARGB overlay plane above it -- same interface as
+    // the SDL path, no SDL video driver needed. "none" = no UI at all
+    // (lightest): a minimal loop, the decoder presents frames itself.
     static inline Setting<std::string> renderer{"renderer", "sdl"};
-    // Anything other than "sdl" (none, drm, ...) runs the headless path: no SDL
-    // window/renderer/video subsystem. The decoder presents frames itself.
+    // Anything other than "sdl" (none, drm, ...) skips the SDL video subsystem
+    // and window. The decoder presents frames itself.
     static inline bool noRenderer() { return renderer.value != "sdl"; }
+    // The DRM path additionally drives the UI overlay plane (needs TTF).
+    static inline bool drmUi() { return renderer.value == "drm"; }
     // Touchscreen for the headless DRM/DEFE path (read directly from evdev).
     // Empty device = auto-detect the first node with an absolute-position axis
     // (e.g. the GT911). swap/invert are for panel orientation calibration.

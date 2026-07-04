@@ -107,6 +107,33 @@ bool Interface::drawHome(bool force, int state, std::string name)
     return true;
 }
 
+// Transparent canvas with only the toast/debug decorations: used by the DRM
+// overlay plane, where the live video is composed by the hardware below.
+// Returns whether anything was drawn (an all-transparent canvas means the
+// overlay can be hidden instead).
+bool Interface::drawOsd()
+{
+    SDL_SetRenderDrawBlendMode(_renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 0);
+    SDL_RenderClear(_renderer);
+
+    bool drew = false;
+    if (_toast)
+    {
+        drawToast();
+        drew = true;
+    }
+    if (_debug)
+    {
+        drawDebug();
+        _debug = false;
+        drew = true;
+    }
+
+    SDL_RenderPresent(_renderer);
+    return drew;
+}
+
 void Interface::debug(const char *text)
 {
     _debugText = text ? text : "";

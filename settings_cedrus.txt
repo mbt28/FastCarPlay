@@ -104,10 +104,12 @@ android-resolution = 1
 
 # Allwinner F1C200s, blob-free: mainline cedrus via ffmpeg's V4L2-Request hwaccel.
 # The decoder drives the in-kernel sunxi-cedrus decoder and presents the decoded
-# tiled-NV12 dma-buf on the DEFE front-end itself (HW de-tile+CSC+scale), so no
-# SDL renderer is created (renderer = none = headless). Navigation: serial console.
+# tiled-NV12 dma-buf on the DEFE front-end itself (HW de-tile + CSC + scale).
+# renderer = drm  -> UI (home screen, toasts, debug) on the ARGB overlay plane
+#                    above the video -- same screens as the SDL interface.
+# renderer = none -> no UI at all (headless); serial-console navigation only.
 cedrus-decode = true
-renderer = none
+renderer = drm
 
 # Rendeing buffer size, increse for smoothness but can introduce lag. Minimum size is 3
 #rendering-buffer = 5

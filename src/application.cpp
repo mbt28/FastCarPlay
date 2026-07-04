@@ -17,6 +17,10 @@
 #ifdef USE_CEDRUS
 #include "cedrus_decoder.h" // mainline cedrus (ffmpeg v4l2-request) HW decoder (F1C200s)
 #endif
+#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+#include "drm_display.h" // shared DRM session: video plane + UI overlay plane
+#include "interface.h"
+#endif
 #ifdef USE_CEDAR
 #include "cedar_decoder.h" // Allwinner Cedar HW H.264 decoder (F1C200s)
 #include "serial_input.h"  // TEST-only serial-console navigation (F1C200s)
@@ -72,14 +76,18 @@ Application::Application(/* args */) : _window(nullptr),
     if (SDL_Init(sdlSubsystems) != 0)
         throw std::runtime_error(std::string("SDL initialisation failed > ") + SDL_GetError());
 
-    if (!Settings::noRenderer())
+    if (!Settings::noRenderer() || Settings::drmUi())
     {
+        // The DRM-UI path renders text too; TTF needs no SDL video driver.
         if (TTF_Init() != 0)
         {
             SDL_Quit();
             throw std::runtime_error(std::string("TTF initialisation failed > ") + TTF_GetError());
         }
+    }
 
+    if (!Settings::noRenderer())
+    {
         if (SDL_GetCurrentDisplayMode(0, &_displayMode) != 0)
         {
             TTF_Quit();
@@ -115,6 +123,14 @@ Application::~Application()
 void Application::start(const char *title)
 {
     log_d("Initialising");
+
+    if (Settings::drmUi())
+    {
+        log_v("Starting (drm + UI overlay)");
+        loopDrm();
+        log_v("Stopped");
+        return;
+    }
 
     if (Settings::noRenderer())
     {
@@ -447,6 +463,170 @@ void Application::loopHeadless()
         decoder->buffer.consume(&frame, &frameId);
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+}
+
+// DRM path: the decoder presents video frames itself on the DRM/DEFE video
+// plane; the UI (home screen while not streaming, toasts, the debug overlay)
+// is drawn with the regular Interface code through an SDL *software*
+// renderer into the ARGB overlay plane above the video. No SDL video driver
+// is used; input comes from the touchscreen/serial listeners as in the
+// headless path.
+void Application::loopDrm()
+{
+#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+    if (!drm_display::open("UI"))
+    {
+        log_w("DRM display unavailable; falling back to headless");
+        loopHeadless();
+        return;
+    }
+
+    SDL_Renderer *uiRenderer = drm_display::uiRenderer();
+    if (!uiRenderer)
+    {
+        // No ARGB overlay plane: video still works, UI doesn't.
+        log_w("DRM UI overlay unavailable; running headless");
+        drm_display::close();
+        loopHeadless();
+        return;
+    }
+
+    Interface interface(uiRenderer);
+    interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
+    drm_display::uiPresent();
+
+    Connection protocol;
+    std::unique_ptr<IDecoder> decoder = makeDecoder();
+    PcmAudio audioMain("main"), audioAux("aux");
+
+    decoder->start(&protocol.videoStream, AV_CODEC_ID_H264);
+    audioMain.start(&protocol.audioStreamMain);
+    audioAux.start(&protocol.audioStreamAux, &audioMain);
+    protocol.start();
+
+#ifdef USE_CEDAR
+    SerialInput serialInput(protocol); // serial-console navigation
+    TouchInput touchInput(protocol);   // GT911 / evdev touchscreen
+#endif
+
+    g_quit = 0;
+    std::signal(SIGINT, onQuitSignal);
+    std::signal(SIGTERM, onQuitSignal);
+
+    auto lastState = PROTOCOL_STATUS_UNKNOWN;
+    bool uiShowsHome = true;
+    bool osdShown = false;
+    uint32_t lastFrames = drm_display::videoFrames();
+    Uint32 lastFrameTick = SDL_GetTicks();
+    Uint32 debugTick = 0;
+    AVFrame *frame = nullptr;
+    uint32_t frameId = 0;
+
+    while (_active && !g_quit)
+    {
+        Uint32 now = SDL_GetTicks();
+        auto state = protocol.state();
+        uint32_t frames = drm_display::videoFrames();
+        if (frames != lastFrames)
+        {
+            lastFrames = frames;
+            lastFrameTick = now;
+        }
+        // "Video flowing" = connected and the decoder presented a frame
+        // recently; on disconnect or a stall the home screen returns.
+        bool videoActive = (state == PROTOCOL_STATUS_CONNECTED) &&
+                           frames > 0 && (now - lastFrameTick) < 2000;
+
+        bool dirty = false;
+        if (state != lastState)
+        {
+            if (state == PROTOCOL_STATUS_CONNECTED)
+            {
+                decoder->flush();
+                decoder->buffer.reset();
+                protocol.send(Message::Control(BTN_SCREEN_REFRESH));
+            }
+            lastState = state;
+            dirty = true;
+        }
+
+        // Toast timing (parity with the SDL loop).
+        if (_state.showToast > 0)
+        {
+            if (_state.showToast == 1)
+            {
+                interface.showToast(_state.toast);
+                _state.showToast = now ? now : 1;
+                dirty = true;
+            }
+            else if (now - _state.showToast >= TOAST_TIME * 1000)
+            {
+                interface.hideToast();
+                _state.showToast = 0;
+                dirty = true;
+            }
+        }
+
+#ifndef NDEBUG
+        if (_debug && now - debugTick >= 1000)
+        {
+            debugTick = now;
+            char debugBuffer[512];
+            std::snprintf(debugBuffer, sizeof(debugBuffer),
+                          "DRM overlay %dx%d\n"
+                          "FRAME: %u\n"
+                          "USB: %s\n"
+                          "BUFF: video [%u] audio[main %u aux %u] out [%u]",
+                          drm_display::width(), drm_display::height(),
+                          frames,
+                          protocol.status().c_str(),
+                          protocol.videoStream.count(),
+                          protocol.audioStreamMain.count(),
+                          protocol.audioStreamAux.count(),
+                          protocol.writeQueue.count());
+            interface.debug(debugBuffer);
+            dirty = true;
+        }
+#endif
+
+        if (!videoActive)
+        {
+            // Home screen (opaque) on the overlay; also covers stale video.
+            if (interface.drawHome(dirty || !uiShowsHome, state, protocol.phoneName()))
+                drm_display::uiPresent();
+            uiShowsHome = true;
+            osdShown = false;
+        }
+        else
+        {
+            // Video plays below; overlay carries only toasts/debug, or hides.
+            if (uiShowsHome || dirty)
+            {
+                if (interface.drawOsd())
+                {
+                    drm_display::uiPresent();
+                    osdShown = true;
+                }
+                else if (uiShowsHome || osdShown)
+                {
+                    drm_display::uiHide();
+                    osdShown = false;
+                }
+                uiShowsHome = false;
+            }
+        }
+
+        // Drain the buffer so a buffering (software) decoder can't stall; the
+        // HW decoders present directly and leave this empty.
+        decoder->buffer.consume(&frame, &frameId);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    drm_display::uiHide();
+    drm_display::close();
+#else
+    loopHeadless();
+#endif
 }
 
 void Application::loop()
