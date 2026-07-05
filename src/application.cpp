@@ -516,8 +516,7 @@ void Application::loopDrm()
     auto lastState = PROTOCOL_STATUS_UNKNOWN;
     bool uiShowsHome = true;
     bool osdShown = false;
-    uint32_t lastFrames = drm_display::videoFrames();
-    Uint32 lastFrameTick = SDL_GetTicks();
+    uint32_t framesAtConnect = drm_display::videoFrames();
     Uint32 debugTick = 0;
     AVFrame *frame = nullptr;
     uint32_t frameId = 0;
@@ -527,15 +526,13 @@ void Application::loopDrm()
         Uint32 now = SDL_GetTicks();
         auto state = protocol.state();
         uint32_t frames = drm_display::videoFrames();
-        if (frames != lastFrames)
-        {
-            lastFrames = frames;
-            lastFrameTick = now;
-        }
-        // "Video flowing" = connected and the decoder presented a frame
-        // recently; on disconnect or a stall the home screen returns.
+        // "Video flowing" = connected and at least one frame was presented
+        // in THIS session. No recency timeout: CarPlay streams are
+        // event-driven, so a static screen legitimately sends no frames for
+        // seconds - the home screen must not paint over the live video.
+        // It returns only on disconnect (or if decode never started).
         bool videoActive = (state == PROTOCOL_STATUS_CONNECTED) &&
-                           frames > 0 && (now - lastFrameTick) < 2000;
+                           frames > framesAtConnect;
 
         bool dirty = false;
         if (state != lastState)
@@ -544,6 +541,7 @@ void Application::loopDrm()
             {
                 decoder->flush();
                 decoder->buffer.reset();
+                framesAtConnect = drm_display::videoFrames();
                 protocol.send(Message::Control(BTN_SCREEN_REFRESH));
             }
             lastState = state;
