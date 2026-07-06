@@ -13,19 +13,19 @@
 #include <atomic>
 #include <thread>
 
-class Connection;
+class IConnection;
 
 class TouchInput
 {
 public:
-    explicit TouchInput(Connection &conn);
+    explicit TouchInput(IConnection &conn);
     ~TouchInput();
 
 private:
     bool openDevice();
     void loop();
 
-    Connection &_conn;
+    IConnection &_conn;
     std::atomic<bool> _active;
     std::thread _thread;
     int _fd = -1;

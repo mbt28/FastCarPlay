@@ -2,10 +2,24 @@
 # 1.General settings
 ##############################################################################
 
+# Protocol backend: "carlinkit" (dongle, default) or "aa-usb" (native wired
+# Android Auto -- plug the phone straight into the USB port, no dongle).
+#protocol = carlinkit
+
 # Dongle configuration (use lsusb to find yours)
 # Note that vendor id and product id are in decimals, not hex here
 #vendor-id = 4884 # 0x1314
 #product-id = 5408 # 0x1520
+
+# Native wired Android Auto settings (only used when protocol = aa-usb).
+# aa-vendor-id/aa-product-id = 0 auto-scans for an AOAP-capable phone; set
+# both to pin one device. Resolution 1 = 800x480, 2 = 1280x720, 3 = 1920x1080.
+#aa-vendor-id = 0
+#aa-product-id = 0
+#aa-resolution = 1
+#aa-video-fps = 30
+#aa-accessory-timeout = 5000
+#aa-max-unacked = 4
 
 # Requested image resolution
 #width = 1024

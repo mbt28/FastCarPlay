@@ -1,0 +1,28 @@
+# nanopb static-allocation sizing for the FastCarPlay wired-AA backend.
+# Later rules override earlier ones for fields matching multiple patterns.
+
+# Defaults: short strings/bytes, small repeated arrays.
+* max_size:64 max_count:8
+
+# Phone icons in the discovery request can be kilobytes; we never use them.
+aap_protobuf.service.control.message.ServiceDiscoveryRequest.small_icon  type:FT_IGNORE
+aap_protobuf.service.control.message.ServiceDiscoveryRequest.medium_icon type:FT_IGNORE
+aap_protobuf.service.control.message.ServiceDiscoveryRequest.large_icon  type:FT_IGNORE
+# Phone-supplied strings: be generous, a decode fails hard on overflow.
+aap_protobuf.service.control.message.ServiceDiscoveryRequest.label_text  max_size:128
+aap_protobuf.service.control.message.ServiceDiscoveryRequest.device_name max_size:128
+aap_protobuf.shared.PhoneInfo.* max_size:128
+
+# One Service entry per declared channel (control plane counts 6 in phase 1).
+aap_protobuf.service.control.message.ServiceDiscoveryResponse.channels max_count:10
+
+# Sensor batches we emit carry a single event.
+aap_protobuf.service.sensorsource.message.SensorBatch.* max_count:1
+aap_protobuf.service.sensorsource.SensorSourceService.sensors max_count:12
+
+# Multitouch pointers.
+aap_protobuf.service.inputsource.message.TouchEvent.pointer_data max_count:5
+
+# Key bindings.
+aap_protobuf.service.media.sink.message.KeyBindingRequest.keycodes max_count:32
+aap_protobuf.service.inputsource.InputSourceService.keycodes_supported max_count:32

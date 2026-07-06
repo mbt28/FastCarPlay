@@ -7,6 +7,7 @@
 #include "protocol/protocol_const.h"
 
 #include "protocol/connection.h"
+#include "protocol/aa/aa_connection.h"
 #include "pipe_listener.h"
 #include "renderer.h"
 
@@ -43,6 +44,7 @@ private:
     void loopHeadless(); // no-renderer path: decoder presents to fb itself
     void loopDrm();      // DRM path: decoder presents video, UI on the overlay plane
     std::unique_ptr<class IDecoder> makeDecoder();
+    std::unique_ptr<class IConnection> makeConnection();
 
     SDL_Window *_window;
     SDL_Renderer *_renderer;

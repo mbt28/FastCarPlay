@@ -9,6 +9,7 @@
 
 #include "struct/atomic_queue.h"
 #include "protocol/aes_cipher.h"
+#include "protocol/iconnection.h"
 #include "protocol/usb_buffer.h"
 #include "recorder.h"
 
@@ -18,35 +19,20 @@
 #define RECONNECT_TIMEOUT 200
 #define PROTOCOL_HEARTBEAT_DELAY 3000
 
-#define WRITE_QUEUE_SIZE 128
-#define VIDEO_QUEUE_SIZE 128
-#define AUDIO_QUEUE_SIZE 128
 #define PROCESS_QUEUE_SIZE 128
 
 #define ENCRYPTION_BASE "SkBRDy3gmrw1ieH0"
 
-class Connection
+class Connection : public IConnection
 {
 
 public:
     Connection();
     virtual ~Connection();
 
-    void start();
-    void stop();
-
-    bool inline send(std::unique_ptr<Message> message) { return writeQueue.pushDiscard(std::move(message)); }
-    uint32_t transfered() const { return _transfered.load(std::memory_order_acquire); }
-
-    int8_t state() const { return _state.load(); }
-    std::string connectionMethod() const { return _method; }
-    std::string phoneName() const { return _phoneName; }
-    const std::string status() const;
-
-    AtomicQueue<Message> writeQueue;
-    AtomicQueue<Message> videoStream;
-    AtomicQueue<Message> audioStreamMain;
-    AtomicQueue<Message> audioStreamAux;
+    void start() override;
+    void stop() override;
+    const std::string status() const override;
 
 private:
     struct Context
@@ -86,11 +72,6 @@ private:
     std::atomic<bool> _connected;
     std::atomic<bool> _phoneConnected;
     std::atomic<bool> _ecnrypt;
-    std::atomic<int8_t> _state;
-
-    std::string _method;
-    std::string _phoneName;
-    std::atomic<uint32_t> _transfered;
 };
 
 #endif /* SRC_PROTOCOL_CONNECTION */
