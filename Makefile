@@ -1,5 +1,6 @@
 # Compiler
 CXX ?= g++
+CC ?= gcc
 PKG_CONFIG ?= pkg-config
 HOST_XXD ?= xxd
 INSTALL ?= install
@@ -15,6 +16,10 @@ BUILD_DIR := $(OUT_DIR)/$(BUILD_TYPE)
 SRCS := $(shell find $(SRC_DIR) -type f -name '*.cpp')
 OBJS=$(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
+# C sources: the vendored nanopb runtime and the generated AA protobuf code.
+SRCS_C := $(shell find $(SRC_DIR) -type f -name '*.c')
+OBJS += $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.c.o,$(SRCS_C))
+
 RES := $(shell find $(RES_DIR) -type f ! -name '*.h' ! -name '.*' -name '*.*')
 RES_SRC := $(patsubst $(RES_DIR)/%,$(GEN_DIR)/%.cpp,$(RES))
 
@@ -28,7 +33,8 @@ all: release
 
 LDOPTIONS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl) -pthread
 LDFLAGS :=
-CXXCOMMON := -Wall -std=c++17 -Isrc
+CXXCOMMON := -Wall -std=c++17 -Isrc -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
+CCOMMON := -Wall -std=c99 -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
 
 # Allwinner Cedar hardware H.264 decode (F1C200s). Enable with USE_CEDAR=1;
 # libcedarc headers come from the (cross) sysroot, libs are linked here. libdrm
@@ -82,6 +88,11 @@ $(TARGET): $(OBJS)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXCOMMON) $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl) $(CXXFLAGS) -c $< -o $@
+
+# C rule for nanopb + generated protobuf code (-fno-rtti is C++-only).
+$(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CCOMMON) $(filter-out -fno-rtti,$(CXXFLAGS)) -c $< -o $@
 
 install:
 	$(INSTALL) -D -m 0755 $(OUT_DIR)/$(TARGET_NAME) $(DESTDIR)$(PREFIX)/bin/fastcarplay

@@ -6,14 +6,14 @@
 #include <unistd.h>
 #include <cstdio>
 
-#include "protocol/connection.h"
+#include "protocol/iconnection.h"
 #include "protocol/protocol_const.h"
 #include "protocol/message.h"
 #include "common/logger.h"
 
 #define BTN_UP 113 // present in the keyMap but not #defined in protocol_const.h
 
-SerialInput::SerialInput(Connection &conn)
+SerialInput::SerialInput(IConnection &conn)
     : _conn(conn), _active(false)
 {
     // Only run when stdin is a real interactive terminal. If FastCarPlay is

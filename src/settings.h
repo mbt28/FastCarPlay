@@ -12,8 +12,26 @@ class Settings
 {
 public:
     // General section
+    // Protocol backend. "carlinkit" (default) = the Carlinkit dongle protocol.
+    // "aa-usb" = native wired Android Auto: the phone is plugged straight into
+    // the USB host port, switched to accessory mode (AOAP) and spoken to
+    // directly -- no dongle.
+    static inline Setting<std::string> protocol{"protocol", "carlinkit"};
+    static inline bool aaUsb() { return protocol.value == "aa-usb"; }
     static inline Setting<int> vendorid{"vendor-id", 4884};
     static inline Setting<int> productid{"product-id", 5408};
+    // Native AA device selection: 0 = scan all devices for AOAP support;
+    // set both to pin a specific phone.
+    static inline Setting<int> aaVendorid{"aa-vendor-id", 0};
+    static inline Setting<int> aaProductid{"aa-product-id", 0};
+    // Native AA video stream: 1=800x480, 2=1280x720, 3=1920x1080 / 30 or 60 fps.
+    static inline Setting<int> aaResolution{"aa-resolution", 1};
+    static inline Setting<int> aaFps{"aa-video-fps", 30};
+    // ms to wait for the phone to re-enumerate in accessory mode after the
+    // AOAP switch (first connections show a consent dialog on the phone).
+    static inline Setting<int> aaAccessoryTimeout{"aa-accessory-timeout", 5000};
+    // Media ack window offered in the AV setup response.
+    static inline Setting<int> aaMaxUnacked{"aa-max-unacked", 4};
     static inline Setting<int> width{"width", 1024};
     static inline Setting<int> height{"height", 576};
     static inline Setting<int> sourceFps{"source-fps", 60};

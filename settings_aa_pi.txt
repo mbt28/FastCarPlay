@@ -1,0 +1,38 @@
+##############################################################################
+# Native wired Android Auto test profile for the Raspberry Pi 5 dev box.
+# Phone plugs straight into a USB port; no Carlinkit dongle.
+# Run with a display attached:  ./out/app settings_aa_pi.txt
+##############################################################################
+
+# Native wired Android Auto backend (AOAP).
+protocol = aa-usb
+
+# 0 = auto-scan the bus for an AOAP-capable phone. If auto-scan picks the
+# wrong device, set these to your phone's normal-mode VID/PID from `lsusb`.
+aa-vendor-id = 0
+aa-product-id = 0
+
+# Start conservative: 800x480 @ 30 fps, software-decodable on the Pi.
+aa-resolution = 1
+aa-video-fps = 30
+aa-accessory-timeout = 8000
+aa-max-unacked = 4
+
+# Show the projected screen in an SDL window on the Pi's display.
+renderer = sdl
+window-mode = 0
+width = 800
+height = 480
+source-fps = 30
+
+# Software H.264 decode (no Allwinner cedrus on the Pi).
+hw-decode = false
+cedrus-decode = false
+cedar-decode = false
+
+# Real audio out through SDL on the Pi (F1C200s uses dummy).
+# audio-driver =
+
+# Verbose so the handshake is visible:
+# 5 shows debug, raise to 6 for full protocol frame dumps.
+log-level = 5

@@ -13,18 +13,18 @@
 #include <thread>
 #include <termios.h>
 
-class Connection;
+class IConnection;
 
 class SerialInput
 {
 public:
-    explicit SerialInput(Connection &conn);
+    explicit SerialInput(IConnection &conn);
     ~SerialInput();
 
 private:
     void loop();
 
-    Connection &_conn;
+    IConnection &_conn;
     std::atomic<bool> _active;
     std::thread _thread;
     struct termios _orig;

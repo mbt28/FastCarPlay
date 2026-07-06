@@ -280,6 +280,19 @@ public:
         return std::unique_ptr<Message>(new Message(CMD_HEARTBEAT, false));
     }
 
+    // Allocate-then-fill: a `cmd` message with an uninitialised `length`-byte
+    // payload (plus `padding` zeroed spare bytes) the caller writes through
+    // data(). Lets a protocol backend deposit reassembled stream data straight
+    // into the final buffer instead of copying through an intermediate one.
+    // Check data() != nullptr before filling (allocation can fail).
+    static std::unique_ptr<Message> Payload(uint32_t cmd, int32_t length, uint32_t padding = 0)
+    {
+        std::unique_ptr<Message> result(new Message(cmd, false, 0));
+        result->_header.length = length;
+        result->allocate(padding);
+        return result;
+    }
+
     bool allocated() const { return _header.length <= 0 || static_cast<uint32_t>(_header.length) <= _size; }
     bool encrypted() const { return _header.magic == MAGIC_ENC; }
     uint8_t *header() { return reinterpret_cast<uint8_t *>(&_header); }

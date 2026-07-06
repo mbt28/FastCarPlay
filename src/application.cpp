@@ -418,12 +418,20 @@ std::unique_ptr<IDecoder> Application::makeDecoder()
     return std::make_unique<Decoder>();
 }
 
+std::unique_ptr<IConnection> Application::makeConnection()
+{
+    if (Settings::aaUsb())
+        return std::make_unique<AaConnection>();
+    return std::make_unique<Connection>();
+}
+
 // No-renderer path: no SDL window/renderer/fonts are created. The decoder
 // presents frames itself (Cedar -> /dev/fb0) and navigation comes from the
 // serial console. Keeps the process alive and drives the protocol state.
 void Application::loopHeadless()
 {
-    Connection protocol;
+    std::unique_ptr<IConnection> protocolPtr = makeConnection();
+    IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder();
     PcmAudio audioMain("main"), audioAux("aux");
 
@@ -495,7 +503,8 @@ void Application::loopDrm()
     interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
     drm_display::uiPresent();
 
-    Connection protocol;
+    std::unique_ptr<IConnection> protocolPtr = makeConnection();
+    IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder();
     PcmAudio audioMain("main"), audioAux("aux");
 
@@ -646,7 +655,8 @@ void Application::loop()
         SDL_ShowWindow(_window);
     interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
 
-    Connection protocol;
+    std::unique_ptr<IConnection> protocolPtr = makeConnection();
+    IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder();
     PcmAudio audioMain("main"), audioAux("aux");
 

@@ -14,11 +14,7 @@
 #include "settings.h"
 
 Connection::Connection()
-    : writeQueue(WRITE_QUEUE_SIZE),
-      videoStream(VIDEO_QUEUE_SIZE),
-      audioStreamMain(AUDIO_QUEUE_SIZE),
-      audioStreamAux(AUDIO_QUEUE_SIZE),
-      _processQueue(Settings::usbBuffer, Settings::usbTransferSize),
+    : _processQueue(Settings::usbBuffer, Settings::usbTransferSize),
       _transfers(Settings::usbQueue),
       _statusHandler(nullptr),
       _cipher(nullptr),
@@ -26,11 +22,7 @@ Connection::Connection()
       _active(false),
       _connected(false),
       _phoneConnected(false),
-      _ecnrypt(false),
-      _state(PROTOCOL_STATUS_INITIALISING),
-      _method("unknown"),
-      _phoneName("phone"),
-      _transfered(0)
+      _ecnrypt(false)
 {
     int result = libusb_init(&_context);
     if (result < 0)

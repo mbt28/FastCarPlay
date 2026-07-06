@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <string>
 
-#include "protocol/connection.h"
+#include "protocol/iconnection.h"
 #include "protocol/protocol_const.h"
 #include "protocol/message.h"
 #include "settings.h"
@@ -30,7 +30,7 @@ bool hasAbsAxis(int fd, int code)
 }
 } // namespace
 
-TouchInput::TouchInput(Connection &conn)
+TouchInput::TouchInput(IConnection &conn)
     : _conn(conn), _active(false)
 {
     if (!openDevice())
