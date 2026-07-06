@@ -8,12 +8,10 @@ protocol = carlinkit
 
 # Dongle configuration (use lsusb to find yours)
 # Note that vendor id and product id are in decimals, not hex here
-# Carlinkit dongles enumerate with different product ids depending on the
-# model/firmware: 0x1520 (5408, the code default) or 0x1521 (5409). Check
-# `lsusb` for "1314:xxxx" and match it here, otherwise the app can't find the
-# dongle and stays on "insert dongle".
+# The Carlinkit dongle is auto-detected (vendor 0x1314 + a known product id
+# 0x1520/0x1521), so no entry is needed. Uncomment to pin a specific device.
 #vendor-id = 4884 # 0x1314
-product-id = 5408 # 0x1520
+#product-id = 5408 # 0x1520
 
 # Native wired Android Auto (only used when protocol = aa-usb).
 # aa-vendor-id/aa-product-id = 0 auto-scans for an AOAP-capable phone.

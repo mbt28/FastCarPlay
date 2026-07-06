@@ -19,7 +19,9 @@ public:
     static inline Setting<std::string> protocol{"protocol", "carlinkit"};
     static inline bool aaUsb() { return protocol.value == "aa-usb"; }
     static inline Setting<int> vendorid{"vendor-id", 4884};
-    static inline Setting<int> productid{"product-id", 5408};
+    // 0 = auto-detect the Carlinkit dongle (scan for vendor-id + a known
+    // product id, 0x1520/0x1521). Set a specific product id to pin one device.
+    static inline Setting<int> productid{"product-id", 0};
     // Native AA device selection: 0 = scan all devices for AOAP support;
     // set both to pin a specific phone.
     static inline Setting<int> aaVendorid{"aa-vendor-id", 0};

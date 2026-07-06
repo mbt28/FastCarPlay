@@ -3,11 +3,11 @@
 #include <cstring>
 
 #include "protocol/aa/aa_const.h"
+#include "protocol/protocol_const.h"
 #include "common/logger.h"
 #include "settings.h"
 
 #define AOAP_CTRL_TIMEOUT 2000
-#define CARLINKIT_VID 0x1314
 
 namespace aoap
 {
