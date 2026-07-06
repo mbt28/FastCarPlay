@@ -1,6 +1,15 @@
 #ifndef SRC_PROTOCOL_PROTOCOL_CONST
 #define SRC_PROTOCOL_PROTOCOL_CONST
 
+#include <cstdint>
+
+// Carlinkit dongle identification. The dongle is auto-detected by scanning for
+// this vendor id and any of the known product ids (0x1520 / 0x1521 depending on
+// the model/firmware), so no settings entry is needed. Extend CARLINKIT_PIDS if
+// a new dongle model appears, or pin one via the "product-id" setting.
+#define CARLINKIT_VID 0x1314
+static const uint16_t CARLINKIT_PIDS[] = {0x1520, 0x1521};
+
 #define PROTOCOL_STATUS_UNKNOWN -1     // Manual > 0
 #define PROTOCOL_STATUS_INITIALISING 0 // Initialised > 1
 #define PROTOCOL_STATUS_NO_DEVICE 1    // Start linking > 3

@@ -6,8 +6,9 @@
 # Android Auto -- plug the phone straight into the USB port, no dongle).
 #protocol = carlinkit
 
-# Dongle configuration (use lsusb to find yours)
-# Note that vendor id and product id are in decimals, not hex here
+# Dongle configuration. The Carlinkit dongle is auto-detected (vendor 0x1314 +
+# a known product id 0x1520/0x1521), so these are optional -- uncomment to pin
+# a specific device. Values in decimal, not hex (use lsusb to find yours).
 #vendor-id = 4884 # 0x1314
 #product-id = 5408 # 0x1520
 

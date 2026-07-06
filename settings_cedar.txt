@@ -2,11 +2,11 @@
 # 1.General settings
 ##############################################################################
 
-# Dongle configuration (use lsusb to find yours)
-# Note that vendor id and product id are in decimals, not hex here
-# Carlinkit dongles are 0x1520 (5408) or 0x1521 (5409); match your `lsusb`.
+# Dongle configuration. The Carlinkit dongle is auto-detected (vendor 0x1314 +
+# a known product id 0x1520/0x1521), so no entry is needed. Uncomment to pin a
+# specific device (values in decimal, not hex).
 #vendor-id = 4884 # 0x1314
-product-id = 5408 # 0x1520
+#product-id = 5408 # 0x1520
 
 # Requested image resolution
 width = 480

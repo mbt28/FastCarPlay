@@ -170,6 +170,42 @@ void Connection::onTransfer(libusb_transfer *transfer)
     }
 }
 
+// Open the Carlinkit dongle. If "product-id" is configured (non-zero) the exact
+// vendor:product pair is used (lets you pin a specific device); otherwise the
+// bus is scanned for the Carlinkit vendor id and any known product id, so a
+// 0x1520 or 0x1521 dongle is found with no settings entry.
+static libusb_device_handle *openDongle(libusb_context *context)
+{
+    if (Settings::productid != 0)
+        return libusb_open_device_with_vid_pid(context, Settings::vendorid, Settings::productid);
+
+    libusb_device **list = nullptr;
+    ssize_t count = libusb_get_device_list(context, &list);
+    if (count < 0)
+        return nullptr;
+
+    libusb_device_handle *handler = nullptr;
+    for (ssize_t i = 0; i < count && !handler; i++)
+    {
+        libusb_device_descriptor desc;
+        if (libusb_get_device_descriptor(list[i], &desc) != LIBUSB_SUCCESS)
+            continue;
+        if (desc.idVendor != Settings::vendorid)
+            continue;
+        for (uint16_t pid : CARLINKIT_PIDS)
+        {
+            if (desc.idProduct != pid)
+                continue;
+            if (libusb_open(list[i], &handler) != LIBUSB_SUCCESS)
+                handler = nullptr;
+            break;
+        }
+    }
+
+    libusb_free_device_list(list, 1);
+    return handler;
+}
+
 void Connection::mainLoop()
 {
     // Set thread name
@@ -182,7 +218,7 @@ void Connection::mainLoop()
     while (_active)
     {
         int linkCount = 0;
-        libusb_device_handle *handler = libusb_open_device_with_vid_pid(_context, Settings::vendorid, Settings::productid);
+        libusb_device_handle *handler = openDongle(_context);
         if (handler)
         {
             if (_state != PROTOCOL_STATUS_LINKING && _state != PROTOCOL_STATUS_ERROR)
