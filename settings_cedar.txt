@@ -4,8 +4,9 @@
 
 # Dongle configuration (use lsusb to find yours)
 # Note that vendor id and product id are in decimals, not hex here
+# Carlinkit dongles are 0x1520 (5408) or 0x1521 (5409); match your `lsusb`.
 #vendor-id = 4884 # 0x1314
-product-id = 5409 # 0x1521
+product-id = 5408 # 0x1520
 
 # Requested image resolution
 width = 480
