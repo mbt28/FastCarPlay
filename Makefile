@@ -41,14 +41,17 @@ CCOMMON := -Wall -std=c99 -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
 # is for the optional DE backend UYVY plane (renderer = drm).
 ifeq ($(USE_CEDAR),1)
 CXXCOMMON += -DUSE_CEDAR $(shell $(PKG_CONFIG) --cflags libdrm)
-LDOPTIONS += -lvdecoder -lcdc_base -lMemAdapter -lVE -lvideoengine -ldl -lrt $(shell $(PKG_CONFIG) --libs libdrm)
+# -latomic: the 32-bit ARMv5 (arm926) target has no native 64-bit atomics, so
+# std::atomic<int64_t> in the Android Auto backend needs libatomic.
+LDOPTIONS += -lvdecoder -lcdc_base -lMemAdapter -lVE -lvideoengine -ldl -lrt -latomic $(shell $(PKG_CONFIG) --libs libdrm)
 endif
 
 # Mainline cedrus HW H.264 decode via ffmpeg's V4L2-Request hwaccel (F1C200s),
 # blob-free: no libcedarc, only libdrm + libav* (already linked). Enable USE_CEDRUS=1.
 ifeq ($(USE_CEDRUS),1)
 CXXCOMMON += -DUSE_CEDRUS $(shell $(PKG_CONFIG) --cflags libdrm)
-LDOPTIONS += -lrt $(shell $(PKG_CONFIG) --libs libdrm)
+# -latomic: 64-bit atomics in the Android Auto backend on 32-bit arm926.
+LDOPTIONS += -lrt -latomic $(shell $(PKG_CONFIG) --libs libdrm)
 endif
 
 debug: BUILD_TYPE := debug
