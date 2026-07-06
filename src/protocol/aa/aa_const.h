@@ -125,6 +125,13 @@
 #define AA_KEY_MEDIA_PLAY 126
 #define AA_KEY_MEDIA_PAUSE 127
 
+// AA PointerAction values (proto enum) for touch reports.
+#define AA_TOUCH_DOWN 0
+#define AA_TOUCH_UP 1
+#define AA_TOUCH_MOVED 2
+#define AA_TOUCH_POINTER_DOWN 5
+#define AA_TOUCH_POINTER_UP 6
+
 // Internal Message type used on IConnection::writeQueue for AA frames the
 // protocol itself generates (acks, pongs, responses). Payload layout:
 // [0] channel, [1] 1 = pre-auth plaintext, [2..3] messageId u16BE, [4..] body.
