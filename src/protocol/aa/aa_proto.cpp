@@ -27,6 +27,7 @@
 #include "aap_protobuf/service/sensorsource/message/SensorBatch.pb.h"
 
 #include "protocol/aa/aa_const.h"
+#include "struct/multitouch.h"
 #include "common/logger.h"
 #include "settings.h"
 
@@ -399,6 +400,28 @@ Bytes inputReportTouch(uint64_t timestamp, uint32_t x, uint32_t y, int action)
     msg.touch_event.has_action = true;
     msg.touch_event.action = (NS_INPUTMSG(PointerAction))action;
     return encode(NS_INPUTMSG(InputReport_fields), msg, 48);
+}
+
+Bytes inputReportMultiTouch(uint64_t timestamp, const TouchPoint *points, int count,
+                            int action, int actionIndex)
+{
+    NS_INPUTMSG(InputReport) msg = {};
+    msg.timestamp = timestamp;
+    msg.has_touch_event = true;
+    if (count > MUTLITOUCH_MAX_TOUCH)
+        count = MUTLITOUCH_MAX_TOUCH;
+    msg.touch_event.pointer_data_count = count;
+    for (int i = 0; i < count; i++)
+    {
+        msg.touch_event.pointer_data[i].x = points[i].x;
+        msg.touch_event.pointer_data[i].y = points[i].y;
+        msg.touch_event.pointer_data[i].pointer_id = points[i].id;
+    }
+    msg.touch_event.has_action_index = true;
+    msg.touch_event.action_index = actionIndex;
+    msg.touch_event.has_action = true;
+    msg.touch_event.action = (NS_INPUTMSG(PointerAction))action;
+    return encode(NS_INPUTMSG(InputReport_fields), msg, 96);
 }
 
 Bytes inputReportKey(uint64_t timestamp, uint32_t keycode, bool down)

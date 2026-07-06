@@ -21,10 +21,12 @@
 #include "drm_display.h" // shared DRM session: video plane + UI overlay plane
 #include "interface.h"
 #endif
+#ifdef __linux__
+#include "touch_input.h" // evdev touchscreen; used on the drm/headless render paths
+#endif
 #ifdef USE_CEDAR
 #include "cedar_decoder.h" // Allwinner Cedar HW H.264 decoder (F1C200s)
 #include "serial_input.h"  // TEST-only serial-console navigation (F1C200s)
-#include "touch_input.h"   // GT911 / evdev touchscreen (F1C200s headless)
 #endif
 #include "pcm_audio.h"
 #include "common/functions.h"
@@ -440,9 +442,11 @@ void Application::loopHeadless()
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
 
+#ifdef __linux__
+    TouchInput touchInput(protocol);   // evdev touchscreen (renderer = drm/none)
+#endif
 #ifdef USE_CEDAR
-    SerialInput serialInput(protocol); // serial-console navigation
-    TouchInput touchInput(protocol);   // GT911 / evdev touchscreen
+    SerialInput serialInput(protocol); // TEST-only serial-console navigation
 #endif
 
     // Clean exit on Ctrl-C / SIGTERM; the SerialInput dtor then restores the tty.
@@ -513,9 +517,11 @@ void Application::loopDrm()
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
 
+#ifdef __linux__
+    TouchInput touchInput(protocol);   // evdev touchscreen (renderer = drm/none)
+#endif
 #ifdef USE_CEDAR
-    SerialInput serialInput(protocol); // serial-console navigation
-    TouchInput touchInput(protocol);   // GT911 / evdev touchscreen
+    SerialInput serialInput(protocol); // TEST-only serial-console navigation
 #endif
 
     g_quit = 0;

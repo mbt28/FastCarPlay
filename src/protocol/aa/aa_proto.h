@@ -29,8 +29,16 @@ Bytes mediaAck(int32_t sessionId);
 Bytes videoFocusNotification(bool focused, bool unsolicited);
 
 // input channel
+struct TouchPoint
+{
+    uint32_t x;
+    uint32_t y;
+    uint32_t id;
+};
 Bytes keyBindingResponse(int32_t status = 0);
 Bytes inputReportTouch(uint64_t timestamp, uint32_t x, uint32_t y, int action);
+Bytes inputReportMultiTouch(uint64_t timestamp, const TouchPoint *points, int count,
+                            int action, int actionIndex);
 Bytes inputReportKey(uint64_t timestamp, uint32_t keycode, bool down);
 
 // sensor channel

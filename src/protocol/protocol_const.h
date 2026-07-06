@@ -67,6 +67,13 @@ static const uint16_t CARLINKIT_PIDS[] = {0x1520, 0x1521};
 #define BTN_300 300
 #define BTN_301 301
 
+// Carlinkit multitouch per-point action (CMD_MULTI_TOUCH). Distinct from the
+// single-touch action codes (14/15/16); the AA backend maps these to its own
+// PointerAction enum.
+#define MT_ACTION_UP 0
+#define MT_ACTION_DOWN 1
+#define MT_ACTION_MOVE 2
+
 #define AUDIO_BUFFER_SIZE 2560
 #define AUDIO_BUFFER_OFFSET 12
 

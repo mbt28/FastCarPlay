@@ -40,6 +40,31 @@ static void writeU32le(uint8_t *dst, uint32_t value)
     dst[3] = (value >> 24) & 0xFF;
 }
 
+static uint32_t readU32le(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+// Pixel dimensions of the advertised video/touch space (aa-resolution 1/2/3).
+static void aaVideoSize(int &width, int &height)
+{
+    switch (Settings::aaResolution)
+    {
+    case 3:
+        width = 1920;
+        height = 1080;
+        break;
+    case 2:
+        width = 1280;
+        height = 720;
+        break;
+    default:
+        width = 800;
+        height = 480;
+        break;
+    }
+}
+
 AaConnection::AaConnection()
     : _processQueue(Settings::usbBuffer, Settings::usbTransferSize),
       _transfers(Settings::usbQueue),
@@ -945,26 +970,65 @@ bool AaConnection::translate(const Message &message, libusb_device_handle *handl
             return true;
         // u32LE action (14 down / 15 move / 16 up), x, y as 10000*normalized.
         uint32_t action = message.getInt(0);
-        int aaAction = action == 14 ? 0 /* DOWN */ : action == 16 ? 1 /* UP */ : 2 /* MOVED */;
+        int aaAction = action == 14 ? AA_TOUCH_DOWN : action == 16 ? AA_TOUCH_UP : AA_TOUCH_MOVED;
         int width, height;
-        switch (Settings::aaResolution)
-        {
-        case 3:
-            width = 1920;
-            height = 1080;
-            break;
-        case 2:
-            width = 1280;
-            height = 720;
-            break;
-        default:
-            width = 800;
-            height = 480;
-            break;
-        }
+        aaVideoSize(width, height);
         uint32_t x = (uint64_t)message.getInt(4) * width / 10000;
         uint32_t y = (uint64_t)message.getInt(8) * height / 10000;
         aa_proto::Bytes report = aa_proto::inputReportTouch(nowNs(), x, y, aaAction);
+        return sendFrame(handler, ep, AA_CH_INPUT, AA_MSG_INPUT_REPORT, report.data(),
+                         report.size(), AA_FLAG_ENC_SIGNAL);
+    }
+
+    case CMD_MULTI_TOUCH:
+    {
+        if (!_auth || !_channels[AA_CH_INPUT].open)
+            return true;
+        // Payload = 16 bytes/contact: x(float), y(float), action(u32), id(u32),
+        // where action is MT_ACTION_DOWN/MOVE/UP (see protocol_const.h).
+        const uint8_t *data = message.data();
+        int32_t length = message.length();
+        int count = data ? length / 16 : 0;
+        if (count <= 0)
+            return true;
+
+        int width, height;
+        aaVideoSize(width, height);
+
+        aa_proto::TouchPoint points[MUTLITOUCH_MAX_TOUCH];
+        int n = 0, changedIndex = -1;
+        uint32_t changedAction = MT_ACTION_MOVE;
+        for (int i = 0; i < count && n < MUTLITOUCH_MAX_TOUCH; i++)
+        {
+            const uint8_t *p = data + i * 16;
+            float fx, fy;
+            memcpy(&fx, p, sizeof(fx));
+            memcpy(&fy, p + 4, sizeof(fy));
+            uint32_t state = readU32le(p + 8);
+            points[n].x = (uint32_t)(fx * width);
+            points[n].y = (uint32_t)(fy * height);
+            points[n].id = readU32le(p + 12);
+            // Remember which contact changed this frame -> AA needs a single
+            // action + action_index for the whole report.
+            if (state == MT_ACTION_DOWN || state == MT_ACTION_UP)
+            {
+                changedIndex = n;
+                changedAction = state;
+            }
+            n++;
+        }
+
+        int actionIndex = changedIndex >= 0 ? changedIndex : 0;
+        int aaAction;
+        if (changedAction == MT_ACTION_DOWN)
+            aaAction = (n == 1) ? AA_TOUCH_DOWN : AA_TOUCH_POINTER_DOWN;
+        else if (changedAction == MT_ACTION_UP)
+            aaAction = (n == 1) ? AA_TOUCH_UP : AA_TOUCH_POINTER_UP;
+        else
+            aaAction = AA_TOUCH_MOVED;
+
+        aa_proto::Bytes report =
+            aa_proto::inputReportMultiTouch(nowNs(), points, n, aaAction, actionIndex);
         return sendFrame(handler, ep, AA_CH_INPUT, AA_MSG_INPUT_REPORT, report.data(),
                          report.size(), AA_FLAG_ENC_SIGNAL);
     }

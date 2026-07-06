@@ -1,8 +1,14 @@
 #include "touch_input.h"
 
-#ifdef USE_CEDAR
+#ifdef __linux__
 
 #include <linux/input.h>
+// linux/input.h defines BTN_LEFT/RIGHT/BACK as evdev codes that collide with
+// the Carlinkit button ids in protocol_const.h. We only use BTN_TOUCH here, so
+// drop the evdev aliases before the protocol headers define their versions.
+#undef BTN_LEFT
+#undef BTN_RIGHT
+#undef BTN_BACK
 #include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
@@ -80,9 +86,13 @@ bool TouchInput::openDevice()
     if (_fd < 0)
         return false;
 
+    // Multitouch (protocol B) if the device reports per-contact MT axes,
+    // otherwise fall back to single-touch ABS_X/ABS_Y + BTN_TOUCH.
+    _mt = hasAbsAxis(_fd, ABS_MT_POSITION_X);
+
     // Range for normalization -> [0,1] (the protocol multiplies by 10000).
-    int ax = hasAbsAxis(_fd, ABS_MT_POSITION_X) ? ABS_MT_POSITION_X : ABS_X;
-    int ay = hasAbsAxis(_fd, ABS_MT_POSITION_Y) ? ABS_MT_POSITION_Y : ABS_Y;
+    int ax = _mt ? ABS_MT_POSITION_X : ABS_X;
+    int ay = _mt ? ABS_MT_POSITION_Y : ABS_Y;
     struct input_absinfo ai;
     if (ioctl(_fd, EVIOCGABS(ax), &ai) == 0) { _xmin = ai.minimum; _xmax = ai.maximum; }
     if (ioctl(_fd, EVIOCGABS(ay), &ai) == 0) { _ymin = ai.minimum; _ymax = ai.maximum; }
@@ -96,13 +106,48 @@ bool TouchInput::openDevice()
     return true;
 }
 
+void TouchInput::emit()
+{
+    // Before the projection is up, keep slot history in sync so the first real
+    // frame doesn't replay a stale "down" for a finger already on the glass.
+    bool connected = _conn.state() == PROTOCOL_STATUS_CONNECTED;
+
+    Multitouch touches;
+    for (int i = 0; i < MUTLITOUCH_MAX_TOUCH; i++)
+    {
+        Contact &c = _slots[i];
+        if (!c.active && !c.wasActive)
+            continue; // idle slot
+
+        // active & !wasActive = just pressed; active & wasActive = held/moved;
+        // !active & wasActive = just released.
+        int action = c.active ? (c.wasActive ? MT_ACTION_MOVE : MT_ACTION_DOWN) : MT_ACTION_UP;
+
+        float nx = (float)(c.x - _xmin) / (_xmax - _xmin);
+        float ny = (float)(c.y - _ymin) / (_ymax - _ymin);
+        if (Settings::touchSwapXY) { float t = nx; nx = ny; ny = t; }
+        if (Settings::touchInvertX) nx = 1.0f - nx;
+        if (Settings::touchInvertY) ny = 1.0f - ny;
+        if (nx < 0) nx = 0; else if (nx > 1) nx = 1;
+        if (ny < 0) ny = 0; else if (ny > 1) ny = 1;
+
+        // Pointer id = the (stable) slot index, not the evdev tracking id which
+        // changes on every touch-down.
+        touches.add(nx, ny, action, i);
+
+        c.wasActive = c.active;
+        if (!c.active)
+            c.id = -1; // slot freed
+    }
+
+    if (connected && touches.size() > 0)
+        _conn.send(Message::MultiTouch(touches));
+}
+
 void TouchInput::loop()
 {
-    int slot = 0;                 // active MT slot (track finger 0 only)
-    int rawx = 0, rawy = 0;
-    int sentx = -1, senty = -1;   // last coordinate sent (avoid redundant moves)
-    bool down = false, wasDown = false;
-    bool havePos = false;
+    int cur = 0;        // current MT slot (ABS_MT_SLOT)
+    bool dirty = false; // something changed since the last SYN_REPORT
 
     while (_active)
     {
@@ -120,46 +165,57 @@ void TouchInput::loop()
             const struct input_event &e = ev[i];
             if (e.type == EV_ABS)
             {
-                switch (e.code)
+                if (_mt)
                 {
-                case ABS_MT_SLOT:       slot = e.value; break;
-                case ABS_MT_POSITION_X: if (slot == 0) { rawx = e.value; havePos = true; } break;
-                case ABS_MT_POSITION_Y: if (slot == 0) { rawy = e.value; havePos = true; } break;
-                case ABS_X:             rawx = e.value; havePos = true; break;
-                case ABS_Y:             rawy = e.value; havePos = true; break;
+                    switch (e.code)
+                    {
+                    case ABS_MT_SLOT:
+                        cur = e.value;
+                        break;
+                    case ABS_MT_TRACKING_ID:
+                        if (cur >= 0 && cur < MUTLITOUCH_MAX_TOUCH)
+                        {
+                            if (e.value < 0)
+                                _slots[cur].active = false; // finger lifted
+                            else
+                            {
+                                _slots[cur].id = e.value;
+                                _slots[cur].active = true; // finger down
+                            }
+                            dirty = true;
+                        }
+                        break;
+                    case ABS_MT_POSITION_X:
+                        if (cur >= 0 && cur < MUTLITOUCH_MAX_TOUCH) { _slots[cur].x = e.value; dirty = true; }
+                        break;
+                    case ABS_MT_POSITION_Y:
+                        if (cur >= 0 && cur < MUTLITOUCH_MAX_TOUCH) { _slots[cur].y = e.value; dirty = true; }
+                        break;
+                    }
+                }
+                else // single-touch device: everything is finger 0
+                {
+                    if (e.code == ABS_X) { _slots[0].x = e.value; dirty = true; }
+                    else if (e.code == ABS_Y) { _slots[0].y = e.value; dirty = true; }
                 }
             }
             else if (e.type == EV_KEY && e.code == BTN_TOUCH)
             {
-                down = (e.value != 0);
+                if (!_mt) // single-touch press/release
+                {
+                    _slots[0].active = (e.value != 0);
+                    _slots[0].id = 0;
+                    dirty = true;
+                }
             }
             else if (e.type == EV_SYN && e.code == SYN_REPORT)
             {
-                if (!havePos || _conn.state() != PROTOCOL_STATUS_CONNECTED)
-                {
-                    wasDown = down;
-                    continue;
-                }
-                float nx = (float)(rawx - _xmin) / (_xmax - _xmin);
-                float ny = (float)(rawy - _ymin) / (_ymax - _ymin);
-                if (Settings::touchSwapXY) { float t = nx; nx = ny; ny = t; }
-                if (Settings::touchInvertX) nx = 1.0f - nx;
-                if (Settings::touchInvertY) ny = 1.0f - ny;
-                if (nx < 0) nx = 0; else if (nx > 1) nx = 1;
-                if (ny < 0) ny = 0; else if (ny > 1) ny = 1;
-
-                if (down && !wasDown)
-                    _conn.send(Message::Click(nx, ny, true));
-                else if (down && wasDown && (rawx != sentx || rawy != senty))
-                    _conn.send(Message::Move(nx, ny));
-                else if (!down && wasDown)
-                    _conn.send(Message::Click(nx, ny, false));
-
-                sentx = rawx; senty = rawy;
-                wasDown = down;
+                if (dirty)
+                    emit();
+                dirty = false;
             }
         }
     }
 }
 
-#endif /* USE_CEDAR */
+#endif /* __linux__ */

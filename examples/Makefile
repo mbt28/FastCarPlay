@@ -14,6 +14,13 @@ aa_proto_test: aa_proto_test.cpp
 	  $(AA_DIR)/nanopb/pb_common.c $(AA_DIR)/nanopb/pb_encode.c $(AA_DIR)/nanopb/pb_decode.c \
 	  $(shell find $(AA_DIR)/proto -name '*.pb.c') -o $(OUT_DIR)/aa_proto_test $(LDFLAGS)
 
+# Round-trip check for the multitouch InputReport builder (links aa_proto).
+aa_mt_test: aa_mt_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src -I$(AA_DIR)/nanopb -I$(AA_DIR)/proto aa_mt_test.cpp \
+	  $(AA_DIR)/aa_proto.cpp ../src/settings.cpp ../src/common/logger.cpp \
+	  $(AA_DIR)/nanopb/pb_common.c $(AA_DIR)/nanopb/pb_encode.c $(AA_DIR)/nanopb/pb_decode.c \
+	  $(shell find $(AA_DIR)/proto -name '*.pb.c') -o $(OUT_DIR)/aa_mt_test $(LDFLAGS)
+
 keylistener: keylistener.cpp
 	$(CXX) $(CXXFLAGS) keylistener.cpp -o $(OUT_DIR)/keylistener $(LDFLAGS)
 
