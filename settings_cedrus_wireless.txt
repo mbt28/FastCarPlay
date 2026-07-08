@@ -1,0 +1,61 @@
+##############################################################################
+# F1C200s WIRELESS Android Auto profile (no dongle, no cable).
+# The head unit runs a Wi-Fi AP and advertises Android Auto over Bluetooth;
+# the phone pairs, joins the AP and connects over TCP. Needs a USE_AA_WIRELESS
+# build plus hostapd + dnsmasq + a running bluetoothd/dbus. See
+# docs/android-auto-wireless.md.
+#
+#   ./app settings_cedrus_wireless.txt      (run as root)
+##############################################################################
+
+# 1. General ----------------------------------------------------------------
+
+# Wireless native Android Auto.
+protocol = aa-wireless
+
+# Wi-Fi access point the phone joins. 2.4GHz to suit the ESP32 SoftAP; some
+# phones require 5GHz for wireless AA -- use a 5GHz adapter + channel if so.
+wifi-interface  = wlan0
+wifi-ssid       = FastCarPlay
+wifi-passphrase = carplay1234
+wifi-channel    = 6
+wifi-ap-ip      = 192.168.53.1
+
+# Bluetooth device name the phone pairs to.
+bluetooth-name  = FastCarPlay
+
+# Video the phone streams: 1 = 800x480 @ 30fps (lightest, safe for the arm926).
+aa-resolution   = 1
+aa-video-fps    = 30
+aa-max-unacked  = 4
+
+# Panel size (DEFE scales the stream to this).
+width  = 480
+height = 272
+source-fps = 30
+
+# Headless: decoder presents on the DRM/DEFE plane, no window manager.
+window-mode = 2
+
+# 3 = info: shows the bt/wifi/handshake + connect milestones without the
+# per-frame cost of level 4.
+log-level = 3
+
+# 2. Device -----------------------------------------------------------------
+
+android-dpi = 135
+
+# 3. Application ------------------------------------------------------------
+
+# Mainline blob-free cedrus HW H.264 decode + DEFE display.
+cedrus-decode = true
+renderer = drm
+
+# USB read pipeline tuning (unused in wireless, harmless to keep).
+async-usb-calls = 64
+usb-buffer-size = 4096
+usb-buffer = 256
+
+# Audio: "dummy" swallows audio (no sound) -- fine for the first bring-up.
+# Set alsa/pulseaudio to actually hear media/nav.
+audio-driver = dummy
