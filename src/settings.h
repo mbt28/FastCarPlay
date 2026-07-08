@@ -29,6 +29,16 @@ public:
     // Native AA video stream: 1=800x480, 2=1280x720, 3=1920x1080 / 30 or 60 fps.
     static inline Setting<int> aaResolution{"aa-resolution", 1};
     static inline Setting<int> aaFps{"aa-video-fps", 30};
+    // Wireless Android Auto (protocol = aa-wireless): the head unit runs a
+    // Wi-Fi AP and advertises the AA profile over Bluetooth; the phone joins
+    // the AP and connects to the TCP server. Needs hostapd + dnsmasq + BlueZ.
+    static inline Setting<std::string> wifiIface{"wifi-interface", "wlan0"};
+    static inline Setting<std::string> wifiSsid{"wifi-ssid", "FastCarPlay"};
+    static inline Setting<std::string> wifiPass{"wifi-passphrase", "carplay1234"};
+    static inline Setting<int> wifiChannel{"wifi-channel", 6}; // 2.4GHz (ESP32)
+    static inline Setting<std::string> apIp{"wifi-ap-ip", "192.168.53.1"};
+    static inline Setting<std::string> btName{"bluetooth-name", "FastCarPlay"};
+    static inline bool aaWireless() { return protocol.value == "aa-wireless"; }
     // ms to wait for the phone to re-enumerate in accessory mode after the
     // AOAP switch (first connections show a consent dialog on the phone).
     static inline Setting<int> aaAccessoryTimeout{"aa-accessory-timeout", 5000};
