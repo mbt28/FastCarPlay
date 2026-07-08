@@ -64,6 +64,10 @@
 #define AA_CH_MIC 9
 #define AA_CH_COUNT 16
 
+// TCP port the phone connects to for wireless Android Auto (after the
+// Bluetooth handshake hands it the head unit's IP + this port).
+#define AA_TCP_PORT 5277
+
 // --- Version handshake (raw, not protobuf) ---
 #define AA_VERSION_MAJOR 1
 #define AA_VERSION_MINOR 7
