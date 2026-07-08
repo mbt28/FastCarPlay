@@ -1,0 +1,5 @@
+aap_protobuf.aaw.WifiStartRequest.ip_address max_size:20
+aap_protobuf.aaw.WifiVersionResponse.unknown_value_c max_size:32
+aap_protobuf.aaw.WifiInfoResponse.ssid     max_size:36
+aap_protobuf.aaw.WifiInfoResponse.password max_size:64
+aap_protobuf.aaw.WifiInfoResponse.bssid    max_size:20
