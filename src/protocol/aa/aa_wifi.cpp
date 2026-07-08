@@ -85,7 +85,9 @@ bool AaWifi::start()
         return false;
     }
 
-    // wpa_supplicant / NetworkManager would fight hostapd for the interface.
+    // Clear any rfkill soft-block, then take the interface from anything that
+    // manages it (wpa_supplicant / NetworkManager would fight hostapd).
+    run("rfkill unblock wifi 2>/dev/null");
     run("pkill -f 'wpa_supplicant.*" + iface + "' 2>/dev/null");
     run("ip link set " + iface + " down 2>/dev/null");
     run("ip addr flush dev " + iface + " 2>/dev/null");

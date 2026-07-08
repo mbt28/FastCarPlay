@@ -422,6 +422,13 @@ std::unique_ptr<IDecoder> Application::makeDecoder()
 
 std::unique_ptr<IConnection> Application::makeConnection()
 {
+#ifdef USE_AA_WIRELESS
+    if (Settings::aaWireless())
+        return std::make_unique<AaWirelessConnection>();
+#else
+    if (Settings::aaWireless())
+        log_w("protocol = aa-wireless needs a USE_AA_WIRELESS build, using carlinkit");
+#endif
     if (Settings::aaUsb())
         return std::make_unique<AaConnection>();
     return std::make_unique<Connection>();
