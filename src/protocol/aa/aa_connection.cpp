@@ -7,7 +7,7 @@
 
 #include "libavcodec/avcodec.h"
 
-#include "protocol/aa/aoap.h"
+#include "protocol/aa/aa_usb_transport.h"
 #include "protocol/aa/aa_proto.h"
 #include "protocol/message.h"
 #include "protocol/protocol_const.h"
@@ -65,29 +65,18 @@ static void aaVideoSize(int &width, int &height)
     }
 }
 
-AaConnection::AaConnection()
-    : _processQueue(Settings::usbBuffer, Settings::usbTransferSize),
-      _transfers(Settings::usbQueue),
-      _context(nullptr),
+AaConnection::AaConnection(std::unique_ptr<AaTransport> transport)
+    : _transport(std::move(transport)),
       _active(false),
-      _connected(false),
       _phoneConnected(false),
       _auth(false),
       _lastPingSent(0),
       _lastPongReceived(0)
 {
-    int result = libusb_init(&_context);
-    if (result < 0)
-        throw std::runtime_error(std::string("Can't initialise USB: ") + libusb_error_name(result));
+    if (!_transport)
+        _transport = std::make_unique<AaUsbTransport>();
 
-    for (Context &context : _transfers)
-    {
-        context.owner = this;
-        context.transfer = nullptr;
-        context.slot = nullptr;
-    }
-
-    _method = "android-auto-usb";
+    _method = std::string("android-auto-") + _transport->name();
     log_v("Created");
 }
 
@@ -95,21 +84,6 @@ AaConnection::~AaConnection()
 {
     log_v("Destroying");
     stop();
-
-    for (Context &context : _transfers)
-    {
-        if (context.transfer)
-        {
-            libusb_free_transfer(context.transfer);
-            context.transfer = nullptr;
-        }
-    }
-
-    if (_context)
-    {
-        libusb_exit(_context);
-        _context = nullptr;
-    }
     log_v("Destroyed");
 }
 
@@ -120,19 +94,6 @@ void AaConnection::start()
 
     _state = PROTOCOL_STATUS_INITIALISING;
     log_v("Starting");
-
-    for (Context &context : _transfers)
-    {
-        if (!context.transfer)
-        {
-            context.transfer = libusb_alloc_transfer(0);
-            if (context.transfer == nullptr)
-            {
-                log_e("Can't allocate usb transfer");
-                return;
-            }
-        }
-    }
 
     _active = true;
     _writeThread = std::thread(&AaConnection::mainLoop, this);
@@ -146,10 +107,9 @@ void AaConnection::stop()
     log_v("Stopping");
 
     _active = false;
-    _connected = false;
     _state = PROTOCOL_STATUS_UNKNOWN;
 
-    _processQueue.notify();
+    _transport->close();
     writeQueue.notify();
 
     if (_writeThread.joinable())
@@ -161,120 +121,39 @@ void AaConnection::stop()
 const std::string AaConnection::status() const
 {
     std::stringstream result;
-    result << "aa-usb " << _ssl.cipherName();
+    result << "aa-" << _transport->name() << " " << _ssl.cipherName();
     for (int i = 0; i < AA_CH_COUNT; i++)
         if (_channels[i].open)
             result << " ch" << i;
     return result.str();
 }
 
-void AaConnection::onTransfer(libusb_transfer *transfer)
-{
-    if (!transfer || !transfer->user_data)
-        return;
-
-    Context *c = static_cast<Context *>(transfer->user_data);
-    if (!c->owner->_connected)
-        return;
-
-    c->owner->_transfered.fetch_add(transfer->actual_length, std::memory_order_relaxed);
-    log_p("Transfer %d [%d] > %s", transfer->actual_length, transfer->status,
-          bytes(transfer->buffer, transfer->actual_length, 40).c_str());
-
-    if (transfer->status == LIBUSB_TRANSFER_CANCELLED)
-        return;
-
-    if (transfer->status == LIBUSB_TRANSFER_NO_DEVICE)
-    {
-        c->owner->_connected = false;
-        return;
-    }
-
-    if (transfer->status == LIBUSB_TRANSFER_COMPLETED)
-    {
-        c->slot->commit(transfer->actual_length);
-        c->slot = c->owner->_processQueue.get();
-        if (!c->slot)
-        {
-            log_e("Can't allocate data slot for next usb transfer, increase usb buffer slots");
-            c->owner->_connected = false;
-            return;
-        }
-        c->transfer->buffer = c->slot->data;
-    }
-    int status = libusb_submit_transfer(c->transfer);
-    if (status != LIBUSB_SUCCESS)
-    {
-        log_w("USB transfer re-submit failed with status %d", status);
-        c->owner->_connected = false;
-    }
-}
-
-// Wait for a phone to show up in accessory mode; kick the AOAP switch on
-// anything that looks like a candidate while waiting.
-libusb_device_handle *AaConnection::waitForAccessory()
-{
-    libusb_device_handle *handler = aoap::openAccessory(_context);
-    if (handler)
-        return handler;
-
-    if (aoap::switchCandidates(_context) == 0)
-        return nullptr;
-
-    // Devices re-enumerate within a few hundred ms; the first connection can
-    // take longer because the phone shows a consent dialog.
-    int64_t deadline = nowMs() + Settings::aaAccessoryTimeout;
-    while (_active && nowMs() < deadline)
-    {
-        writeQueue.waitFor(_active, AA_RECONNECT_TIMEOUT);
-        handler = aoap::openAccessory(_context);
-        if (handler)
-            return handler;
-    }
-    return nullptr;
-}
-
 void AaConnection::mainLoop()
 {
-    setThreadName("aa-write");
-    log_d("AA writing thread started");
+    setThreadName("aa-main");
+    log_d("AA main thread started");
 
     int connectCount = 0;
 
     while (_active)
     {
-        libusb_device_handle *handler = waitForAccessory();
-        if (handler)
+        _state = PROTOCOL_STATUS_LINKING;
+        if (_transport->open(_active))
         {
             connectCount = 0;
-            _state = PROTOCOL_STATUS_LINKING;
-
-            uint8_t endpointIn = 0;
-            uint8_t endpointOut = 0;
             char error[256] = {0};
-
-            if (link(handler, &endpointIn, &endpointOut))
+            if (_ssl.init(error))
             {
-                if (_ssl.init(error))
-                {
-                    onDeviceConnect(handler, endpointIn);
-                    writeLoop(handler, endpointOut);
-                    onDeviceDisconnect();
-                }
-                else
-                {
-                    log_e("SSL init failed > %s", error);
-                }
-                _state = PROTOCOL_STATUS_ERROR;
+                onConnect();
+                writeLoop();
+                onDisconnect();
             }
-
-            libusb_release_interface(handler, 0);
-            // Reset the device before dropping it: this kicks the phone out of
-            // accessory mode so the next iteration performs a fresh AOAP switch
-            // and gets a clean accessory session, rather than reconnecting to a
-            // wedged/half-open pipe (which NAKs every write -> ERROR_TIMEOUT).
-            libusb_reset_device(handler);
-            libusb_close(handler);
+            else
+            {
+                log_e("SSL init failed > %s", error);
+            }
+            _state = PROTOCOL_STATUS_ERROR;
+            _transport->close();
         }
         else if (_state != PROTOCOL_STATUS_NO_DEVICE && connectCount++ > AA_CONNECT_RETRY)
         {
@@ -283,68 +162,11 @@ void AaConnection::mainLoop()
         writeQueue.waitFor(_active, AA_RECONNECT_TIMEOUT);
     }
 
-    log_v("AA writing thread stopped");
+    log_v("AA main thread stopped");
 }
 
-bool AaConnection::link(libusb_device_handle *handler, uint8_t *epIn, uint8_t *epOut)
+void AaConnection::onConnect()
 {
-    // Neither libusb_reset_device nor an unconditional set_configuration here:
-    // both drop the phone out of accessory mode. libusb_set_configuration on a
-    // device that already has the target configuration acts as a lightweight
-    // *device reset*, which makes an accessory-mode phone re-enumerate in a
-    // loop. Only set the configuration if it isn't already active.
-    libusb_set_auto_detach_kernel_driver(handler, 1);
-    int currentConfig = 0;
-    if (libusb_get_configuration(handler, &currentConfig) == LIBUSB_SUCCESS && currentConfig != 1)
-    {
-        int result = libusb_set_configuration(handler, 1);
-        if (result != LIBUSB_SUCCESS)
-            log_v("set_configuration: %s (continuing)", libusb_error_name(result));
-    }
-
-    int result = libusb_claim_interface(handler, 0);
-    if (result != LIBUSB_SUCCESS)
-    {
-        log_w("Can't claim interface > %s", libusb_error_name(result));
-        return false;
-    }
-
-    libusb_device *device = libusb_get_device(handler);
-    struct libusb_config_descriptor *config = nullptr;
-    if (libusb_get_active_config_descriptor(device, &config) != LIBUSB_SUCCESS)
-    {
-        log_w("Can't get config descriptor");
-        return false;
-    }
-
-    *epIn = 0;
-    *epOut = 0;
-    for (int i = 0; i < config->interface[0].altsetting[0].bNumEndpoints; i++)
-    {
-        const struct libusb_endpoint_descriptor *ep = &config->interface[0].altsetting[0].endpoint[i];
-        if ((ep->bmAttributes & LIBUSB_TRANSFER_TYPE_MASK) != LIBUSB_TRANSFER_TYPE_BULK)
-            continue;
-        if ((ep->bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK) == LIBUSB_ENDPOINT_IN)
-            *epIn = ep->bEndpointAddress;
-        else
-            *epOut = ep->bEndpointAddress;
-    }
-    libusb_free_config_descriptor(config);
-
-    if (!*epIn || !*epOut)
-    {
-        log_w("Accessory device has no bulk endpoint pair");
-        return false;
-    }
-
-    log_i("Accessory linked %d:%d speed: %d", libusb_get_bus_number(device),
-          libusb_get_device_address(device), libusb_get_device_speed(device));
-    return true;
-}
-
-void AaConnection::onDeviceConnect(libusb_device_handle *handler, uint8_t endpointIn)
-{
-    _connected = true;
     _phoneConnected = false;
     _auth = false;
     _lastPingSent = 0;
@@ -356,48 +178,21 @@ void AaConnection::onDeviceConnect(libusb_device_handle *handler, uint8_t endpoi
     videoStream.clear();
     audioStreamMain.clear();
     audioStreamAux.clear();
-    _processQueue.reset();
 
     _processThread = std::thread(&AaConnection::processLoop, this);
-    _readThread = std::thread(&AaConnection::readLoop, this);
-
-    for (Context &context : _transfers)
-    {
-        context.owner = this;
-        context.slot = _processQueue.get();
-        if (context.slot == nullptr)
-        {
-            log_e("Can't allocate data slot for usb transfer, increase usb buffer slots");
-            _connected = false;
-            return;
-        }
-        libusb_fill_bulk_transfer(context.transfer, handler, endpointIn, context.slot->data,
-                                  context.slot->size, AaConnection::onTransfer, &context, 0);
-        int status = libusb_submit_transfer(context.transfer);
-        if (status != LIBUSB_SUCCESS)
-        {
-            log_w("USB transfer submit failed with code %d", status);
-            _connected = false;
-            return;
-        }
-    }
 
     // Open the conversation: version request, raw u16BE major/minor pair.
     queueFrame(AA_CH_CONTROL, AA_MSG_VERSION_REQUEST,
                {0, AA_VERSION_MAJOR, 0, AA_VERSION_MINOR}, AA_FLAG_PLAINTEXT);
 }
 
-void AaConnection::onDeviceDisconnect()
+void AaConnection::onDisconnect()
 {
     onPhoneDisconnect();
 
     log_i("Device disconnected");
-    _connected = false;
     _auth = false;
-    _processQueue.notify();
-
-    if (_readThread.joinable())
-        _readThread.join();
+    _transport->close();
 
     if (_processThread.joinable())
         _processThread.join();
@@ -433,43 +228,19 @@ void AaConnection::onPhoneDisconnect()
     _phoneName = "phone";
 }
 
-void AaConnection::readLoop()
-{
-    setThreadName("aa-read");
-    setThreadPriority(ThreadPriority::Realtime);
-    timeval timeout{0, 1000};
-
-    log_d("AA reading thread started");
-
-    while (_connected)
-    {
-        libusb_handle_events_timeout_completed(_context, &timeout, nullptr);
-    }
-
-    log_v("Canceling transfer requests");
-
-    for (Context &context : _transfers)
-    {
-        if (context.transfer)
-            libusb_cancel_transfer(context.transfer);
-        libusb_handle_events_timeout_completed(_context, &timeout, nullptr);
-    }
-
-    log_v("AA reading thread stopped");
-}
-
 void AaConnection::processLoop()
 {
     setThreadName("aa-process");
     log_d("AA processing thread started");
 
-    while (_connected)
+    while (_transport->connected())
     {
         // Frame header: channel, flags, u16BE payload size. FIRST-without-
         // LAST frames add a u32BE total size for the reassembled message.
         uint8_t head[4];
-        if (!_processQueue.read(head, sizeof(head), _connected))
+        if (!_transport->read(head, sizeof(head)))
             break;
+        _transfered.fetch_add(sizeof(head), std::memory_order_relaxed);
 
         uint8_t channelId = head[0];
         uint8_t flags = head[1];
@@ -482,7 +253,7 @@ void AaConnection::processLoop()
         if (channelId >= AA_CH_COUNT || (flags & ~0x0F) != 0)
         {
             log_w("Frame desync (channel %d flags %02x), reconnecting", channelId, flags);
-            _connected = false;
+            _transport->close();
             break;
         }
 
@@ -490,20 +261,21 @@ void AaConnection::processLoop()
         if (first && !last)
         {
             uint8_t ext[4];
-            if (!_processQueue.read(ext, sizeof(ext), _connected))
+            if (!_transport->read(ext, sizeof(ext)))
                 break;
             totalSize = (ext[0] << 24) | (ext[1] << 16) | (ext[2] << 8) | ext[3];
             if (totalSize > AA_MAX_MESSAGE_SIZE)
             {
                 log_w("Frame desync (total size %u), reconnecting", totalSize);
-                _connected = false;
+                _transport->close();
                 break;
             }
         }
 
         _frameBuffer.resize(payloadSize);
-        if (payloadSize > 0 && !_processQueue.read(_frameBuffer.data(), payloadSize, _connected))
+        if (payloadSize > 0 && !_transport->read(_frameBuffer.data(), payloadSize))
             break;
+        _transfered.fetch_add(payloadSize, std::memory_order_relaxed);
 
         ChannelState &channel = _channels[channelId];
         if (first)
@@ -525,7 +297,7 @@ void AaConnection::processLoop()
             if (!_ssl.decrypt(_frameBuffer.data(), payloadSize, channel.assembly, error))
             {
                 log_w("TLS decrypt failed > %s", error);
-                _connected = false;
+                _transport->close();
                 break;
             }
         }
@@ -538,7 +310,7 @@ void AaConnection::processLoop()
         if (channel.assembly.size() > AA_MAX_MESSAGE_SIZE)
         {
             log_w("Message overflow on channel %d, reconnecting", channelId);
-            _connected = false;
+            _transport->close();
             break;
         }
 
@@ -550,6 +322,8 @@ void AaConnection::processLoop()
         }
     }
 
+    // The read side dropped: wake the write thread so it re-checks the link.
+    writeQueue.notify();
     log_v("AA processing thread stopped");
 }
 
@@ -619,7 +393,7 @@ void AaConnection::handleControl(uint16_t msgId, const uint8_t *data, size_t len
         {
             log_e("Version mismatch (phone %d.%d status %d)", length >= 2 ? (data[0] << 8) | data[1] : 0,
                   length >= 4 ? (data[2] << 8) | data[3] : 0, status);
-            _connected = false;
+            _transport->close();
             return;
         }
         log_i("Version handshake done (%d.%d), starting TLS", (data[0] << 8) | data[1],
@@ -630,7 +404,7 @@ void AaConnection::handleControl(uint16_t msgId, const uint8_t *data, size_t len
         if (!_ssl.handshake(nullptr, 0, out, done, error))
         {
             log_e("TLS start failed > %s", error);
-            _connected = false;
+            _transport->close();
             return;
         }
         if (!out.empty())
@@ -646,7 +420,7 @@ void AaConnection::handleControl(uint16_t msgId, const uint8_t *data, size_t len
         if (!_ssl.handshake(data, length, out, done, error))
         {
             log_e("TLS handshake failed > %s", error);
-            _connected = false;
+            _transport->close();
             return;
         }
         if (!out.empty())
@@ -703,11 +477,11 @@ void AaConnection::handleControl(uint16_t msgId, const uint8_t *data, size_t len
     case AA_MSG_BYEBYE_REQUEST:
         log_i("Phone requested shutdown");
         queueFrame(AA_CH_CONTROL, AA_MSG_BYEBYE_RESPONSE, aa_proto::byeByeResponse());
-        _connected = false;
+        _transport->close();
         break;
 
     case AA_MSG_BYEBYE_RESPONSE:
-        _connected = false;
+        _transport->close();
         break;
 
     case AA_MSG_VOICE_SESSION_NOTIFICATION:
@@ -864,8 +638,8 @@ void AaConnection::queueFrame(uint8_t channel, uint16_t msgId, const std::vector
         log_w("Write queue full, AA frame 0x%04x dropped", msgId);
 }
 
-bool AaConnection::sendFrame(libusb_device_handle *handler, uint8_t ep, uint8_t channel,
-                             uint16_t msgId, const uint8_t *body, size_t length, uint8_t flagClass)
+bool AaConnection::sendFrame(uint8_t channel, uint16_t msgId, const uint8_t *body, size_t length,
+                             uint8_t flagClass)
 {
     bool plaintext = flagClass == AA_FLAG_PLAINTEXT;
     bool control = flagClass == AA_FLAG_ENC_CONTROL;
@@ -918,14 +692,10 @@ bool AaConnection::sendFrame(libusb_device_handle *handler, uint8_t ep, uint8_t 
         }
         frame.insert(frame.end(), payload.begin() + offset, payload.begin() + offset + chunk);
 
-        int transferred = 0;
         log_d("TX ch %d id 0x%04x flags 0x%02x wire %zu", channel, msgId, flags, frame.size());
-        int status = libusb_bulk_transfer(handler, ep, frame.data(), frame.size(), &transferred,
-                                          AA_HEARTBEAT_DELAY);
-        if (status != LIBUSB_SUCCESS || transferred != (int)frame.size())
+        if (!_transport->write(frame.data(), frame.size()))
         {
-            log_w("Bulk write failed ch %d id 0x%04x wire %zu > %s", channel, msgId, frame.size(),
-                  libusb_error_name(status));
+            log_w("Write failed ch %d id 0x%04x wire %zu", channel, msgId, frame.size());
             return false;
         }
 
@@ -936,20 +706,18 @@ bool AaConnection::sendFrame(libusb_device_handle *handler, uint8_t ep, uint8_t 
     return true;
 }
 
-bool AaConnection::sendKey(libusb_device_handle *handler, uint8_t ep, uint32_t keycode)
+bool AaConnection::sendKey(uint32_t keycode)
 {
     if (!_channels[AA_CH_INPUT].open)
         return false;
     aa_proto::Bytes down = aa_proto::inputReportKey(nowNs(), keycode, true);
     aa_proto::Bytes up = aa_proto::inputReportKey(nowNs(), keycode, false);
-    return sendFrame(handler, ep, AA_CH_INPUT, AA_MSG_INPUT_REPORT, down.data(), down.size(),
-                     AA_FLAG_ENC_SIGNAL) &&
-           sendFrame(handler, ep, AA_CH_INPUT, AA_MSG_INPUT_REPORT, up.data(), up.size(),
-                     AA_FLAG_ENC_SIGNAL);
+    return sendFrame(AA_CH_INPUT, AA_MSG_INPUT_REPORT, down.data(), down.size(), AA_FLAG_ENC_SIGNAL) &&
+           sendFrame(AA_CH_INPUT, AA_MSG_INPUT_REPORT, up.data(), up.size(), AA_FLAG_ENC_SIGNAL);
 }
 
 // Translate the Carlinkit-shaped Messages the application layer produces.
-bool AaConnection::translate(const Message &message, libusb_device_handle *handler, uint8_t ep)
+bool AaConnection::translate(const Message &message)
 {
     switch (message.type())
     {
@@ -960,7 +728,7 @@ bool AaConnection::translate(const Message &message, libusb_device_handle *handl
         if (!data || length < AA_FRAME_HEAD)
             return true;
         uint16_t msgId = (data[2] << 8) | data[3];
-        return sendFrame(handler, ep, data[0], msgId, data + AA_FRAME_HEAD,
+        return sendFrame(data[0], msgId, data + AA_FRAME_HEAD,
                          length - AA_FRAME_HEAD, data[1]);
     }
 
@@ -976,7 +744,7 @@ bool AaConnection::translate(const Message &message, libusb_device_handle *handl
         uint32_t x = (uint64_t)message.getInt(4) * width / 10000;
         uint32_t y = (uint64_t)message.getInt(8) * height / 10000;
         aa_proto::Bytes report = aa_proto::inputReportTouch(nowNs(), x, y, aaAction);
-        return sendFrame(handler, ep, AA_CH_INPUT, AA_MSG_INPUT_REPORT, report.data(),
+        return sendFrame(AA_CH_INPUT, AA_MSG_INPUT_REPORT, report.data(),
                          report.size(), AA_FLAG_ENC_SIGNAL);
     }
 
@@ -1029,7 +797,7 @@ bool AaConnection::translate(const Message &message, libusb_device_handle *handl
 
         aa_proto::Bytes report =
             aa_proto::inputReportMultiTouch(nowNs(), points, n, aaAction, actionIndex);
-        return sendFrame(handler, ep, AA_CH_INPUT, AA_MSG_INPUT_REPORT, report.data(),
+        return sendFrame(AA_CH_INPUT, AA_MSG_INPUT_REPORT, report.data(),
                          report.size(), AA_FLAG_ENC_SIGNAL);
     }
 
@@ -1041,40 +809,40 @@ bool AaConnection::translate(const Message &message, libusb_device_handle *handl
         switch (button)
         {
         case BTN_LEFT:
-            return sendKey(handler, ep, AA_KEY_DPAD_LEFT);
+            return sendKey(AA_KEY_DPAD_LEFT);
         case BTN_RIGHT:
-            return sendKey(handler, ep, AA_KEY_DPAD_RIGHT);
+            return sendKey(AA_KEY_DPAD_RIGHT);
         case 113: // BTN_UP (not in protocol_const.h)
-            return sendKey(handler, ep, AA_KEY_DPAD_UP);
+            return sendKey(AA_KEY_DPAD_UP);
         case BTN_DOWN:
-            return sendKey(handler, ep, AA_KEY_DPAD_DOWN);
+            return sendKey(AA_KEY_DPAD_DOWN);
         case BTN_SELECT_DOWN:
-            return sendKey(handler, ep, AA_KEY_DPAD_CENTER);
+            return sendKey(AA_KEY_DPAD_CENTER);
         case BTN_SELECT_UP:
             return true; // center key is sent as a full press by SELECT_DOWN
         case BTN_BACK:
-            return sendKey(handler, ep, AA_KEY_BACK);
+            return sendKey(AA_KEY_BACK);
         case BTN_HOME:
-            return sendKey(handler, ep, AA_KEY_HOME);
+            return sendKey(AA_KEY_HOME);
         case BTN_PLAY:
-            return sendKey(handler, ep, AA_KEY_MEDIA_PLAY);
+            return sendKey(AA_KEY_MEDIA_PLAY);
         case BTN_PAUSE:
-            return sendKey(handler, ep, AA_KEY_MEDIA_PAUSE);
+            return sendKey(AA_KEY_MEDIA_PAUSE);
         case BTN_203:
-            return sendKey(handler, ep, AA_KEY_PLAY_PAUSE);
+            return sendKey(AA_KEY_PLAY_PAUSE);
         case BTN_NEXT_TRACK:
-            return sendKey(handler, ep, AA_KEY_MEDIA_NEXT);
+            return sendKey(AA_KEY_MEDIA_NEXT);
         case BTN_PREVIOUS_TRACK:
-            return sendKey(handler, ep, AA_KEY_MEDIA_PREVIOUS);
+            return sendKey(AA_KEY_MEDIA_PREVIOUS);
         case BTN_SIRI:
-            return sendKey(handler, ep, AA_KEY_SEARCH);
+            return sendKey(AA_KEY_SEARCH);
         case 16: // night mode on
         case 17: // night mode off
         {
             if (!_channels[AA_CH_SENSOR].open)
                 return true;
             aa_proto::Bytes batch = aa_proto::sensorBatchNightMode(button == 16);
-            return sendFrame(handler, ep, AA_CH_SENSOR, AA_MSG_SENSOR_BATCH, batch.data(),
+            return sendFrame(AA_CH_SENSOR, AA_MSG_SENSOR_BATCH, batch.data(),
                              batch.size(), AA_FLAG_ENC_SIGNAL);
         }
         case 500: // video focus
@@ -1083,7 +851,7 @@ bool AaConnection::translate(const Message &message, libusb_device_handle *handl
             if (!_channels[AA_CH_VIDEO].open)
                 return true;
             aa_proto::Bytes focus = aa_proto::videoFocusNotification(button == 500, true);
-            return sendFrame(handler, ep, AA_CH_VIDEO, AA_MSG_VIDEO_FOCUS_NOTIFICATION,
+            return sendFrame(AA_CH_VIDEO, AA_MSG_VIDEO_FOCUS_NOTIFICATION,
                              focus.data(), focus.size(), AA_FLAG_ENC_SIGNAL);
         }
         default:
@@ -1098,7 +866,7 @@ bool AaConnection::translate(const Message &message, libusb_device_handle *handl
             return true;
         _lastPingSent = nowMs();
         aa_proto::Bytes ping = aa_proto::pingRequest(nowNs());
-        return sendFrame(handler, ep, AA_CH_CONTROL, AA_MSG_PING_REQUEST, ping.data(), ping.size(),
+        return sendFrame(AA_CH_CONTROL, AA_MSG_PING_REQUEST, ping.data(), ping.size(),
                          AA_FLAG_PLAINTEXT);
     }
 
@@ -1108,14 +876,14 @@ bool AaConnection::translate(const Message &message, libusb_device_handle *handl
     }
 }
 
-void AaConnection::writeLoop(libusb_device_handle *handler, uint8_t ep)
+void AaConnection::writeLoop()
 {
-    while (_connected)
+    while (_transport->connected())
     {
         std::unique_ptr<Message> message = writeQueue.pop();
         if (!message)
         {
-            if (!writeQueue.waitFor(_connected, AA_HEARTBEAT_DELAY))
+            if (!writeQueue.waitFor(_active, AA_HEARTBEAT_DELAY) || !_transport->connected())
                 break;
             message = writeQueue.pop();
         }
@@ -1127,13 +895,13 @@ void AaConnection::writeLoop(libusb_device_handle *handler, uint8_t ep)
             if (_auth && pong > 0 && nowMs() - pong > AA_PING_TIMEOUT)
             {
                 log_w("Ping timeout, reconnecting");
-                _connected = false;
+                _transport->close();
                 break;
             }
             message = Message::HeartBeat();
         }
 
-        if (!_connected)
+        if (!_transport->connected())
             break;
 
         if (!message->allocated())
@@ -1145,10 +913,10 @@ void AaConnection::writeLoop(libusb_device_handle *handler, uint8_t ep)
             message = writeQueue.pop();
         }
 
-        if (!translate(*message, handler, ep))
+        if (!translate(*message))
         {
             log_w("Send failed, reconnecting");
-            _connected = false;
+            _transport->close();
         }
     }
 }
