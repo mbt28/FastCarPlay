@@ -26,6 +26,12 @@ aa_aaw_test: aa_aaw_test.cpp
 	$(CXX) $(CXXFLAGS) -DUSE_AA_WIRELESS -I../src aa_aaw_test.cpp \
 	  $(AA_DIR)/aa_aaw.cpp ../src/common/logger.cpp -o $(OUT_DIR)/aa_aaw_test $(LDFLAGS) -pthread
 
+# Smoke-test the Bluetooth D-Bus service against a live BlueZ (run as root).
+aa_bt_test: aa_bt_test.cpp
+	$(CXX) $(CXXFLAGS) -DUSE_AA_WIRELESS -I../src $(shell pkg-config --cflags dbus-1) aa_bt_test.cpp \
+	  $(AA_DIR)/aa_bluetooth.cpp $(AA_DIR)/aa_aaw.cpp ../src/settings.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/aa_bt_test $(LDFLAGS) $(shell pkg-config --libs dbus-1) -lbluetooth -pthread
+
 keylistener: keylistener.cpp
 	$(CXX) $(CXXFLAGS) keylistener.cpp -o $(OUT_DIR)/keylistener $(LDFLAGS)
 

@@ -8,6 +8,9 @@
 
 #include "protocol/connection.h"
 #include "protocol/aa/aa_connection.h"
+#ifdef USE_AA_WIRELESS
+#include "protocol/aa/aa_wireless.h"
+#endif
 #include "pipe_listener.h"
 #include "renderer.h"
 
