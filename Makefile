@@ -54,6 +54,14 @@ CXXCOMMON += -DUSE_CEDRUS $(shell $(PKG_CONFIG) --cflags libdrm)
 LDOPTIONS += -lrt -latomic $(shell $(PKG_CONFIG) --libs libdrm)
 endif
 
+# Wireless Android Auto (Bluetooth bootstrap + Wi-Fi AP). Enable USE_AA_WIRELESS=1
+# once the target image has dbus + bluez (dev in the cross sysroot) and, at
+# runtime, hostapd + dnsmasq. Without it, protocol = aa-wireless is unavailable.
+ifeq ($(USE_AA_WIRELESS),1)
+CXXCOMMON += -DUSE_AA_WIRELESS $(shell $(PKG_CONFIG) --cflags dbus-1)
+LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1) -lbluetooth
+endif
+
 debug: BUILD_TYPE := debug
 debug: CXXFLAGS := -g -O0 -DPROTOCOL_DEBUG -fsanitize=address -fno-omit-frame-pointer
 debug: LDFLAGS += -fsanitize=address -fno-omit-frame-pointer
