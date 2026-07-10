@@ -94,6 +94,9 @@ bool AaWifi::start()
     run("ip link set " + iface + " up");
     run("ip addr add " + _ip + "/24 dev " + iface);
 
+    // Kill a hostapd left over from a previous run, else the new one fails to
+    // grab the interface ("hostapd failed to start").
+    run("pkill -f 'hostapd.*" HOSTAPD_CONF "' 2>/dev/null");
     if (run("hostapd -B " + std::string(HOSTAPD_CONF)) != 0)
     {
         log_e("wifi: hostapd failed to start (is it installed?)");

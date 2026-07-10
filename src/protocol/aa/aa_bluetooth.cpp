@@ -26,6 +26,27 @@
 #define AA_UUID "4de17a00-52cb-11e6-bdf4-0800200c9a66"
 #define HFP_HF_UUID "0000111e-0000-1000-8000-00805f9b34fb"
 
+// Explicit SDP record for the AA RFCOMM service, passed to RegisterProfile so
+// bluetoothd publishes it over the air. Some bluetoothd versions (e.g. 5.79)
+// do not auto-generate an SDP record for a custom-UUID profile from Role +
+// Channel alone, so the phone's SDP query finds nothing and gives up after
+// bonding. This record is the AA UUID + L2CAP/RFCOMM(ch 8) + browse group.
+static const char *AA_SDP_RECORD =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>"
+    "<record>"
+    "  <attribute id=\"0x0001\"><sequence>"
+    "    <uuid value=\"4de17a00-52cb-11e6-bdf4-0800200c9a66\" />"
+    "  </sequence></attribute>"
+    "  <attribute id=\"0x0004\"><sequence>"
+    "    <sequence><uuid value=\"0x0100\" /></sequence>"
+    "    <sequence><uuid value=\"0x0003\" /><uint8 value=\"0x08\" /></sequence>"
+    "  </sequence></attribute>"
+    "  <attribute id=\"0x0005\"><sequence>"
+    "    <uuid value=\"0x1002\" />"
+    "  </sequence></attribute>"
+    "  <attribute id=\"0x0100\"><text value=\"Android Auto Wireless\" /></attribute>"
+    "</record>";
+
 // Reply to a BlueZ method call with an empty return (i.e. "accepted").
 static void emptyReply(DBusConnection *conn, DBusMessage *msg)
 {
@@ -150,7 +171,8 @@ static void addDictEntry(DBusMessageIter *dict, const char *key, int type, const
     dbus_message_iter_close_container(dict, &entry);
 }
 
-bool AaBluetooth::registerProfile(const char *path, const char *uuid, bool server)
+bool AaBluetooth::registerProfile(const char *path, const char *uuid, bool server,
+                                  const char *serviceRecord, const char *name)
 {
     static DBusObjectPathVTable vtable;
     vtable.message_function = &AaBluetooth::profileMessage;
@@ -167,11 +189,17 @@ bool AaBluetooth::registerProfile(const char *path, const char *uuid, bool serve
 
     const char *role = server ? "server" : "client";
     addDictEntry(&dict, "Role", DBUS_TYPE_STRING, &role);
+    if (name)
+        addDictEntry(&dict, "Name", DBUS_TYPE_STRING, &name);
     if (server)
     {
         dbus_uint16_t channel = 8; // AA custom profile lives on RFCOMM ch 8
         addDictEntry(&dict, "Channel", DBUS_TYPE_UINT16, &channel);
     }
+    // Explicit SDP record so bluetoothd publishes the service over the air
+    // (versions that don't auto-generate one otherwise leave it invisible).
+    if (serviceRecord)
+        addDictEntry(&dict, "ServiceRecord", DBUS_TYPE_STRING, &serviceRecord);
     dbus_bool_t no = FALSE, yes = TRUE;
     addDictEntry(&dict, "RequireAuthentication", DBUS_TYPE_BOOLEAN, &no);
     addDictEntry(&dict, "RequireAuthorization", DBUS_TYPE_BOOLEAN, &no);
@@ -278,7 +306,7 @@ bool AaBluetooth::start(const aa_aaw::Params &params)
     _running = true;
     setupAdapter();
     registerAgent();
-    registerProfile(AA_PROFILE_PATH, AA_UUID, true);
+    registerProfile(AA_PROFILE_PATH, AA_UUID, true, AA_SDP_RECORD, "Android Auto Wireless");
     registerProfile(HFP_PROFILE_PATH, HFP_HF_UUID, false);
 
     _dispatch = std::thread(&AaBluetooth::dispatchLoop, this);
