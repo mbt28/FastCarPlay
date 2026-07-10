@@ -34,7 +34,8 @@ private:
 
     bool setupAdapter();
     bool registerAgent();
-    bool registerProfile(const char *path, const char *uuid, bool server);
+    bool registerProfile(const char *path, const char *uuid, bool server,
+                         const char *serviceRecord = nullptr, const char *name = nullptr);
     bool setAdapterProp(const char *prop, int type, const void *value);
     void onNewConnection(int fd);
     void dispatchLoop();
