@@ -129,9 +129,14 @@ bool AaBluetooth::registerAgent()
         return false;
     }
 
-    // AgentManager1.RegisterAgent(path, "NoInputNoOutput") -> just-works pairing.
+    // AgentManager1.RegisterAgent(path, "DisplayYesNo") -> Numeric Comparison
+    // (or Just Works) pairing. DisplayYesNo satisfies phones that require MITM
+    // protection (e.g. Samsung Galaxy S21, which rejects plain Just-Works SSP
+    // with Authentication Failure 0x05); both outcomes are auto-accepted by our
+    // agent handler. Avoid "KeyboardDisplay", which could ask for a passkey/PIN
+    // the handler doesn't implement.
     const char *path = AGENT_PATH;
-    const char *cap = "NoInputNoOutput";
+    const char *cap = "DisplayYesNo";
     for (const char *method : {"RegisterAgent", "RequestDefaultAgent"})
     {
         DBusMessage *msg =
