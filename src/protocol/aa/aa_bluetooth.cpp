@@ -312,7 +312,10 @@ bool AaBluetooth::start(const aa_aaw::Params &params)
     setupAdapter();
     registerAgent();
     registerProfile(AA_PROFILE_PATH, AA_UUID, true, AA_SDP_RECORD, "Android Auto Wireless");
-    registerProfile(HFP_PROFILE_PATH, HFP_HF_UUID, false);
+    // HFP is provided by an external Audio Gateway backend (bluealsad -p hfp-ag
+    // -p hfp-hf). Do NOT register 0x111e here: a client registration serves no
+    // record and, worse, claims the UUID so the backend can't publish the
+    // standalone Hands-Free record the phone looks for before starting AA.
 
     _dispatch = std::thread(&AaBluetooth::dispatchLoop, this);
     log_i("bt: wireless Android Auto profile advertised");
