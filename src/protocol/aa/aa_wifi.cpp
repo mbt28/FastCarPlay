@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <unistd.h>
 
 #include "common/logger.h"
 #include "settings.h"
@@ -17,6 +18,13 @@ static int run(const std::string &cmd)
 {
     log_d("wifi: %s", cmd.c_str());
     return system(cmd.c_str());
+}
+
+// Kill every instance of a program by name. busybox (the F1C200s userland) has
+// no pkill/pgrep, so match via pidof + kill instead of a cmdline pattern.
+static void killByName(const char *name)
+{
+    run(std::string("kill $(pidof ") + name + ") 2>/dev/null");
 }
 
 // AP subnet from the AP IP (assumes /24, gateway = the AP IP).
@@ -86,23 +94,28 @@ bool AaWifi::start()
     }
 
     // Clear any rfkill soft-block, then take the interface from anything that
-    // manages it (wpa_supplicant / NetworkManager would fight hostapd).
+    // manages it. Kill leftovers from a previous run FIRST — a stale hostapd
+    // keeps the new one from grabbing wlan0 ("hostapd failed to start") — then
+    // give the driver a moment to release the interface.
     run("rfkill unblock wifi 2>/dev/null");
-    run("pkill -f 'wpa_supplicant.*" + iface + "' 2>/dev/null");
+    killByName("hostapd");
+    killByName("dnsmasq");
+    killByName("wpa_supplicant");
+    usleep(300 * 1000);
     run("ip link set " + iface + " down 2>/dev/null");
+    // Reset out of any leftover AP mode. An ungracefully-killed hostapd leaves
+    // the interface configured for AP, and the esp-hosted driver then rejects
+    // the next hostapd with "Match already configured". Harmless otherwise.
+    run("iw dev " + iface + " set type managed 2>/dev/null");
     run("ip addr flush dev " + iface + " 2>/dev/null");
     run("ip link set " + iface + " up");
     run("ip addr add " + _ip + "/24 dev " + iface);
 
-    // Kill a hostapd left over from a previous run, else the new one fails to
-    // grab the interface ("hostapd failed to start").
-    run("pkill -f 'hostapd.*" HOSTAPD_CONF "' 2>/dev/null");
     if (run("hostapd -B " + std::string(HOSTAPD_CONF)) != 0)
     {
         log_e("wifi: hostapd failed to start (is it installed?)");
         return false;
     }
-    run("pkill -f 'dnsmasq.*" DNSMASQ_CONF "' 2>/dev/null");
     if (run("dnsmasq -C " + std::string(DNSMASQ_CONF)) != 0)
         log_w("wifi: dnsmasq failed to start (phone may not get an IP)");
 
@@ -116,8 +129,8 @@ void AaWifi::stop()
 {
     if (!_running)
         return;
-    run("pkill -f 'hostapd.*" HOSTAPD_CONF "' 2>/dev/null");
-    run("pkill -f 'dnsmasq.*" DNSMASQ_CONF "' 2>/dev/null");
+    killByName("hostapd");
+    killByName("dnsmasq");
     run("ip addr flush dev " + Settings::wifiIface.value + " 2>/dev/null");
     _running = false;
     log_v("wifi: AP stopped");
