@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
+#include <map>
 #include <mutex>
 
 extern "C"
@@ -34,7 +35,10 @@ bool modeset_done = false;
 
 // video plane (primary, NV12 -> DEFE)
 uint32_t vplane = 0;
-uint32_t vprev_fb = 0;
+// Decoded-frame DRM framebuffers, cached by dma-buf fd. The decoder's frame
+// pool cycles a small, stable set of fds, so we build each framebuffer once and
+// reuse it instead of AddFB2/RmFB every frame (costly on the ARM926).
+std::map<int, uint32_t> vfbCache;
 uint32_t vframes = 0;
 struct PlaneProps
 {
@@ -276,6 +280,13 @@ bool session_open(const char *tag)
     return true;
 }
 
+void flush_video_fbs()
+{
+    for (auto &kv : vfbCache)
+        drmModeRmFB(fd, kv.second);
+    vfbCache.clear();
+}
+
 void session_close()
 {
     if (urenderer) { SDL_DestroyRenderer(urenderer); urenderer = nullptr; }
@@ -285,7 +296,7 @@ void session_close()
     destroy_dumb(blackfb);
     ui_ready = false;
     ui_visible = false;
-    if (vprev_fb) { drmModeRmFB(fd, vprev_fb); vprev_fb = 0; }
+    flush_video_fbs();
     if (mode_blob) { drmModeDestroyPropertyBlob(fd, mode_blob); mode_blob = 0; }
     if (fd >= 0) { ::close(fd); fd = -1; }
     conn = crtc = cw = ch = 0;
@@ -321,27 +332,39 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
     std::lock_guard<std::mutex> lock(mtx);
     if (fd < 0) return false;
 
-    uint32_t handles[4] = {0}, pit[4] = {0}, off[4] = {0};
-    uint64_t mods[4] = {0};
     int np = nplanes < 4 ? nplanes : 4;
-    for (int i = 0; i < np; i++)
-    {
-        uint32_t hn = 0;
-        // The dma-buf fds are owned by the decoder's frame pool (cached,
-        // stable per buffer) -- do NOT close them; drmPrime caches one GEM
-        // handle per fd so handles stay bounded by the pool.
-        if (drmPrimeFDToHandle(fd, dmabufFds[i], &hn))
-        { fprintf(stderr, "[%s] drmPrimeFDToHandle: %s\n", tag, strerror(errno)); return false; }
-        handles[i] = hn;
-        pit[i] = pitches[i];
-        off[i] = offsets[i];
-        mods[i] = modifier;
-    }
 
+    // Reuse the framebuffer for this pool buffer if we've already built one.
+    // Keyed by the primary plane's fd, which is stable per pool buffer. Only on
+    // a cache miss do we import the dma-buf handles + create the framebuffer.
     uint32_t fb = 0;
-    if (drmModeAddFB2WithModifiers(fd, w, h, fourcc, handles, pit, off, mods,
-                                   &fb, DRM_MODE_FB_MODIFIERS))
-    { fprintf(stderr, "[%s] AddFB2WithModifiers: %s\n", tag, strerror(errno)); return false; }
+    auto cached = vfbCache.find(dmabufFds[0]);
+    if (cached != vfbCache.end())
+    {
+        fb = cached->second;
+    }
+    else
+    {
+        uint32_t handles[4] = {0}, pit[4] = {0}, off[4] = {0};
+        uint64_t mods[4] = {0};
+        for (int i = 0; i < np; i++)
+        {
+            uint32_t hn = 0;
+            // The dma-buf fds are owned by the decoder's frame pool (cached,
+            // stable per buffer) -- do NOT close them; drmPrime caches one GEM
+            // handle per fd so handles stay bounded by the pool.
+            if (drmPrimeFDToHandle(fd, dmabufFds[i], &hn))
+            { fprintf(stderr, "[%s] drmPrimeFDToHandle: %s\n", tag, strerror(errno)); return false; }
+            handles[i] = hn;
+            pit[i] = pitches[i];
+            off[i] = offsets[i];
+            mods[i] = modifier;
+        }
+        if (drmModeAddFB2WithModifiers(fd, w, h, fourcc, handles, pit, off, mods,
+                                       &fb, DRM_MODE_FB_MODIFIERS))
+        { fprintf(stderr, "[%s] AddFB2WithModifiers: %s\n", tag, strerror(errno)); return false; }
+        vfbCache[dmabufFds[0]] = fb;
+    }
 
     drmModeAtomicReq *req = drmModeAtomicAlloc();
     uint32_t flags = add_modeset(req);
@@ -353,12 +376,9 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
     {
         static bool warned = false;
         if (!warned) { warned = true; fprintf(stderr, "[%s] atomic commit failed: %s\n", tag, strerror(errno)); }
-        drmModeRmFB(fd, fb);
-        return false;
+        return false; // fb stays cached; a transient commit failure won't drop it
     }
     modeset_done = true;
-    if (vprev_fb) drmModeRmFB(fd, vprev_fb);
-    vprev_fb = fb;
     vframes++;
 
     static int frames = 0;
