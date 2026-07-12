@@ -44,6 +44,10 @@ public:
     static inline Setting<int> aaAccessoryTimeout{"aa-accessory-timeout", 5000};
     // Media ack window offered in the AV setup response.
     static inline Setting<int> aaMaxUnacked{"aa-max-unacked", 4};
+    // Offer only ChaCha20-Poly1305 for the AA TLS session. On CPUs without AES
+    // acceleration (e.g. ARM926) it is far cheaper than AES-128-GCM, which the
+    // phone otherwise picks. false = normal negotiation (usually AES-128-GCM).
+    static inline Setting<bool> forceChacha20{"force-chacha20", false};
     static inline Setting<int> width{"width", 1024};
     static inline Setting<int> height{"height", 576};
     static inline Setting<int> sourceFps{"source-fps", 60};
