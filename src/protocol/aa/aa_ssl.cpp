@@ -8,6 +8,7 @@
 
 #include "protocol/aa/aa_cert.h"
 #include "common/logger.h"
+#include "settings.h"
 
 AaSsl::~AaSsl()
 {
@@ -58,6 +59,13 @@ bool AaSsl::init(char *err)
     SSL_CTX_set_min_proto_version(_ctx, TLS1_2_VERSION);
     SSL_CTX_set_max_proto_version(_ctx, TLS1_2_VERSION);
     SSL_CTX_set_verify(_ctx, SSL_VERIFY_NONE, nullptr);
+
+    // Optionally force ChaCha20-Poly1305: on a CPU without AES acceleration it
+    // is far cheaper than AES-128-GCM, but the phone only uses it if we offer
+    // *nothing else* (it prefers AES-GCM by server preference). Off by default
+    // since a phone that requires AES-GCM for AA would then fail to connect.
+    if (Settings::forceChacha20)
+        SSL_CTX_set_cipher_list(_ctx, "ECDHE-RSA-CHACHA20-POLY1305");
 
     BIO *certBio = BIO_new_mem_buf(AA_HU_CERT_PEM, -1);
     X509 *cert = PEM_read_bio_X509(certBio, nullptr, nullptr, nullptr);

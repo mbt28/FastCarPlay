@@ -30,6 +30,10 @@ aa-video-fps = 30
 aa-accessory-timeout = 8000
 # Media ack window offered to the phone.
 aa-max-unacked = 4
+# Force the AA TLS session to ChaCha20-Poly1305. On the F1C200s (ARM926, no AES
+# hardware) it roughly quartered the TLS-decrypt CPU vs AES-128-GCM. Set false
+# if a phone won't connect (it then requires AES-GCM).
+force-chacha20 = true
 
 # Panel size (DEFE scales the 800x480 stream to this).
 width = 480
