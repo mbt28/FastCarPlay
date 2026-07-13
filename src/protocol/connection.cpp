@@ -1,9 +1,11 @@
 #include "connection.h"
 
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 #include "libavcodec/avcodec.h"
 
@@ -423,6 +425,26 @@ void Connection::processLoop()
     log_v("USB processing thread stopped");
 }
 
+// Re-issue a bulk write that hit a clean transient timeout (0 bytes sent). Same
+// F1C200s shared-FIFO / BUS_SEL condition handled in AaUsbTransport::write:
+// video RX-DMA can briefly block a PIO control write; the retry lands in a DMA
+// gap. Only the clean "nothing sent" timeout is retried.
+static int bulkWriteRetry(libusb_device_handle *h, uint8_t ep, uint8_t *buf, int len, int *transferred)
+{
+    int status = LIBUSB_ERROR_TIMEOUT;
+    for (int attempt = 0;; attempt++)
+    {
+        *transferred = 0;
+        status = libusb_bulk_transfer(h, ep, buf, len, transferred, Settings::usbWriteTimeoutMs);
+        if (status == LIBUSB_SUCCESS && *transferred == len)
+            return status;
+        if (status != LIBUSB_ERROR_TIMEOUT || *transferred != 0 || attempt >= Settings::usbWriteRetries)
+            return status;
+        if (Settings::usbWriteRetryDelayMs > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(Settings::usbWriteRetryDelayMs));
+    }
+}
+
 void Connection::writeLoop(libusb_device_handle *handler, uint8_t ep)
 {
     while (_connected)
@@ -460,11 +482,11 @@ void Connection::writeLoop(libusb_device_handle *handler, uint8_t ep)
         }
 
         int transferred;
-        int status = libusb_bulk_transfer(handler, ep, message->header(), message->headerSize(), &transferred, PROTOCOL_HEARTBEAT_DELAY);
+        int status = bulkWriteRetry(handler, ep, message->header(), message->headerSize(), &transferred);
         message->setOffset(0);
         if (status == LIBUSB_SUCCESS && message->length() > 0)
         {
-            libusb_bulk_transfer(handler, ep, message->data(), message->length(), &transferred, PROTOCOL_HEARTBEAT_DELAY);
+            bulkWriteRetry(handler, ep, message->data(), message->length(), &transferred);
         }
     }
 }
