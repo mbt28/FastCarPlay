@@ -105,8 +105,17 @@ public:
     static inline Setting<bool> alternativeRendering{"alternative-rendering", false};
     static inline Setting<bool> fastScale{"fast-render-scale", false};
     static inline Setting<int> usbQueue{"async-usb-calls", 32};
-    static inline Setting<int> usbTransferSize{"usb-buffer-size", 2048};  
-    static inline Setting<int> usbBuffer{"usb-buffer", 128};    
+    static inline Setting<int> usbTransferSize{"usb-buffer-size", 2048};
+    static inline Setting<int> usbBuffer{"usb-buffer", 128};
+    // Control-channel bulk-write retry on a clean transient timeout. On the
+    // F1C200s (MUSB DMA), video RX-DMA holds the shared USB FIFO (BUS_SEL=1), so
+    // a PIO control write landing in that window times out with 0 bytes sent --
+    // re-issuing it is safe (nothing was sent) and lands in a DMA gap. Short
+    // per-attempt timeout so a collision is caught + retried in a fraction of a
+    // second instead of stalling the whole AA session.
+    static inline Setting<int> usbWriteTimeoutMs{"usb-write-timeout-ms", 300};
+    static inline Setting<int> usbWriteRetries{"usb-write-retries", 6};
+    static inline Setting<int> usbWriteRetryDelayMs{"usb-write-retry-delay-ms", 2};
     static inline Setting<int> audioDelay{"audio-buffer-wait", 2};
     static inline Setting<int> audioDelayCall{"audio-buffer-wait-call", 6};
     static inline Setting<float> audioFade{"audio-fade", 0.3};

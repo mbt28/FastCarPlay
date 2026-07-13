@@ -3,6 +3,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include "protocol/aa/aoap.h"
 #include "protocol/aa/aa_const.h"
@@ -11,7 +12,6 @@
 #include "common/threading.h"
 #include "settings.h"
 
-#define AA_USB_WRITE_TIMEOUT 3000 // ms per bulk write
 
 static void interruptibleSleep(std::atomic<bool> &active, int ms)
 {
@@ -280,15 +280,36 @@ bool AaUsbTransport::write(const uint8_t *src, uint32_t len)
 {
     if (!_handle)
         return false;
+
+    const int maxRetries = Settings::usbWriteRetries;
+    const int timeoutMs = Settings::usbWriteTimeoutMs;
+    int status = LIBUSB_ERROR_TIMEOUT;
     int transferred = 0;
-    int status = libusb_bulk_transfer(_handle, _epOut, const_cast<uint8_t *>(src), len,
-                                      &transferred, AA_USB_WRITE_TIMEOUT);
-    if (status != LIBUSB_SUCCESS || transferred != (int)len)
+
+    for (int attempt = 0;; attempt++)
     {
-        log_w("Bulk write failed (%d bytes) > %s", len, libusb_error_name(status));
-        _connected = false;
-        _processQueue.notify();
-        return false;
+        transferred = 0;
+        status = libusb_bulk_transfer(_handle, _epOut, const_cast<uint8_t *>(src), len,
+                                      &transferred, timeoutMs);
+        if (status == LIBUSB_SUCCESS && transferred == (int)len)
+            return true;
+
+        // Retry ONLY the clean transient timeout where nothing was sent: on the
+        // F1C200s the video RX-DMA holds the shared USB FIFO (BUS_SEL=1), so a
+        // PIO control write in that window times out with 0 bytes -- re-issuing
+        // is safe and the retry lands in a DMA gap. Any other error (real
+        // disconnect) or a partial write (desync) is NOT retried.
+        bool cleanTimeout = (status == LIBUSB_ERROR_TIMEOUT && transferred == 0);
+        if (!cleanTimeout || attempt >= maxRetries)
+            break;
+
+        log_v("Bulk write timeout (%u bytes), retry %d/%d", len, attempt + 1, maxRetries);
+        if (Settings::usbWriteRetryDelayMs > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(Settings::usbWriteRetryDelayMs));
     }
-    return true;
+
+    log_w("Bulk write failed (%u bytes) > %s", len, libusb_error_name(status));
+    _connected = false;
+    _processQueue.notify();
+    return false;
 }
