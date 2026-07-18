@@ -32,6 +32,12 @@ aa_bt_test: aa_bt_test.cpp
 	  $(AA_DIR)/aa_bluetooth.cpp $(AA_DIR)/aa_aaw.cpp ../src/settings.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/aa_bt_test $(LDFLAGS) $(shell pkg-config --libs dbus-1) -lbluetooth -pthread
 
+# Round-trip for the user-settings override layer (UI persistence).
+settings_user_test: settings_user_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src settings_user_test.cpp \
+	  ../src/settings.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/settings_user_test $(LDFLAGS)
+
 keylistener: keylistener.cpp
 	$(CXX) $(CXXFLAGS) keylistener.cpp -o $(OUT_DIR)/keylistener $(LDFLAGS)
 

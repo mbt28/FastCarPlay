@@ -8,3 +8,5 @@ src/autogen
 .*/
 .DS*
 .*settings.txt
+# EEZ Studio editor window state (per-user, not part of the design)
+ui.eez-project-ui-state

@@ -1,0 +1,62 @@
+##############################################################################
+# On-device UI bring-up profile (LVGL + EEZ Studio screens).
+#
+# Needs a build with the UI enabled:
+#
+#   make USE_LVGL=1 release
+#   ./out/app settings_ui.txt
+#
+# Navigate by touch, or with a 3-way rotary encoder (emulated on the desktop
+# by the mouse wheel / arrow keys to rotate and Enter to push).
+#
+# Picking a source writes it to $HOME/.fastcarplay/usersettings.txt (never to
+# a shipped preset, which an image update would overwrite) and the app
+# re-executes itself so the new protocol takes effect -- no init script or
+# supervisor needed.
+#
+# To check every supported panel size at once, use tools/ui-sweep.sh instead.
+##############################################################################
+
+# 1. UI ---------------------------------------------------------------------
+
+# Use the LVGL screens as the home screen in the normal loop. Picking a source
+# persists it and restarts into that protocol, so this is the functional path.
+lvgl-ui = true
+
+# Standalone UI harness instead: renders the screens with no connection,
+# decoder or audio. Handy for pure layout work; selecting a source there does
+# NOT restart (it would re-select and loop forever under a scripted click).
+#lvgl-test = true
+
+# Which screens to show:
+#   picker    = the built-in source picker (works with no EEZ project)
+#   generated = the screens designed in EEZ Studio (src/ui/generated)
+# Both drive the same native variables/actions, so switching changes only
+# how the UI looks, never what the buttons do.
+lvgl-screen = picker
+
+# 2. Display ----------------------------------------------------------------
+
+# Windowed SDL for desktop/Pi work. On the F1C200s the UI is drawn on the DRM
+# overlay plane instead (renderer = drm, window-mode = 2).
+renderer = sdl
+window-mode = 0
+
+# Panel size. The UI lays itself out from these, so change them to preview
+# another head unit: 400x234, 400x240, 480x272, 800x480, 1024x600, 1280x480.
+width = 480
+height = 272
+
+# 3. Misc -------------------------------------------------------------------
+
+# 4 = verbose. The picker's own detail lines (chosen screen, row height, font
+# tier) are log_v, which release builds compile out -- use `make debug` to see
+# them. Release still logs the frame rate on exit.
+log-level = 4
+
+# No audio in the UI harness.
+audio-driver = dummy
+
+# Write the first rendered frame here and exit -- how tools/ui-sweep.sh
+# captures each panel size. Leave empty for a normal interactive run.
+#lvgl-test-shot = ./ui.bmp

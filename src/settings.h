@@ -170,9 +170,53 @@ public:
     static inline Setting<bool> codecLowDelay{"decode-low-delay", true};
     static inline Setting<bool> codecFast{"decode-fast", true};
     static inline Setting<bool> debugOverlay{"debug-overlay", false};
+    // Render the EEZ Studio / LVGL screens standalone instead of the normal
+    // loop -- a bring-up harness for the UI, no protocol or decoder involved.
+    // Needs a USE_LVGL=1 build. The display is sized from width/height above.
+    static inline Setting<bool> lvglTest{"lvgl-test", false};
+    // Use the LVGL screens as the home screen in the normal loop (instead of
+    // the plain status text), so a source can be picked on the head unit.
+    // Selecting one persists it and restarts into that protocol.
+    static inline Setting<bool> lvglUi{"lvgl-ui", false};
+    // With lvgl-test: render a few frames, write the result to this path as a
+    // BMP and exit. Drives tools/ui-sweep.sh, which checks every supported
+    // panel size without hardware -- the capture is read back from the
+    // renderer, so it is pixel-exact and needs no compositor/screenshot tool.
+    static inline Setting<std::string> lvglTestShot{"lvgl-test-shot", ""};
+    // With lvgl-test: inject a click at "x,y" before capturing, so screen
+    // navigation can be exercised without a human (and in CI). Mainly this
+    // guards the async screen switch, where getting the teardown wrong would
+    // free a screen while its own click handler is still running.
+    static inline Setting<std::string> lvglTestClick{"lvgl-test-click", ""};
+    // Scripted encoder input for the harness: comma list where a number is
+    // that many detents (negative = left) and "p" is a push. e.g. "1,1,p".
+    static inline Setting<std::string> lvglTestEncoder{"lvgl-test-encoder", ""};
+    // Which screens to show: "picker" = the built-in source picker (works with
+    // no EEZ project); "generated" = the screens designed in EEZ Studio and
+    // built into src/ui/generated. Both drive the same ui_bridge contract.
+    static inline Setting<std::string> lvglScreen{"lvgl-screen", "picker"};
+    // Icon set: "builtin" = LVGL's bundled symbols (always available);
+    // "material" = Material Symbols, once tools/make-icon-font.sh has
+    // generated it. Screens name icon slots, so this only changes how they
+    // look. Falls back to builtin if the set was not built in.
+    static inline Setting<std::string> iconTheme{"icon-theme", "builtin"};
+    // Which built-in screen to open on: "picker" or "settings". Lets the
+    // sweep capture any screen at any panel size without having to know where
+    // its rows happen to land.
+    static inline Setting<std::string> lvglStartScreen{"lvgl-start-screen", "picker"};
 
     static bool load(const std::string &filename);
     static void print();
+
+    // User overrides, applied *after* the shipped preset. The presets ship
+    // from this repo (the buildroot package tracks the branch tip), so an
+    // image update rewrites them -- anything the UI changes must live here
+    // instead, or it would be silently lost on the next build.
+    // Path: $HOME/.fastcarplay/usersettings.txt (/root/... on the device).
+    static std::string userPath();
+    static bool loadUser();
+    // Applies the value now and persists it, leaving other overrides intact.
+    static bool setUser(const std::string &key, const std::string &value);
 
     static inline bool isFullscreen() { return screenMode == SCREEN_MODE_FULLSCREEN; };
     static inline bool isHeadless() { return screenMode == SCREEN_MODE_HEADLESS; };

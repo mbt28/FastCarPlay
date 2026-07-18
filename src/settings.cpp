@@ -2,7 +2,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
+#include <utility>
+#include <vector>
+
+#include <sys/stat.h>
 
 #include "common/logger.h"
 
@@ -51,6 +58,130 @@ bool Settings::load(const std::string &filename)
         if (!found)
             log_w("Unknown key > %s", key.c_str());
     }
+    return true;
+}
+
+std::string Settings::userPath()
+{
+    const char *home = getenv("HOME");
+    if (home == nullptr || *home == '\0')
+        home = "/root"; // the device runs as root with no environment
+    return std::string(home) + "/.fastcarplay/usersettings.txt";
+}
+
+bool Settings::loadUser()
+{
+    const std::string path = userPath();
+    std::ifstream file(path);
+    if (!file.is_open())
+        return false; // no overrides yet: not an error
+
+    file.close();
+    log_v("Applying user settings > %s", path.c_str());
+    return load(path);
+}
+
+bool Settings::setUser(const std::string &key, const std::string &value)
+{
+    // Apply to the live setting first: a bad key must not reach the file.
+    ISetting *target = nullptr;
+    for (ISetting *setting : _settings())
+    {
+        if (setting->name == key)
+        {
+            target = setting;
+            break;
+        }
+    }
+    if (target == nullptr)
+    {
+        log_e("Unknown setting > %s", key.c_str());
+        return false;
+    }
+
+    std::string parsed = value;
+    target->parse(parsed);
+
+    // Merge into the existing overrides, preserving every other key.
+    const std::string path = userPath();
+    std::vector<std::pair<std::string, std::string>> entries;
+    bool replaced = false;
+
+    std::ifstream in(path);
+    if (in.is_open())
+    {
+        std::string line;
+        while (std::getline(in, line))
+        {
+            std::string stripped = line;
+            std::size_t hash = stripped.find('#');
+            if (hash != std::string::npos)
+                stripped.erase(hash);
+
+            std::size_t eq = stripped.find('=');
+            if (eq == std::string::npos)
+                continue;
+
+            std::string k = stripped.substr(0, eq);
+            std::string v = stripped.substr(eq + 1);
+            trim(k);
+            trim(v);
+            if (k.empty())
+                continue;
+
+            if (k == key)
+            {
+                v = value;
+                replaced = true;
+            }
+            entries.emplace_back(k, v);
+        }
+        in.close();
+    }
+    if (!replaced)
+        entries.emplace_back(key, value);
+
+    const std::size_t slash = path.find_last_of('/');
+    if (slash != std::string::npos)
+    {
+        const std::string dir = path.substr(0, slash);
+        // 0700: may hold a Wi-Fi passphrase.
+        if (mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST)
+        {
+            log_e("Cannot create %s > %s", dir.c_str(), strerror(errno));
+            return false;
+        }
+    }
+
+    // Write via a temp file + rename so a power cut mid-write can never leave
+    // a truncated settings file on the head unit.
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        if (!out.is_open())
+        {
+            log_e("Cannot write > %s", tmp.c_str());
+            return false;
+        }
+        out << "# FastCarPlay user settings -- written by the on-device UI.\n"
+            << "# Applied after the shipped preset; safe across image updates.\n";
+        for (const auto &entry : entries)
+            out << entry.first << " = " << entry.second << "\n";
+        out.flush();
+        if (!out.good())
+        {
+            log_e("Write failed > %s", tmp.c_str());
+            return false;
+        }
+    }
+
+    if (rename(tmp.c_str(), path.c_str()) != 0)
+    {
+        log_e("Cannot replace %s > %s", path.c_str(), strerror(errno));
+        return false;
+    }
+
+    log_i("Saved %s = %s > %s", key.c_str(), value.c_str(), path.c_str());
     return true;
 }
 
