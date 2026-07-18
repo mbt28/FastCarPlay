@@ -46,6 +46,12 @@ private:
     void loop();
     void loopHeadless(); // no-renderer path: decoder presents to fb itself
     void loopDrm();      // DRM path: decoder presents video, UI on the overlay plane
+#ifdef USE_LVGL
+    void loopLvglTest(); // UI bring-up harness: LVGL screens only (lvgl-test)
+    // Routes an SDL event to the UI (touch/mouse, and the 3-way encoder as
+    // wheel or arrow keys). Returns true when the UI consumed it.
+    bool feedUiEvent(class LvglOsd &osd, const SDL_Event &e);
+#endif
     std::unique_ptr<class IDecoder> makeDecoder();
     std::unique_ptr<class IConnection> makeConnection();
 

@@ -12,12 +12,13 @@ RES_DIR := $(SRC_DIR)/resource
 GEN_DIR := $(SRC_DIR)/autogen
 BUILD_DIR := $(OUT_DIR)/$(BUILD_TYPE)
 
-# File lists
-SRCS := $(shell find $(SRC_DIR) -type f -name '*.cpp')
+# File lists. src/ui (LVGL backend + EEZ Studio generated screens) is added
+# back only when USE_LVGL=1, so a UI-less build pays no flash/RAM for it.
+SRCS := $(shell find $(SRC_DIR) -type f -name '*.cpp' -not -path '$(SRC_DIR)/ui/*')
 OBJS=$(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # C sources: the vendored nanopb runtime and the generated AA protobuf code.
-SRCS_C := $(shell find $(SRC_DIR) -type f -name '*.c')
+SRCS_C := $(shell find $(SRC_DIR) -type f -name '*.c' -not -path '$(SRC_DIR)/ui/*')
 OBJS += $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.c.o,$(SRCS_C))
 
 RES := $(shell find $(RES_DIR) -type f ! -name '*.h' ! -name '.*' -name '*.*')
@@ -62,6 +63,23 @@ CXXCOMMON += -DUSE_AA_WIRELESS $(shell $(PKG_CONFIG) --cflags dbus-1)
 LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1) -lbluetooth
 endif
 
+# On-device UI: LVGL (MIT, third_party/lvgl, pinned v9.3.0) driven by screens
+# designed in EEZ Studio and generated into src/ui/generated. Enable USE_LVGL=1.
+# The generated code is regenerated from ui.eez-project -- never hand-edited.
+ifeq ($(USE_LVGL),1)
+LVGL_DIR := ./third_party/lvgl
+LVGL_SRCS := $(shell find $(LVGL_DIR)/src -type f -name '*.c')
+LVGL_OBJS := $(patsubst $(LVGL_DIR)/%.c,$(BUILD_DIR)/lvgl/%.c.o,$(LVGL_SRCS))
+SRCS += $(shell find $(SRC_DIR)/ui -type f -name '*.cpp')
+SRCS_C += $(shell find $(SRC_DIR)/ui -type f -name '*.c')
+OBJS += $(LVGL_OBJS)
+# LV_CONF_INCLUDE_SIMPLE: LVGL picks up src/ui/lv_conf.h from the include path.
+# -Ithird_party: the generated code includes <lvgl/lvgl.h>.
+UI_FLAGS := -DUSE_LVGL -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -I$(SRC_DIR)/ui/generated -Ithird_party
+CXXCOMMON += $(UI_FLAGS)
+CCOMMON += $(UI_FLAGS)
+endif
+
 debug: BUILD_TYPE := debug
 debug: CXXFLAGS := -g -O0 -DPROTOCOL_DEBUG -fsanitize=address -fno-omit-frame-pointer
 debug: LDFLAGS += -fsanitize=address -fno-omit-frame-pointer
@@ -98,12 +116,25 @@ $(TARGET): $(OBJS)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXCOMMON) $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXCOMMON) $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 # C rule for nanopb + generated protobuf code (-fno-rtti is C++-only).
 $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CCOMMON) $(filter-out -fno-rtti,$(CXXFLAGS)) -c $< -o $@
+	$(CC) $(CCOMMON) $(filter-out -fno-rtti,$(CXXFLAGS)) -MMD -MP -c $< -o $@
+
+# Vendored LVGL. Third-party: warnings off, and it never sees our -Wall/-Werror.
+$(BUILD_DIR)/lvgl/%.c.o: $(LVGL_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu99 -w -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -I$(LVGL_DIR) \
+		$(filter-out -fno-rtti,$(CXXFLAGS)) -c $< -o $@
+
+# Header dependencies (-MMD): editing a header now rebuilds what includes it.
+# NOTE: this does NOT cover changing the feature flags themselves -- toggling
+# USE_LVGL / USE_CEDRUS / USE_AA_WIRELESS changes the compile flags, not the
+# sources, so make cannot see it. Always `make clean` when switching a flag,
+# or you get a binary built from a mix of both configurations.
+-include $(OBJS:.o=.d)
 
 install:
 	$(INSTALL) -D -m 0755 $(OUT_DIR)/$(TARGET_NAME) $(DESTDIR)$(PREFIX)/bin/fastcarplay

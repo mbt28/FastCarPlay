@@ -6,6 +6,8 @@
 #include <chrono>
 #include <thread>
 #include <memory>
+#include <vector>
+#include <string>
 #include <csignal>
 
 #include "struct/video_buffer.h"
@@ -14,6 +16,11 @@
 #include "settings.h"
 #include "interface.h"
 #include "decoder.h"
+
+#ifdef USE_LVGL
+#include "ui/lvgl_osd.h"  // LVGL bound to SDL_Renderer; EEZ Studio screens
+#include "ui/ui_bridge.h" // native vars/actions the screens are wired to
+#endif
 #ifdef USE_CEDRUS
 #include "cedrus_decoder.h" // mainline cedrus (ffmpeg v4l2-request) HW decoder (F1C200s)
 #endif
@@ -188,10 +195,239 @@ void Application::start(const char *title)
               ((rendererInfo.flags & SDL_RENDERER_PRESENTVSYNC) ? "vsync" : "no-vsync"));
     }
 
+#ifdef USE_LVGL
+    if (Settings::lvglTest)
+    {
+        log_v("Starting (LVGL UI bring-up)");
+        SDL_ShowWindow(_window);
+        loopLvglTest();
+        log_v("Stopped");
+        return;
+    }
+#endif
+
     log_v("Starting");
     loop();
     log_v("Stopped");
 }
+
+#ifdef USE_LVGL
+// Short, user-facing connection state for the picker header. Deliberately not
+// Application::status(), which is a multi-line diagnostic dump for the debug
+// overlay. Mirrors the wording of Interface::drawHome.
+static const char *uiStatusText(int state)
+{
+    switch (state)
+    {
+    case PROTOCOL_STATUS_ERROR:
+        return "Device error";
+    case PROTOCOL_STATUS_NO_DEVICE:
+        return "No device";
+    case PROTOCOL_STATUS_INITIALISING:
+    case PROTOCOL_STATUS_LINKING:
+        return "Initialising";
+    case PROTOCOL_STATUS_ONLINE:
+        return "Connect phone";
+    case PROTOCOL_STATUS_CONNECTED:
+        return "Connecting";
+    default:
+        return "Select source";
+    }
+}
+
+// Head units frequently have only a 3-way rotary encoder, so every screen has
+// to be reachable without a touchscreen. On the desktop the encoder is
+// emulated by the mouse wheel and the arrow keys, with Enter as the push.
+bool Application::feedUiEvent(LvglOsd &osd, const SDL_Event &e)
+{
+    switch (e.type)
+    {
+    case SDL_MOUSEMOTION:
+        osd.pointer(e.motion.x, e.motion.y, (e.motion.state & SDL_BUTTON_LMASK) != 0);
+        return true;
+
+    case SDL_MOUSEBUTTONDOWN:
+    case SDL_MOUSEBUTTONUP:
+        osd.pointer(e.button.x, e.button.y, e.type == SDL_MOUSEBUTTONDOWN);
+        return true;
+
+    case SDL_FINGERDOWN:
+    case SDL_FINGERMOTION:
+    case SDL_FINGERUP:
+        osd.pointer((int)(e.tfinger.x * _width), (int)(e.tfinger.y * _height),
+                    e.type != SDL_FINGERUP);
+        return true;
+
+    case SDL_MOUSEWHEEL:
+        osd.encoder(-e.wheel.y, false); // wheel up = previous row
+        return true;
+
+    case SDL_KEYDOWN:
+    case SDL_KEYUP:
+        switch (e.key.keysym.sym)
+        {
+        case SDLK_LEFT:
+        case SDLK_UP:
+            if (e.type == SDL_KEYDOWN)
+                osd.encoder(-1, false);
+            return true;
+        case SDLK_RIGHT:
+        case SDLK_DOWN:
+            if (e.type == SDL_KEYDOWN)
+                osd.encoder(1, false);
+            return true;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+        case SDLK_SPACE:
+            osd.encoder(0, e.type == SDL_KEYDOWN);
+            return true;
+        default:
+            break;
+        }
+        return false; // let Escape/quit fall through to the normal handler
+    }
+    return false;
+}
+
+// UI bring-up harness (lvgl-test = true): renders the EEZ Studio screens on
+// their own, with no connection, decoder or audio. Its only job is to prove
+// the LVGL -> SDL_Renderer path, the input plumbing and the generated screens
+// before any of it is wired into the real loops.
+void Application::loopLvglTest()
+{
+    LvglOsd osd;
+    if (!osd.begin(_renderer, _width, _height))
+    {
+        log_e("LVGL bring-up failed");
+        return;
+    }
+
+    _active = true;
+    uint32_t frames = 0;
+    const uint32_t started = SDL_GetTicks();
+
+    // Scripted clicks for the capture harness: "x,y" or "x,y;x,y;..." to walk
+    // a flow (open Settings, toggle a row...) with no human involved.
+    std::vector<SDL_Point> clicks;
+    {
+        const std::string &spec = Settings::lvglTestClick.value;
+        for (std::size_t at = 0; at < spec.size();)
+        {
+            std::size_t end = spec.find(';', at);
+            if (end == std::string::npos)
+                end = spec.size();
+            SDL_Point point{};
+            if (sscanf(spec.c_str() + at, "%d,%d", &point.x, &point.y) == 2)
+                clicks.push_back(point);
+            at = end + 1;
+        }
+    }
+    // Scripted encoder steps: numbers rotate, "p" pushes.
+    std::vector<std::string> encoderSteps;
+    {
+        const std::string &spec = Settings::lvglTestEncoder.value;
+        for (std::size_t at = 0; at < spec.size();)
+        {
+            std::size_t end = spec.find(',', at);
+            if (end == std::string::npos)
+                end = spec.size();
+            std::string token = spec.substr(at, end - at);
+            if (!token.empty())
+                encoderSteps.push_back(token);
+            at = end + 1;
+        }
+    }
+
+    // One input every 12 frames, then time to settle before the capture.
+    const uint32_t inputs = (uint32_t)(clicks.size() + encoderSteps.size());
+    const uint32_t captureFrame = 30 + inputs * 12;
+
+    while (_active)
+    {
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
+        {
+            if (event.type == SDL_QUIT)
+                _active = false;
+            else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
+                _active = false;
+            else
+                feedUiEvent(osd, event);
+        }
+
+        // A source change is persisted immediately but only takes effect on
+        // restart; exiting hands that to the init script, which respawns us.
+        if (ui_bridge::restartRequested())
+        {
+            log_i("Restarting to apply the new source");
+            _active = false;
+        }
+
+        SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 255);
+        SDL_RenderClear(_renderer);
+        osd.render();
+
+        frames++;
+
+        // Encoder script runs first, then any clicks.
+        for (std::size_t i = 0; i < encoderSteps.size(); i++)
+        {
+            const uint32_t at = 8 + (uint32_t)i * 12;
+            const std::string &token = encoderSteps[i];
+            if (token == "p")
+            {
+                if (frames == at)
+                    osd.encoder(0, true);
+                else if (frames == at + 4)
+                    osd.encoder(0, false);
+            }
+            else if (frames == at)
+            {
+                osd.encoder(atoi(token.c_str()), false);
+            }
+        }
+
+        // Press, then release a few frames later so LVGL sees a real CLICKED.
+        for (std::size_t i = 0; i < clicks.size(); i++)
+        {
+            const uint32_t press = 8 + (uint32_t)(encoderSteps.size() + i) * 12;
+            if (frames == press)
+                osd.pointer(clicks[i].x, clicks[i].y, true);
+            else if (frames == press + 4)
+                osd.pointer(clicks[i].x, clicks[i].y, false);
+        }
+
+        // Capture mode: let the UI settle, read the frame straight back from
+        // the renderer (before Present, so the target is still valid) and quit.
+        if (!Settings::lvglTestShot.value.empty() && frames == captureFrame)
+        {
+            SDL_Surface *shot = SDL_CreateRGBSurfaceWithFormat(0, _width, _height, 32,
+                                                               SDL_PIXELFORMAT_ARGB8888);
+            if (shot != nullptr &&
+                SDL_RenderReadPixels(_renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
+                                     shot->pixels, shot->pitch) == 0 &&
+                SDL_SaveBMP(shot, Settings::lvglTestShot.value.c_str()) == 0)
+                log_i("LVGL capture %dx%d > %s", _width, _height,
+                      Settings::lvglTestShot.value.c_str());
+            else
+                log_e("LVGL capture failed > %s", SDL_GetError());
+
+            if (shot != nullptr)
+                SDL_FreeSurface(shot);
+            _active = false;
+        }
+
+        SDL_RenderPresent(_renderer);
+        SDL_Delay(16);
+    }
+
+    const uint32_t elapsed = SDL_GetTicks() - started;
+    if (elapsed > 0)
+        log_i("LVGL bring-up: %u frames in %u ms (%.1f fps)", frames, elapsed,
+              frames * 1000.0f / elapsed);
+    osd.end();
+}
+#endif
 
 bool Application::setAudioDriver()
 {
@@ -655,6 +891,16 @@ void Application::loop()
     Interface interface(_renderer);
     interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
 
+#ifdef USE_LVGL
+    // lvgl-ui: the LVGL screens replace the plain status home screen, so a
+    // source can be picked on the unit itself. Falls back to the old home
+    // screen if it cannot start, rather than leaving a blank display.
+    LvglOsd osd;
+    uint32_t uiFrames = 0;
+    if (Settings::lvglUi && !osd.begin(_renderer, _width, _height))
+        log_w("LVGL UI unavailable > using the plain home screen");
+#endif
+
     // Process full screen, do not do this in headless to avoid blinking
     if (Settings::isFullscreen())
     {
@@ -767,11 +1013,52 @@ void Application::loop()
 
         if (!_state.frameRendered)
         {
-            interface.drawHome(_state.dirty, _state.latestState, protocol.phoneName());
-            _state.dirty = false;
-            SDL_Event e;
-            while (SDL_PollEvent(&e))
-                processSystemEvent(e);
+#ifdef USE_LVGL
+            if (osd.active())
+            {
+                // LVGL owns the home screen: source picker + settings, driven
+                // by touch and by a 3-way encoder.
+                ui_bridge::setStatus(uiStatusText(_state.latestState));
+                SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 255);
+                SDL_RenderClear(_renderer);
+                osd.render();
+                SDL_RenderPresent(_renderer);
+                _state.dirty = false;
+
+                SDL_Event e;
+                while (SDL_PollEvent(&e))
+                    if (!feedUiEvent(osd, e))
+                        processSystemEvent(e);
+
+                // Scripted click, so the pick -> persist -> restart path can be
+                // exercised without a human (see tools/ui-sweep.sh).
+                if (!Settings::lvglTestClick.value.empty() && ++uiFrames == 40)
+                {
+                    int cx = 0, cy = 0;
+                    if (sscanf(Settings::lvglTestClick.value.c_str(), "%d,%d", &cx, &cy) == 2)
+                        osd.pointer(cx, cy, true);
+                }
+                else if (!Settings::lvglTestClick.value.empty() && uiFrames == 44)
+                {
+                    int cx = 0, cy = 0;
+                    if (sscanf(Settings::lvglTestClick.value.c_str(), "%d,%d", &cx, &cy) == 2)
+                        osd.pointer(cx, cy, false);
+                }
+
+                // A source change is persisted; restarting is what actually
+                // switches protocol, since the connection is built at start-up.
+                if (ui_bridge::restartRequested())
+                    _active = false;
+            }
+            else
+#endif
+            {
+                interface.drawHome(_state.dirty, _state.latestState, protocol.phoneName());
+                _state.dirty = false;
+                SDL_Event e;
+                while (SDL_PollEvent(&e))
+                    processSystemEvent(e);
+            }
         }
         else
         {
