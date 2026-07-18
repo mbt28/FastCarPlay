@@ -18,6 +18,7 @@ enum Id
 {
     SCREEN_PICKER = 0,
     SCREEN_SETTINGS,
+    SCREEN_WIRELESS,
 };
 
 // Builds and shows the first screen. Sizes come from the caller, never a
