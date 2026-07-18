@@ -8,6 +8,7 @@
 #include "icons.h"
 #include "screen_picker.h"
 #include "screen_settings.h"
+#include "screen_wireless.h"
 #include "settings.h"
 #include "ui_style.h"
 
@@ -31,6 +32,9 @@ void build(ui_screens::Id id)
     {
     case ui_screens::SCREEN_SETTINGS:
         screen = screen_settings::build(g_metrics);
+        break;
+    case ui_screens::SCREEN_WIRELESS:
+        screen = screen_wireless::build(g_metrics);
         break;
     default:
         screen = screen_picker::build(g_metrics);
@@ -101,6 +105,9 @@ void tick()
     {
     case SCREEN_SETTINGS:
         screen_settings::update();
+        break;
+    case SCREEN_WIRELESS:
+        screen_wireless::update();
         break;
     default:
         screen_picker::update();

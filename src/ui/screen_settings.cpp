@@ -17,6 +17,7 @@ enum RowId
     ROW_FPS,
     ROW_DEBUG,
     ROW_ICONS,
+    ROW_WIRELESS,
     ROW_RESTART,
     ROW_BACK,
     ROW_COUNT,
@@ -86,6 +87,10 @@ void onRowClicked(lv_event_t *e)
         ui_screens::rebuild();
         return;
 
+    case ROW_WIRELESS:
+        ui_screens::show(ui_screens::SCREEN_WIRELESS);
+        return;
+
     case ROW_RESTART:
         ui_bridge::requestRestart();
         return;
@@ -129,6 +134,7 @@ lv_obj_t *build(const ui_style::Metrics &m)
     addRow(screen, m, ROW_FPS, icons::ICON_VIDEO, "Video", true);
     addRow(screen, m, ROW_DEBUG, icons::ICON_DEBUG, "Debug overlay", true);
     addRow(screen, m, ROW_ICONS, icons::ICON_THEME, "Icons", true);
+    addRow(screen, m, ROW_WIRELESS, icons::ICON_WIRELESS, "Wireless", false);
     addRow(screen, m, ROW_RESTART, icons::ICON_RESTART, "Restart now", false);
     addRow(screen, m, ROW_BACK, icons::ICON_BACK, "Back", false);
 
