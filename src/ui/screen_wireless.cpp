@@ -74,6 +74,12 @@ void closeEditor()
     ui_screens::rebuild();
 }
 
+void onCancel(lv_event_t *e)
+{
+    (void)e;
+    closeEditor(); // discard: nothing is written until the value validates
+}
+
 void onKeyboard(lv_event_t *e)
 {
     const lv_event_code_t code = lv_event_get_code(e);
@@ -133,10 +139,32 @@ void openEditor(int id)
     lv_obj_remove_flag(g_editor, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_move_foreground(g_editor);
 
-    g_hint = lv_label_create(g_editor);
+    // Title row: what is being edited, and an explicit way out. Text entry
+    // must always be abandonable -- the keyboard's own close key is far too
+    // easy to miss, and there is no other way back on a touch-only unit.
+    lv_obj_t *titleRow = lv_obj_create(g_editor);
+    lv_obj_set_size(titleRow, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(titleRow, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(titleRow, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(titleRow, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(titleRow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(titleRow, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(titleRow, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_hint = lv_label_create(titleRow);
     lv_obj_set_style_text_font(g_hint, g_metrics.font, LV_PART_MAIN);
     lv_obj_set_style_text_color(g_hint, lv_color_hex(0x8FA3B0), LV_PART_MAIN);
     lv_label_set_text(g_hint, FIELDS[id].label);
+    lv_obj_set_flex_grow(g_hint, 1);
+
+    lv_obj_t *cancel = lv_button_create(titleRow);
+    lv_obj_set_style_bg_color(cancel, lv_color_hex(0x37474F), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(cancel, g_metrics.gap, LV_PART_MAIN);
+    lv_obj_add_event_cb(cancel, onCancel, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *cancelLabel = lv_label_create(cancel);
+    lv_label_set_text(cancelLabel, "Cancel");
+    lv_obj_set_style_text_font(cancelLabel, g_metrics.font, LV_PART_MAIN);
 
     g_textarea = lv_textarea_create(g_editor);
     lv_obj_set_width(g_textarea, lv_pct(100));
@@ -152,15 +180,18 @@ void openEditor(int id)
     lv_obj_add_event_cb(keyboard, onKeyboard, LV_EVENT_READY, nullptr);
     lv_obj_add_event_cb(keyboard, onKeyboard, LV_EVENT_CANCEL, nullptr);
 
-    // Encoder: hand the group to the keyboard alone, so rotating steps
-    // through its keys instead of the rows hidden behind the editor.
+    // Encoder: the group holds only what the editor offers, so rotating can
+    // never reach the rows hidden behind it. Deliberately *not* forced into
+    // edit mode -- pressing enters the keyboard, and its close/accept keys
+    // leave again, so the encoder can always get back out.
     lv_group_t *group = ui_screens::group();
     if (group != nullptr)
     {
         lv_group_remove_all_objs(group);
+        lv_group_set_editing(group, false);
         lv_group_add_obj(group, keyboard);
+        lv_group_add_obj(group, cancel);
         lv_group_focus_obj(keyboard);
-        lv_group_set_editing(group, true);
     }
 }
 

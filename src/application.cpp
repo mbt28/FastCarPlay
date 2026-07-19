@@ -905,7 +905,10 @@ void Application::loop()
     if (Settings::isFullscreen())
     {
         _state.fullscreen = true;
-        SDL_SetWindowFullscreen(_window, SDL_WINDOW_FULLSCREEN);
+        // FULLSCREEN_DESKTOP, not exclusive FULLSCREEN: the latter changes
+        // the video mode and grabs the keyboard on X11, which locks the rest
+        // of the desktop out. Matches what the "f" toggle already uses.
+        SDL_SetWindowFullscreen(_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
         SDL_SetWindowBordered(_window, SDL_FALSE);
     }
 

@@ -116,6 +116,12 @@ public:
     static inline Setting<int> usbWriteTimeoutMs{"usb-write-timeout-ms", 300};
     static inline Setting<int> usbWriteRetries{"usb-write-retries", 6};
     static inline Setting<int> usbWriteRetryDelayMs{"usb-write-retry-delay-ms", 2};
+    // Run the USB read threads at realtime (SCHED_FIFO 50). Correct on a
+    // dedicated head unit -- it is what keeps the USB read from stalling --
+    // but on a desktop it outranks the compositor, so while a session streams
+    // the machine can stop responding to its own keyboard and mouse. Set
+    // false when running FastCarPlay in a window alongside other work.
+    static inline Setting<bool> realtimePriority{"realtime-priority", true};
     static inline Setting<int> audioDelay{"audio-buffer-wait", 2};
     static inline Setting<int> audioDelayCall{"audio-buffer-wait-call", 6};
     static inline Setting<float> audioFade{"audio-fade", 0.3};

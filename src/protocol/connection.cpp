@@ -351,7 +351,10 @@ void Connection::onPhoneDisconnect()
 void Connection::readLoop()
 {
     setThreadName("usb-read");
-    setThreadPriority(ThreadPriority::Realtime);
+    // Realtime keeps the USB read from stalling on the head unit, but it
+    // outranks a desktop's compositor -- see Settings::realtimePriority.
+    setThreadPriority(Settings::realtimePriority ? ThreadPriority::Realtime
+                                                 : ThreadPriority::Normal);
     timeval timeout{0, 1000};
 
     log_d("USB reading thread started");

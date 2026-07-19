@@ -24,7 +24,13 @@ void build(ui_screens::Id id)
     // Rows join the group as they are built, so start from empty; the
     // outgoing screen's objects are about to be freed.
     if (g_group != nullptr)
+    {
         lv_group_remove_all_objs(g_group);
+        // Leave edit mode: a widget that captures the encoder (the keyboard)
+        // would otherwise keep it after the screen is gone, and rotating
+        // would no longer move between rows.
+        lv_group_set_editing(g_group, false);
+    }
     g_metrics.group = g_group;
 
     lv_obj_t *screen = nullptr;
