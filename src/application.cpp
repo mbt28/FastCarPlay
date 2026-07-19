@@ -1118,6 +1118,15 @@ void Application::loop()
                 std::this_thread::sleep_for(std::chrono::microseconds(frameDelay));
                 frameStart += std::chrono::microseconds(frameDelay);
             }
+            else
+            {
+                // Overran the frame budget: without this the loop spins with
+                // no sleep at all, pinning a core. On a head unit that only
+                // wastes power, but on a desktop the busy SDL client makes the
+                // whole session's input sticky. A millisecond is nothing
+                // against a 33ms budget and guarantees the thread yields.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
         }
     }
 
