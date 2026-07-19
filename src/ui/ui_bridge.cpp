@@ -15,6 +15,7 @@ namespace
 std::atomic<bool> g_restart{false};
 std::atomic<bool> g_backgrounded{false};
 std::atomic<bool> g_resume{false};
+std::atomic<bool> g_restartNeeded{false};
 std::string g_status = "";
 
 // Protocol id <-> the "protocol" setting string. One table, so the picker,
@@ -22,13 +23,14 @@ std::string g_status = "";
 struct ProtocolEntry
 {
     int id;
-    const char *name;
+    const char *name;  // settings value
+    const char *label; // short label -- the driver is scanning, not reading
 };
 
 const ProtocolEntry PROTOCOLS[] = {
-    {ui_bridge::PROTOCOL_CARLINKIT, "carlinkit"},
-    {ui_bridge::PROTOCOL_AA_USB, "aa-usb"},
-    {ui_bridge::PROTOCOL_AA_WIRELESS, "aa-wireless"},
+    {ui_bridge::PROTOCOL_CARLINKIT, "carlinkit", "Dongle"},
+    {ui_bridge::PROTOCOL_AA_USB, "aa-usb", "AA Wired"},
+    {ui_bridge::PROTOCOL_AA_WIRELESS, "aa-wireless", "AA Wireless"},
 };
 
 // Persist the choice and ask for a restart. Writes to
@@ -52,9 +54,10 @@ void selectProtocol(int id)
             return;
         }
 
-        log_i("Source -> %s, restarting", entry.name);
-        ui_bridge::setStatus("Switching...");
-        g_restart = true;
+        // Staged, not applied: a live session must never be dropped by a
+        // stray tap. The user restarts when they are ready.
+        log_i("Source -> %s (restart to apply)", entry.name);
+        g_restartNeeded = true;
         return;
     }
     log_e("Unknown protocol id %d", id);
@@ -91,6 +94,24 @@ void requestResume()
 bool takeResumeRequest()
 {
     return g_resume.exchange(false);
+}
+
+void setRestartNeeded()
+{
+    g_restartNeeded = true;
+}
+
+bool restartNeeded()
+{
+    return g_restartNeeded;
+}
+
+const char *protocolName()
+{
+    for (const ProtocolEntry &entry : PROTOCOLS)
+        if (Settings::protocol.value == entry.name)
+            return entry.label;
+    return "None";
 }
 
 void requestRestart()

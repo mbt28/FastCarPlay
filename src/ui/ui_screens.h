@@ -16,9 +16,10 @@ namespace ui_screens
 {
 enum Id
 {
-    SCREEN_PICKER = 0,
+    SCREEN_HOME = 0,
     SCREEN_SETTINGS,
     SCREEN_WIRELESS,
+    SCREEN_SOURCE,
 };
 
 // Builds and shows the first screen. Sizes come from the caller, never a

@@ -33,9 +33,9 @@ struct Field
 // WPA2 fixes the passphrase at 8-63 characters and the SSID at 1-32; hostapd
 // refuses to start outside those, so they are enforced before saving.
 const Field FIELDS[] = {
-    {"wifi-ssid", "Wi-Fi name", icons::ICON_WIRELESS, 1, 32},
-    {"wifi-passphrase", "Wi-Fi password", icons::ICON_WIRELESS, 8, 63},
-    {"bluetooth-name", "Bluetooth name", icons::ICON_DONGLE, 1, 32},
+    {"wifi-ssid", "Name", icons::ICON_WIRELESS, 1, 32},
+    {"wifi-passphrase", "Password", icons::ICON_WIRELESS, 8, 63},
+    {"bluetooth-name", "Bluetooth", icons::ICON_DONGLE, 1, 32},
 };
 
 lv_obj_t *g_rows[ROW_COUNT] = {nullptr};
@@ -46,7 +46,7 @@ lv_obj_t *g_textarea = nullptr;
 lv_obj_t *g_hint = nullptr;
 ui_style::Metrics g_metrics{};
 int g_editing = -1;
-bool g_needsRestart = false;
+
 
 const char *fieldValue(int id)
 {
@@ -110,7 +110,7 @@ void onKeyboard(lv_event_t *e)
     }
 
     if (Settings::setUser(field.key, text))
-        g_needsRestart = true; // the AP and BT name are set up at start-up
+        ui_bridge::setRestartNeeded(); // the AP and BT name are set up at start-up
     else
         log_e("Could not save %s", field.key);
 
@@ -248,7 +248,7 @@ void update()
             lv_label_set_text(g_values[i], fieldValue(i));
 
     if (g_header != nullptr)
-        lv_label_set_text(g_header, g_needsRestart ? "Wireless  -  restart to apply"
+        lv_label_set_text(g_header, ui_bridge::restartNeeded() ? "Wireless  -  restart to apply"
                                                    : "Wireless");
 }
 } // namespace screen_wireless

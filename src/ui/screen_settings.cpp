@@ -13,7 +13,8 @@ namespace
 {
 enum RowId
 {
-    ROW_NIGHT = 0,
+    ROW_SOURCE = 0,
+    ROW_NIGHT,
     ROW_FPS,
     ROW_DEBUG,
     ROW_ICONS,
@@ -26,7 +27,7 @@ enum RowId
 lv_obj_t *g_rows[ROW_COUNT] = {nullptr};
 lv_obj_t *g_values[ROW_COUNT] = {nullptr};
 lv_obj_t *g_header = nullptr;
-bool g_needsRestart = false;
+
 
 const char *nightModeName(int mode)
 {
@@ -49,7 +50,7 @@ void persist(const char *key, const char *value, bool needsRestart)
         return;
     }
     if (needsRestart)
-        g_needsRestart = true;
+        ui_bridge::setRestartNeeded();
 }
 
 void onRowClicked(lv_event_t *e)
@@ -87,6 +88,10 @@ void onRowClicked(lv_event_t *e)
         ui_screens::rebuild();
         return;
 
+    case ROW_SOURCE:
+        ui_screens::show(ui_screens::SCREEN_SOURCE);
+        return;
+
     case ROW_WIRELESS:
         ui_screens::show(ui_screens::SCREEN_WIRELESS);
         return;
@@ -96,7 +101,7 @@ void onRowClicked(lv_event_t *e)
         return;
 
     case ROW_BACK:
-        ui_screens::show(ui_screens::SCREEN_PICKER);
+        ui_screens::show(ui_screens::SCREEN_HOME);
         return;
 
     default:
@@ -130,9 +135,10 @@ lv_obj_t *build(const ui_style::Metrics &m)
     lv_obj_t *screen = ui_style::listScreen(m);
     g_header = ui_style::header(screen, m, "Settings");
 
-    addRow(screen, m, ROW_NIGHT, icons::ICON_NIGHT, "Night mode", true);
+    addRow(screen, m, ROW_SOURCE, icons::ICON_USB, "Source", true);
+    addRow(screen, m, ROW_NIGHT, icons::ICON_NIGHT, "Night", true);
     addRow(screen, m, ROW_FPS, icons::ICON_VIDEO, "Video", true);
-    addRow(screen, m, ROW_DEBUG, icons::ICON_DEBUG, "Debug overlay", true);
+    addRow(screen, m, ROW_DEBUG, icons::ICON_DEBUG, "Debug", true);
     addRow(screen, m, ROW_ICONS, icons::ICON_THEME, "Icons", true);
     addRow(screen, m, ROW_WIRELESS, icons::ICON_WIRELESS, "Wireless", false);
     addRow(screen, m, ROW_RESTART, icons::ICON_RESTART, "Restart now", false);
@@ -145,6 +151,9 @@ lv_obj_t *build(const ui_style::Metrics &m)
 void update()
 {
     char buffer[24];
+
+    if (g_values[ROW_SOURCE] != nullptr)
+        lv_label_set_text(g_values[ROW_SOURCE], ui_bridge::protocolName());
 
     if (g_values[ROW_NIGHT] != nullptr)
         lv_label_set_text(g_values[ROW_NIGHT], nightModeName(Settings::nightMode));
@@ -165,14 +174,14 @@ void update()
     // hidden rather than inviting a pointless restart.
     if (g_rows[ROW_RESTART] != nullptr)
     {
-        if (g_needsRestart)
+        if (ui_bridge::restartNeeded())
             lv_obj_remove_flag(g_rows[ROW_RESTART], LV_OBJ_FLAG_HIDDEN);
         else
             lv_obj_add_flag(g_rows[ROW_RESTART], LV_OBJ_FLAG_HIDDEN);
     }
 
     if (g_header != nullptr)
-        lv_label_set_text(g_header, g_needsRestart ? "Settings  -  restart to apply"
+        lv_label_set_text(g_header, ui_bridge::restartNeeded() ? "Settings  -  restart to apply"
                                                    : "Settings");
 }
 } // namespace screen_settings
