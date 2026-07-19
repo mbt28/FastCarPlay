@@ -11,6 +11,7 @@
 #ifdef __linux__
 
 #include <atomic>
+#include <functional>
 #include <thread>
 
 #include "struct/multitouch.h"
@@ -22,6 +23,15 @@ class TouchInput
 public:
     explicit TouchInput(IConnection &conn);
     ~TouchInput();
+
+    // On the DRM path there are no SDL events, so the on-device UI is fed from
+    // here: the same calibrated evdev reader, routed to the UI instead of the
+    // phone while a screen is up. The loop toggles routeToUi() each frame; the
+    // sink receives the primary finger as normalized 0..1 coordinates.
+    // Set the sink once before enabling routing (see the release/acquire on
+    // _uiActive, which publishes the sink to the touch thread).
+    void setUiSink(std::function<void(float, float, bool)> sink) { _uiSink = std::move(sink); }
+    void routeToUi(bool active) { _uiActive.store(active, std::memory_order_release); }
 
 private:
     bool openDevice();
@@ -40,6 +50,8 @@ private:
 
     IConnection &_conn;
     std::atomic<bool> _active;
+    std::atomic<bool> _uiActive{false};
+    std::function<void(float, float, bool)> _uiSink;
     std::thread _thread;
     int _fd = -1;
     int _xmin = 0, _xmax = 1, _ymin = 0, _ymax = 1;
