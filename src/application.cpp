@@ -638,7 +638,15 @@ namespace
 // The SDL loop relies on SDL turning SIGINT into an SDL_QUIT event; the headless
 // loop has no SDL event pump, so install our own handler for a clean Ctrl-C.
 volatile std::sig_atomic_t g_quit = 0;
-void onQuitSignal(int) { g_quit = 1; }
+// First signal asks for a clean shutdown; a second one takes it. Teardown
+// touches USB, threads and the DRM master, so if any of that ever wedges the
+// user must still be able to stop the app without resorting to SIGKILL.
+void onQuitSignal(int)
+{
+    if (g_quit)
+        _exit(1);
+    g_quit = 1;
+}
 } // namespace
 
 std::unique_ptr<IDecoder> Application::makeDecoder()
@@ -930,6 +938,12 @@ void Application::loop()
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
 
+    // The SDL loop has an event pump, but a signal must still stop it: with a
+    // window-less or unfocused window there is no other way out.
+    g_quit = 0;
+    std::signal(SIGINT, onQuitSignal);
+    std::signal(SIGTERM, onQuitSignal);
+
     log_v("Loop");
     std::chrono::steady_clock::time_point frameStart = std::chrono::steady_clock::now();
     int32_t frameTime = 0;
@@ -944,7 +958,7 @@ void Application::loop()
     int debugSpeed = 0;
     int debugLastCount = 0;
 #endif
-    while (_active)
+    while (_active && !g_quit)
     {
         bool newFrame = false;
 

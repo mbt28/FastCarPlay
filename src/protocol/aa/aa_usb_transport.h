@@ -4,6 +4,7 @@
 #include <libusb-1.0/libusb.h>
 
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -46,6 +47,10 @@ private:
     uint8_t _epIn, _epOut;
     UsbBuffer _processQueue;
     std::vector<Context> _transfers;
+    // close() runs on both the main thread (stop()) and aa-main (after
+    // writeLoop returns). Joining the read thread from two threads at once is
+    // undefined behaviour and deadlocks, so serialise the whole teardown.
+    std::mutex _closeMutex;
     std::thread _readThread;
     std::atomic<bool> _connected;
 };

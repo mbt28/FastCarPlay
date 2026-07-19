@@ -256,6 +256,11 @@ bool AaUsbTransport::open(std::atomic<bool> &active)
 
 void AaUsbTransport::close()
 {
+    // Serialised and idempotent: stop() and mainLoop both call this, and the
+    // second caller must find the work already done rather than joining a
+    // thread that is being joined behind its back.
+    std::lock_guard<std::mutex> guard(_closeMutex);
+
     _connected = false;
     _processQueue.notify();
 
