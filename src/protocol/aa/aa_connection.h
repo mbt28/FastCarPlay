@@ -28,6 +28,9 @@ public:
     void stop() override;
     const std::string status() const override;
 
+    bool videoFocused() const override { return _videoFocused; }
+    void requestVideoFocus() override;
+
 private:
     struct ChannelState
     {
@@ -84,6 +87,7 @@ private:
 
     ChannelState _channels[AA_CH_COUNT];
 
+    std::atomic<bool> _videoFocused{true};
     std::atomic<bool> _active;
     std::atomic<bool> _phoneConnected;
     std::atomic<bool> _auth;

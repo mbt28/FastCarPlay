@@ -20,6 +20,7 @@
 #include "aap_protobuf/service/media/shared/message/Start.pb.h"
 #include "aap_protobuf/service/media/source/message/Ack.pb.h"
 #include "aap_protobuf/service/media/video/message/VideoFocusNotification.pb.h"
+#include "aap_protobuf/service/media/video/message/VideoFocusRequestNotification.pb.h"
 #include "aap_protobuf/service/media/sink/message/KeyBindingResponse.pb.h"
 #include "aap_protobuf/service/inputsource/message/InputReport.pb.h"
 #include "aap_protobuf/service/sensorsource/message/SensorRequest.pb.h"
@@ -368,6 +369,25 @@ Bytes mediaAck(int32_t sessionId)
     msg.has_ack = true;
     msg.ack = 1;
     return encode(NS_SRCMSG(Ack_fields), msg, 16);
+}
+
+// What the phone is asking for. PROJECTED = it wants the screen; NATIVE (and
+// NATIVE_TRANSIENT) = hand it back to the head unit, which is what the "exit"
+// button sends. The session stays up either way -- this is focus, not
+// shutdown, so honouring it is what keeps a session backgrounded instead of
+// torn down.
+bool parseVideoFocusRequest(const uint8_t *data, size_t length, bool &projected)
+{
+    NS_VIDEO(VideoFocusRequestNotification) msg = {};
+    if (!decode(NS_VIDEO(VideoFocusRequestNotification_fields), msg, data, length))
+        return false;
+
+    // Default to projected: an unset mode means "show me", and refusing to
+    // project is the worse failure.
+    projected = !msg.has_mode ||
+                (msg.mode != NS_VIDEO(VideoFocusMode_VIDEO_FOCUS_NATIVE) &&
+                 msg.mode != NS_VIDEO(VideoFocusMode_VIDEO_FOCUS_NATIVE_TRANSIENT));
+    return true;
 }
 
 Bytes videoFocusNotification(bool focused, bool unsolicited)

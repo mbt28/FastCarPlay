@@ -41,6 +41,14 @@ public:
     virtual void stop() = 0;
     virtual const std::string status() const = 0;
 
+    // True while the phone is actually projecting. A session can be connected
+    // but backgrounded -- the user pressed exit, the phone handed the screen
+    // back and is waiting rather than disconnecting. The app then shows its
+    // own UI without tearing anything down.
+    virtual bool videoFocused() const { return true; }
+    // Ask the phone to project again. No-op for backends that never release.
+    virtual void requestVideoFocus() {}
+
     bool inline send(std::unique_ptr<Message> message) { return writeQueue.pushDiscard(std::move(message)); }
     uint32_t transfered() const { return _transfered.load(std::memory_order_acquire); }
 

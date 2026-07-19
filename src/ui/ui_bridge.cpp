@@ -13,6 +13,8 @@
 namespace
 {
 std::atomic<bool> g_restart{false};
+std::atomic<bool> g_backgrounded{false};
+std::atomic<bool> g_resume{false};
 std::string g_status = "";
 
 // Protocol id <-> the "protocol" setting string. One table, so the picker,
@@ -69,6 +71,26 @@ void setStatus(const char *status)
 bool restartRequested()
 {
     return g_restart;
+}
+
+void setBackgroundedSession(bool waiting)
+{
+    g_backgrounded = waiting;
+}
+
+bool backgroundedSession()
+{
+    return g_backgrounded;
+}
+
+void requestResume()
+{
+    g_resume = true;
+}
+
+bool takeResumeRequest()
+{
+    return g_resume.exchange(false);
 }
 
 void requestRestart()

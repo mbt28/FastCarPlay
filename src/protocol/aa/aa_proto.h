@@ -27,6 +27,9 @@ Bytes byeByeResponse();
 Bytes mediaSetupResponse(uint32_t maxUnacked);
 Bytes mediaAck(int32_t sessionId);
 Bytes videoFocusNotification(bool focused, bool unsolicited);
+// Reads a video focus request: projected = the phone wants the screen,
+// !projected = it is handing it back (the "exit" button).
+bool parseVideoFocusRequest(const uint8_t *data, size_t length, bool &projected);
 
 // input channel
 struct TouchPoint
