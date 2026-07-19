@@ -339,7 +339,7 @@ void AaConnection::handleMessage(uint8_t channel, const uint8_t *data, size_t le
     const uint8_t *body = data + 2;
     size_t bodyLength = length - 2;
 
-    log_d("RX ch %d id 0x%04x (%zu bytes)", channel, msgId, bodyLength);
+    log_v("RX ch %d id 0x%04x (%zu bytes)", channel, msgId, bodyLength);
 
     // Channel open requests arrive on the channel being opened.
     if (msgId == AA_MSG_CHANNEL_OPEN_REQUEST && channel != AA_CH_CONTROL)
@@ -707,7 +707,7 @@ bool AaConnection::sendFrame(uint8_t channel, uint16_t msgId, const uint8_t *bod
         }
         frame.insert(frame.end(), payload.begin() + offset, payload.begin() + offset + chunk);
 
-        log_d("TX ch %d id 0x%04x flags 0x%02x wire %zu", channel, msgId, flags, frame.size());
+        log_v("TX ch %d id 0x%04x flags 0x%02x wire %zu", channel, msgId, flags, frame.size());
         if (!_transport->write(frame.data(), frame.size()))
         {
             log_w("Write failed ch %d id 0x%04x wire %zu", channel, msgId, frame.size());
@@ -920,8 +920,14 @@ void AaConnection::writeLoop()
         // Idle: keep the link alive and watch for a silent phone.
         if (!message)
         {
-            int64_t pong = _lastPongReceived.load();
-            if (_auth && pong > 0 && nowMs() - pong > AA_PING_TIMEOUT)
+            // Pings are only sent from this idle branch, so during a busy
+            // session none go out and the last pong goes stale. Measuring
+            // "time since the last pong" therefore fires the instant the link
+            // goes quiet -- which is exactly what backgrounding looks like.
+            // Only a ping that went unanswered means the phone is really gone.
+            const int64_t sent = _lastPingSent.load();
+            const int64_t pong = _lastPongReceived.load();
+            if (_auth && sent > 0 && sent > pong && nowMs() - sent > AA_PING_TIMEOUT)
             {
                 log_w("Ping timeout, reconnecting");
                 _transport->close();

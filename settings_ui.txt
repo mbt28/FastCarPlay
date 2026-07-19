@@ -49,9 +49,8 @@ height = 272
 
 # 3. Misc -------------------------------------------------------------------
 
-# 4 = verbose. The picker's own detail lines (chosen screen, row height, font
-# tier) are log_v, which release builds compile out -- use `make debug` to see
-# them. Release still logs the frame rate on exit.
+# 4 = debug: connection milestones without per-frame protocol tracing.
+# 5 adds every RX/TX frame, which is hundreds of lines a second during video.
 log-level = 4
 
 # No audio in the UI harness.
