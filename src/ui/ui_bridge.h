@@ -50,6 +50,14 @@ void setStatus(const char *status);
 // Set when a change has been persisted and needs a restart to take effect;
 // the loops exit so the init script (S99carplay) respawns us.
 bool restartRequested();
+
+// A connected-but-backgrounded session is waiting behind the UI, so the
+// picker can offer a way back into it.
+void setBackgroundedSession(bool waiting);
+bool backgroundedSession();
+// Set by the "Resume" row; the app consumes it and asks the phone to project.
+void requestResume();
+bool takeResumeRequest();
 void requestRestart();
 } // namespace ui_bridge
 

@@ -475,7 +475,9 @@ void AaConnection::handleControl(uint16_t msgId, const uint8_t *data, size_t len
         break;
 
     case AA_MSG_BYEBYE_REQUEST:
-        log_i("Phone requested shutdown");
+        // A genuine end of session (unplug, or Android Auto stopped), not the
+        // exit button -- that arrives as a video focus request.
+        log_i("Phone requested shutdown (session ending)");
         queueFrame(AA_CH_CONTROL, AA_MSG_BYEBYE_RESPONSE, aa_proto::byeByeResponse());
         _transport->close();
         break;
@@ -505,8 +507,11 @@ void AaConnection::handleMedia(uint8_t channel, uint16_t msgId, const uint8_t *d
         queueFrame(channel, AA_MSG_MEDIA_CONFIG,
                    aa_proto::mediaSetupResponse(Settings::aaMaxUnacked));
         if (channel == AA_CH_VIDEO)
+        {
+            _videoFocused = true;
             queueFrame(AA_CH_VIDEO, AA_MSG_VIDEO_FOCUS_NOTIFICATION,
                        aa_proto::videoFocusNotification(true, true));
+        }
         break;
 
     case AA_MSG_MEDIA_START:
@@ -522,9 +527,19 @@ void AaConnection::handleMedia(uint8_t channel, uint16_t msgId, const uint8_t *d
         break;
 
     case AA_MSG_VIDEO_FOCUS_REQUEST:
+    {
+        // Honour what was asked for. Replying "projected" to a request to
+        // hand the screen back leaves the phone with nowhere to go, and it
+        // escalates to a shutdown -- which is why exiting used to drop the
+        // whole session instead of backgrounding it.
+        bool projected = true;
+        aa_proto::parseVideoFocusRequest(data, length, projected);
+        log_i("Phone requested video focus: %s", projected ? "projected" : "native (exit)");
+        _videoFocused = projected;
         queueFrame(AA_CH_VIDEO, AA_MSG_VIDEO_FOCUS_NOTIFICATION,
-                   aa_proto::videoFocusNotification(true, false));
+                   aa_proto::videoFocusNotification(projected, false));
         break;
+    }
 
     case AA_MSG_MEDIA_DATA:
         if (length < 8)
@@ -874,6 +889,20 @@ bool AaConnection::translate(const Message &message)
         log_v("Message type %d has no Android Auto mapping", message.type());
         return true;
     }
+}
+
+// Ask the phone to project again after the user exited to the head unit.
+void AaConnection::requestVideoFocus()
+{
+    if (!_transport || !_transport->connected() || _videoFocused)
+        return;
+
+    log_i("Returning to Android Auto");
+    _videoFocused = true;
+    // queueFrame, not sendFrame: this is called from the UI thread and
+    // SSL_write must only ever happen on the write thread.
+    queueFrame(AA_CH_VIDEO, AA_MSG_VIDEO_FOCUS_NOTIFICATION,
+               aa_proto::videoFocusNotification(true, true));
 }
 
 void AaConnection::writeLoop()

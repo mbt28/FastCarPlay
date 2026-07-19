@@ -983,7 +983,14 @@ void Application::loop()
             _state.latestState = protocol.state();
         }
 
-        if (_state.latestState == PROTOCOL_STATUS_CONNECTED)
+        // Connected but backgrounded: the phone handed the screen back after
+        // the user pressed exit. The session stays up; we just show our own
+        // UI instead of its video until the user goes back in.
+        const bool projecting = protocol.videoFocused();
+        if (!projecting)
+            _state.frameRendered = false;
+
+        if (_state.latestState == PROTOCOL_STATUS_CONNECTED && projecting)
         {
             uint32_t latestFrameId = 0;
             if (decoder->buffer.consume(&frame, &latestFrameId))
@@ -1021,7 +1028,13 @@ void Application::loop()
             {
                 // LVGL owns the home screen: source picker + settings, driven
                 // by touch and by a 3-way encoder.
-                ui_bridge::setStatus(uiStatusText(_state.latestState));
+                ui_bridge::setBackgroundedSession(
+                    _state.latestState == PROTOCOL_STATUS_CONNECTED && !projecting);
+                ui_bridge::setStatus(_state.latestState == PROTOCOL_STATUS_CONNECTED && !projecting
+                                         ? "Session paused"
+                                         : uiStatusText(_state.latestState));
+                if (ui_bridge::takeResumeRequest())
+                    protocol.requestVideoFocus();
                 SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 255);
                 SDL_RenderClear(_renderer);
                 osd.render();
