@@ -63,8 +63,8 @@ CXXCOMMON += -DUSE_AA_WIRELESS $(shell $(PKG_CONFIG) --cflags dbus-1)
 LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1) -lbluetooth
 endif
 
-# On-device UI: LVGL (MIT, third_party/lvgl, pinned v9.3.0) driven by screens
-# designed in EEZ Studio and generated into src/ui/generated. Enable USE_LVGL=1.
+# On-device UI: LVGL 9.3.0 (MIT), vendored source in third_party/lvgl (see
+# its VENDORING.md), compiled in. Screens live in src/ui. Enable USE_LVGL=1.
 # The generated code is regenerated from ui.eez-project -- never hand-edited.
 ifeq ($(USE_LVGL),1)
 LVGL_DIR := ./third_party/lvgl
