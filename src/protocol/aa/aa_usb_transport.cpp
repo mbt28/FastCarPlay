@@ -209,7 +209,10 @@ bool AaUsbTransport::startTransfers()
 void AaUsbTransport::readLoop()
 {
     setThreadName("aa-read");
-    setThreadPriority(ThreadPriority::Realtime);
+    // Realtime keeps the USB read from stalling on the head unit, but it
+    // outranks a desktop's compositor -- see Settings::realtimePriority.
+    setThreadPriority(Settings::realtimePriority ? ThreadPriority::Realtime
+                                                 : ThreadPriority::Normal);
     timeval timeout{0, 1000};
 
     log_d("AA reading thread started");
