@@ -112,7 +112,13 @@ void TouchInput::emit()
     // frame doesn't replay a stale "down" for a finger already on the glass.
     bool connected = _conn.state() == PROTOCOL_STATUS_CONNECTED;
 
+    const bool toUi = _uiActive.load(std::memory_order_acquire) && _uiSink;
+
     Multitouch touches;
+    float primaryX = 0, primaryY = 0;
+    bool primaryPressed = false;
+    bool havePrimary = false;
+
     for (int i = 0; i < MUTLITOUCH_MAX_TOUCH; i++)
     {
         Contact &c = _slots[i];
@@ -135,13 +141,24 @@ void TouchInput::emit()
         // changes on every touch-down.
         touches.add(nx, ny, action, i);
 
+        // The UI is single-pointer: the first (primary) finger drives it.
+        if (!havePrimary) { primaryX = nx; primaryY = ny; primaryPressed = c.active; havePrimary = true; }
+
         c.wasActive = c.active;
         if (!c.active)
             c.id = -1; // slot freed
     }
 
-    if (connected && touches.size() > 0)
+    if (toUi)
+    {
+        // UI is on screen: drive it, never the phone (which is not projecting).
+        if (havePrimary)
+            _uiSink(primaryX, primaryY, primaryPressed);
+    }
+    else if (connected && touches.size() > 0)
+    {
         _conn.send(Message::MultiTouch(touches));
+    }
 }
 
 void TouchInput::loop()

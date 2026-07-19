@@ -758,6 +758,17 @@ void Application::loopDrm()
     interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
     drm_display::uiPresent();
 
+    const int uiWidth = drm_display::width();
+    const int uiHeight = drm_display::height();
+#ifdef USE_LVGL
+    // The LVGL screens replace the plain status home screen on the overlay
+    // plane, driven by the touchscreen. Same renderer as Interface -- they are
+    // used mutually exclusively (LVGL when idle, Interface's OSD over video).
+    LvglOsd osd;
+    if (Settings::lvglUi && !osd.begin(uiRenderer, uiWidth, uiHeight))
+        log_w("LVGL UI unavailable > using the plain home screen");
+#endif
+
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder();
@@ -770,6 +781,14 @@ void Application::loopDrm()
 
 #ifdef __linux__
     TouchInput touchInput(protocol);   // evdev touchscreen (renderer = drm/none)
+#ifdef USE_LVGL
+    // Feed the primary finger to the UI (normalized -> panel pixels) while a
+    // screen is up; routeToUi() below flips per frame based on what is shown.
+    if (osd.active())
+        touchInput.setUiSink([&osd, uiWidth, uiHeight](float nx, float ny, bool pressed) {
+            osd.pointer((int)(nx * uiWidth), (int)(ny * uiHeight), pressed);
+        });
+#endif
 #endif
 #ifdef USE_CEDAR
     SerialInput serialInput(protocol); // TEST-only serial-console navigation
@@ -798,7 +817,8 @@ void Application::loopDrm()
         // seconds - the home screen must not paint over the live video.
         // It returns only on disconnect (or if decode never started).
         bool videoActive = (state == PROTOCOL_STATUS_CONNECTED) &&
-                           frames > framesAtConnect;
+                           frames > framesAtConnect &&
+                           protocol.videoFocused(); // exit hands the screen back
 
         bool dirty = false;
         if (state != lastState)
@@ -855,14 +875,45 @@ void Application::loopDrm()
 
         if (!videoActive)
         {
-            // Home screen (opaque) on the overlay; also covers stale video.
-            if (interface.drawHome(dirty || !uiShowsHome, state, protocol.phoneName()))
+#ifdef USE_LVGL
+            if (osd.active())
+            {
+                // LVGL owns the home screen on the overlay plane: source
+                // picker + settings, driven by the touchscreen.
+                const bool backgrounded =
+                    state == PROTOCOL_STATUS_CONNECTED && !protocol.videoFocused();
+                ui_bridge::setBackgroundedSession(backgrounded);
+                ui_bridge::setStatus(backgrounded ? "Session paused" : uiStatusText(state));
+                if (ui_bridge::takeResumeRequest())
+                    protocol.requestVideoFocus();
+#ifdef __linux__
+                touchInput.routeToUi(true);
+#endif
+                SDL_SetRenderDrawColor(uiRenderer, 0, 0, 0, 255);
+                SDL_RenderClear(uiRenderer);
+                osd.render();
                 drm_display::uiPresent();
-            uiShowsHome = true;
-            osdShown = false;
+                uiShowsHome = true;
+                osdShown = false;
+
+                if (ui_bridge::restartRequested())
+                    _active = false; // main re-execs into the chosen source
+            }
+            else
+#endif
+            {
+                // Home screen (opaque) on the overlay; also covers stale video.
+                if (interface.drawHome(dirty || !uiShowsHome, state, protocol.phoneName()))
+                    drm_display::uiPresent();
+                uiShowsHome = true;
+                osdShown = false;
+            }
         }
         else
         {
+#if defined(USE_LVGL) && defined(__linux__)
+            touchInput.routeToUi(false); // video is up: touch goes to the phone
+#endif
             // Video plays below; overlay carries only toasts/debug, or hides.
             if (uiShowsHome || dirty)
             {
