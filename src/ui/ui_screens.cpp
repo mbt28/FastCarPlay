@@ -6,7 +6,8 @@
 
 #include "common/logger.h"
 #include "icons.h"
-#include "screen_picker.h"
+#include "screen_home.h"
+#include "screen_source.h"
 #include "screen_settings.h"
 #include "screen_wireless.h"
 #include "settings.h"
@@ -15,7 +16,7 @@
 namespace
 {
 ui_style::Metrics g_metrics{};
-ui_screens::Id g_current = ui_screens::SCREEN_PICKER;
+ui_screens::Id g_current = ui_screens::SCREEN_HOME;
 bool g_started = false;
 lv_group_t *g_group = nullptr;
 
@@ -42,8 +43,11 @@ void build(ui_screens::Id id)
     case ui_screens::SCREEN_WIRELESS:
         screen = screen_wireless::build(g_metrics);
         break;
+    case ui_screens::SCREEN_SOURCE:
+        screen = screen_source::build(g_metrics);
+        break;
     default:
-        screen = screen_picker::build(g_metrics);
+        screen = screen_home::build(g_metrics);
         break;
     }
 
@@ -75,7 +79,9 @@ void begin(int width, int height)
     if (g_group == nullptr)
         g_group = lv_group_create();
     g_started = true;
-    build(Settings::lvglStartScreen.value == "settings" ? SCREEN_SETTINGS : SCREEN_PICKER);
+    build(Settings::lvglStartScreen.value == "settings"  ? SCREEN_SETTINGS
+          : Settings::lvglStartScreen.value == "source" ? SCREEN_SOURCE
+                                                        : SCREEN_HOME);
     log_v("UI: %dx%d, row %d px", width, height, g_metrics.rowHeight);
 }
 
@@ -115,8 +121,11 @@ void tick()
     case SCREEN_WIRELESS:
         screen_wireless::update();
         break;
+    case SCREEN_SOURCE:
+        screen_source::update();
+        break;
     default:
-        screen_picker::update();
+        screen_home::update();
         break;
     }
 }

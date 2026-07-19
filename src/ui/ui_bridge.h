@@ -58,6 +58,14 @@ bool backgroundedSession();
 // Set by the "Resume" row; the app consumes it and asks the phone to project.
 void requestResume();
 bool takeResumeRequest();
+
+// A change is staged and needs a restart. Nothing restarts under the driver:
+// the settings header says so and an explicit "Restart now" appears.
+void setRestartNeeded();
+bool restartNeeded();
+
+// Short label for the current source, for the home header and the Source row.
+const char *protocolName();
 void requestRestart();
 } // namespace ui_bridge
 
