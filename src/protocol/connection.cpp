@@ -499,7 +499,22 @@ libusb_device *Connection::link(libusb_device_handle *handler, uint8_t *epIn, ui
     if (fail(libusb_reset_device(handler), " Can't reset device"))
         return nullptr;
 
-    if (fail(libusb_set_configuration(handler, 1), "Can't set configuration"))
+    // Detach a kernel driver from our data interface if one bound (harmless if
+    // none did).
+    libusb_set_auto_detach_kernel_driver(handler, 1);
+
+    // Only (re)set the configuration if it is not already active. The dongle is
+    // a composite device: interface 0 is the data pipe, interface 1 is a
+    // mass-storage "install" volume that usb-storage binds. It already
+    // enumerates in config 1, so a redundant SetConfiguration just forces the
+    // kernel to unbind usb-storage and re-configure the whole device -- the
+    // "interface 1 claimed by usb-storage while 'usb-write' sets config #1"
+    // warning, plus needless churn. We only use interface 0, so usb-storage on
+    // interface 1 can stay.
+    int currentConfig = 0;
+    libusb_get_configuration(handler, &currentConfig);
+    if (currentConfig != 1 &&
+        fail(libusb_set_configuration(handler, 1), "Can't set configuration"))
         return nullptr;
 
     if (fail(libusb_claim_interface(handler, 0), "Can't claim interface"))
