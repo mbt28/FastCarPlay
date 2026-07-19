@@ -30,6 +30,59 @@ static bool sendString(libusb_device_handle *handler, uint16_t index, const char
     return result == length;
 }
 
+// Is this device worth an AOAP probe at all?
+//
+// Probing is not passive: it detaches whatever kernel driver owns the
+// interface and claims it. Doing that to a keyboard stops the keyboard
+// working, and with no phone plugged in the scan repeats every reconnect
+// cycle, so it never settles -- keystrokes are simply lost while we poke at
+// it. A wireless keyboard/mouse receiver is the worst case: it is one
+// composite device, so claiming interface 0 (keyboard) leaves the mouse on
+// interface 1 working perfectly, which makes it look like anything but USB.
+//
+// The device descriptor cannot tell us this -- composite devices report class
+// 0 and carry the real classes on their interfaces -- so look there instead.
+static bool probeCandidate(libusb_device *device)
+{
+    libusb_config_descriptor *config = nullptr;
+    if (libusb_get_active_config_descriptor(device, &config) != LIBUSB_SUCCESS)
+        return true; // cannot tell; leave it to the vendor/product checks
+
+    bool candidate = true;
+    for (uint8_t i = 0; i < config->bNumInterfaces && candidate; i++)
+    {
+        const libusb_interface &interface = config->interface[i];
+        for (int alt = 0; alt < interface.num_altsetting && candidate; alt++)
+        {
+            const libusb_interface_descriptor &descriptor = interface.altsetting[alt];
+            switch (descriptor.bInterfaceClass)
+            {
+            // Never a phone, and all of them break visibly when detached.
+            case LIBUSB_CLASS_HID:
+            case LIBUSB_CLASS_HUB:
+            case LIBUSB_CLASS_AUDIO:
+            case LIBUSB_CLASS_VIDEO:
+            case LIBUSB_CLASS_PRINTER:
+            case LIBUSB_CLASS_SMART_CARD:
+                candidate = false;
+                break;
+            case LIBUSB_CLASS_WIRELESS:
+                // 0xE0 also covers RNDIS tethering, so exclude Bluetooth
+                // radios specifically (subclass 1, protocol 1) rather than
+                // the whole class.
+                if (descriptor.bInterfaceSubClass == 1 && descriptor.bInterfaceProtocol == 1)
+                    candidate = false;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+    libusb_free_config_descriptor(config);
+    return candidate;
+}
+
 // Ask for AOAP support and switch the device to accessory mode. The device
 // is gone (re-enumerating) on success.
 static bool trySwitch(libusb_device *device)
@@ -107,6 +160,13 @@ int switchCandidates(libusb_context *context)
             continue;
         if (Settings::aaProductid > 0 && desc.idProduct != Settings::aaProductid)
             continue;
+
+        if (!probeCandidate(list[i]))
+        {
+            log_v("AOAP skipping %04x:%04x (input/audio/hub device)",
+                  desc.idVendor, desc.idProduct);
+            continue;
+        }
 
         log_v("AOAP probing %04x:%04x", desc.idVendor, desc.idProduct);
         if (trySwitch(list[i]))
