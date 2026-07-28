@@ -120,6 +120,12 @@ cp_carplay_msg_test: cp_carplay_msg_test.cpp
 	  $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
 	  -o $(OUT_DIR)/cp_carplay_msg_test $(LDFLAGS)
 
+# iAP2 link layer: negotiate + carry the handoff over a socketpair.
+cp_iap2_link_test: cp_iap2_link_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_iap2_link_test.cpp \
+	  $(CP_DIR)/cp_iap2_link.cpp $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
+	  -o $(OUT_DIR)/cp_iap2_link_test $(LDFLAGS) -pthread
+
 # CarPlay USB probe: map a plugged iPhone's iAP2 interface + endpoints.
 cp_usb_probe: cp_usb_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_usb_probe.cpp -o $(OUT_DIR)/cp_usb_probe $(LDFLAGS) $(shell pkg-config --libs libusb-1.0)
