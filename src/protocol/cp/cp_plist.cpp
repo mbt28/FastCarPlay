@@ -1,5 +1,6 @@
 #include "cp_plist.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace cp_plist
@@ -60,14 +61,27 @@ int flatten(const Value &v, std::vector<LObj> &objs)
     }
     else if (v.type == Value::Type::Dict)
     {
-        std::vector<std::pair<int, int>> refs;
-        refs.reserve(v.dict.size());
-        for (const auto &kv : v.dict)
+        // Apple's canonical bplist layout, which iOS's CarPlay parser expects:
+        // keys sorted, and ALL key objects emitted before ALL value objects
+        // (not interleaved). A lenient parser accepts either, but iOS is strict.
+        std::vector<size_t> order(v.dict.size());
+        for (size_t k = 0; k < order.size(); k++)
+            order[k] = k;
+        std::sort(order.begin(), order.end(),
+                  [&](size_t a, size_t b) { return v.dict[a].first < v.dict[b].first; });
+
+        std::vector<int> keyRefs(order.size());
+        for (size_t k = 0; k < order.size(); k++)
         {
-            Value key = Value::str(kv.first);
-            const int k = flatten(key, objs);
-            const int val = flatten(kv.second, objs);
-            refs.emplace_back(k, val);
+            Value key = Value::str(v.dict[order[k]].first);
+            keyRefs[k] = flatten(key, objs);
+        }
+        std::vector<std::pair<int, int>> refs;
+        refs.reserve(order.size());
+        for (size_t k = 0; k < order.size(); k++)
+        {
+            const int val = flatten(v.dict[order[k]].second, objs);
+            refs.emplace_back(keyRefs[k], val);
         }
         objs[idx].map = std::move(refs);
     }
