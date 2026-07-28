@@ -169,3 +169,7 @@ emulator: emulator.cpp
 
 clean:
 	rm -f $(OUT_DIR)/keylistener $(OUT_DIR)/emulator
+# Binary plist codec (CarPlay AV payloads).
+cp_plist_test: cp_plist_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_plist_test.cpp \
+	  $(CP_DIR)/cp_plist.cpp -o $(OUT_DIR)/cp_plist_test $(LDFLAGS)
