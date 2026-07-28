@@ -72,6 +72,45 @@ int main()
         check(foundBt, "wireless attributes carry the BT transport id");
     }
 
+    printf("\nIdentificationInformation (0x1D01) wireless CarPlay identity:\n");
+    {
+        cp_carplay::AccessoryIdentity id;
+        id.bluetoothMac = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+        id.messagesSent = cp_carplay::defaultMessagesSent();
+        id.messagesReceived = cp_carplay::defaultMessagesReceived();
+
+        Bytes msg = cp_carplay::buildIdentification(id);
+        check(msg[4] == 0x1D && msg[5] == 0x01, "message id is 0x1D01");
+
+        uint16_t msgId = 0;
+        std::vector<cp_carplay::CsmParam> params;
+        check(cp_iap2::parseCsm(msg, msgId, params), "identification parses");
+
+        bool hasWirelessCarPlay = false, hasBtMac = false, hasName = false;
+        for (const auto &p : params)
+        {
+            if (p.id == 0 && p.value.size() >= 12 /* "FastCarPlay\0" */) hasName = true;
+            if (p.id == 24) // wireless_car_play_transport_component
+            {
+                std::vector<cp_carplay::CsmParam> g;
+                if (cp_carplay::parseGroup(p.value, g))
+                    for (const auto &gp : g)
+                        if (gp.id == 4) hasWirelessCarPlay = true; // supports_car_play flag
+            }
+            if (p.id == 17) // bluetooth_transport_component
+            {
+                std::vector<cp_carplay::CsmParam> g;
+                if (cp_carplay::parseGroup(p.value, g))
+                    for (const auto &gp : g)
+                        if (gp.id == 3 && gp.value == Bytes{0xAA,0xBB,0xCC,0xDD,0xEE,0xFF})
+                            hasBtMac = true;
+            }
+        }
+        check(hasName, "carries the accessory name");
+        check(hasWirelessCarPlay, "declares the wireless CarPlay transport (supports_car_play)");
+        check(hasBtMac, "bluetooth transport component carries the 6-byte MAC");
+    }
+
     printf("\nnested group encode/parse:\n");
     {
         Bytes g = cp_carplay::encGroup({{0, cp_carplay::encStr("hi")}, {7, cp_carplay::encU32(42)}});

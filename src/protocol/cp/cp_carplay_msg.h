@@ -28,7 +28,11 @@ namespace cp_carplay
 using cp_iap2::Bytes;
 using cp_iap2::CsmParam;
 
-// Control-session message IDs (LIVI car_play.py / wifi.py).
+// Control-session message IDs (LIVI car_play.py / wifi.py / identification.py).
+constexpr uint16_t MSG_START_IDENTIFICATION = 0x1D00;
+constexpr uint16_t MSG_IDENTIFICATION_INFORMATION = 0x1D01;
+constexpr uint16_t MSG_IDENTIFICATION_ACCEPTED = 0x1D02;
+constexpr uint16_t MSG_IDENTIFICATION_REJECTED = 0x1D03;
 constexpr uint16_t MSG_CARPLAY_AVAILABILITY = 0x4300;
 constexpr uint16_t MSG_CARPLAY_START_SESSION = 0x4301;
 constexpr uint16_t MSG_WIRELESS_CARPLAY_UPDATE = 0x4E0D;
@@ -71,7 +75,33 @@ Bytes encStr(const std::string &s); // UTF-8 + trailing NUL
 // A "group" value: nested params serialized as a param body.
 Bytes encGroup(const std::vector<CsmParam> &params);
 
+// The accessory's iAP2 identity. Sent as IdentificationInformation after the
+// phone's StartIdentification. The WirelessCarPlayTransportComponent is what
+// makes the phone offer wireless CarPlay for this accessory.
+struct AccessoryIdentity
+{
+    std::string name = "FastCarPlay";
+    std::string modelIdentifier = "FastCarPlay1,1";
+    std::string manufacturer = "FastCarPlay";
+    std::string serialNumber = "0000000000000000";
+    std::string firmwareVersion = "1.0";
+    std::string hardwareVersion = "1.0";
+    std::string currentLanguage = "en";
+    Bytes bluetoothMac;                    // 6 raw bytes of the adapter MAC
+    std::vector<uint16_t> messagesSent;     // CSM ids the accessory sends
+    std::vector<uint16_t> messagesReceived; // CSM ids it accepts
+};
+
+// The default CSM id sets for a wireless-CarPlay accessory (identification,
+// authentication, CarPlay session, Wi-Fi).
+std::vector<uint16_t> defaultMessagesSent();
+std::vector<uint16_t> defaultMessagesReceived();
+
 // ── Builders ────────────────────────────────────────────────────────────
+// IdentificationInformation (0x1D01): the accessory identity + a wireless
+// CarPlay transport component keyed to the Bluetooth MAC.
+Bytes buildIdentification(const AccessoryIdentity &id);
+
 // Declare wireless (and optionally wired) CarPlay availability. The transport
 // identifiers are the Bluetooth/USB MACs the phone uses to correlate transports.
 Bytes buildCarPlayAvailability(const std::string &btTransportId,
