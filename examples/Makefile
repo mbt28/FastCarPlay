@@ -114,6 +114,12 @@ cp_iap2_test: cp_iap2_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_iap2_test.cpp \
 	  ../src/protocol/cp/cp_iap2.cpp -o $(OUT_DIR)/cp_iap2_test $(LDFLAGS)
 
+# CarPlay wireless control-session messages: the Wi-Fi handoff (StartSession).
+cp_carplay_msg_test: cp_carplay_msg_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_carplay_msg_test.cpp \
+	  $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
+	  -o $(OUT_DIR)/cp_carplay_msg_test $(LDFLAGS)
+
 # CarPlay USB probe: map a plugged iPhone's iAP2 interface + endpoints.
 cp_usb_probe: cp_usb_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_usb_probe.cpp -o $(OUT_DIR)/cp_usb_probe $(LDFLAGS) $(shell pkg-config --libs libusb-1.0)

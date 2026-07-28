@@ -1,0 +1,94 @@
+#ifndef SRC_PROTOCOL_CP_CP_CARPLAY_MSG
+#define SRC_PROTOCOL_CP_CP_CARPLAY_MSG
+
+// CarPlay control-session messages -- the wireless trigger's payload. After the
+// iAP2 link comes up over Bluetooth RFCOMM, the head unit and iPhone exchange
+// these CSMs to negotiate a wireless CarPlay session. The pivotal one is
+// CarPlayStartSession (0x4301): the accessory hands the phone the Wi-Fi SSID +
+// passphrase + channel + its own IP + the :7000 control port + its pairing
+// identity (pi/pk). The phone then joins that Wi-Fi AP and connects to the
+// control server (src/protocol/cp/cp_server) -- the same handshake that already
+// works. This is the wireless equivalent of the (iOS-26-deprecated) wired
+// config-6 trigger. Message IDs and parameter layout mirror LIVI
+// cp/iap2/control_session_message/{car_play,wifi}.py.
+//
+// Parameter encoding (iAP2 CSM): integers are raw big-endian, strings are
+// UTF-8 with a trailing NUL, bools are one byte, and a "group" parameter's
+// value is itself a param body ([u16 len][u16 id][value] repeated) -- i.e.
+// nested CSM params. Built on the cp_iap2 CSM codec.
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "cp_iap2.h"
+
+namespace cp_carplay
+{
+using cp_iap2::Bytes;
+using cp_iap2::CsmParam;
+
+// Control-session message IDs (LIVI car_play.py / wifi.py).
+constexpr uint16_t MSG_CARPLAY_AVAILABILITY = 0x4300;
+constexpr uint16_t MSG_CARPLAY_START_SESSION = 0x4301;
+constexpr uint16_t MSG_WIRELESS_CARPLAY_UPDATE = 0x4E0D;
+constexpr uint16_t MSG_DEVICE_TRANSPORT_ID_NOTIFY = 0x4E0E;
+constexpr uint16_t MSG_REQUEST_WIFI_INFORMATION = 0x5700;
+constexpr uint16_t MSG_WIFI_INFORMATION = 0x5701;
+constexpr uint16_t MSG_REQUEST_ACCESSORY_WIFI_CONFIG = 0x5702;
+constexpr uint16_t MSG_ACCESSORY_WIFI_CONFIG = 0x5703;
+
+// Wi-Fi security type (LIVI wifi.py SecurityType).
+enum class WifiSecurity : uint8_t
+{
+    None = 0,
+    Wep = 1,
+    WpaWpa2 = 2,
+    Wpa3Transition = 3,
+    Wpa3Only = 4,
+};
+
+// Everything the phone needs to join our AP and reach the CarPlay server.
+struct WirelessSession
+{
+    std::string ssid;
+    std::string passphrase;
+    uint8_t channel = 0;                          // Wi-Fi channel the AP runs on
+    std::string ipAddress;                        // our IP on that AP (the phone's target)
+    WifiSecurity security = WifiSecurity::WpaWpa2; // AP security
+    uint32_t port = 7000;                         // CarPlay control port
+    std::string deviceIdentifier;                 // pairing id (pi)
+    std::string publicKey;                        // accessory Ed25519 public key, hex (pk)
+    std::string sourceVersion;                    // e.g. "550.1"
+};
+
+// ── Value encoders (iAP2 CSM parameter values) ──────────────────────────
+Bytes encU8(uint8_t v);
+Bytes encU16(uint16_t v);
+Bytes encU32(uint32_t v);
+Bytes encBool(bool v);
+Bytes encStr(const std::string &s); // UTF-8 + trailing NUL
+// A "group" value: nested params serialized as a param body.
+Bytes encGroup(const std::vector<CsmParam> &params);
+
+// ── Builders ────────────────────────────────────────────────────────────
+// Declare wireless (and optionally wired) CarPlay availability. The transport
+// identifiers are the Bluetooth/USB MACs the phone uses to correlate transports.
+Bytes buildCarPlayAvailability(const std::string &btTransportId,
+                               const std::string &usbTransportId = "");
+
+// The wireless handoff: tells the phone which Wi-Fi to join and where CarPlay
+// lives on it.
+Bytes buildStartSession(const WirelessSession &s);
+
+// Advertise that wireless CarPlay is available/unavailable.
+Bytes buildWirelessCarPlayUpdate(bool available);
+
+// ── Parsers (for tests / handling the phone's replies) ──────────────────
+// Split a param body (encGroup's inverse) back into sub-params.
+bool parseGroup(const Bytes &value, std::vector<CsmParam> &params);
+// Extract the wireless session an accessory would have sent (round-trip check).
+bool parseStartSession(const Bytes &csm, WirelessSession &s);
+} // namespace cp_carplay
+
+#endif /* SRC_PROTOCOL_CP_CP_CARPLAY_MSG */
