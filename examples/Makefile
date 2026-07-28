@@ -139,7 +139,7 @@ cp_carplay_msg_test: cp_carplay_msg_test.cpp
 cp_iap2_link_test: cp_iap2_link_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_iap2_link_test.cpp \
 	  $(CP_DIR)/cp_iap2_link.cpp $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
-	  -o $(OUT_DIR)/cp_iap2_link_test $(LDFLAGS) -pthread
+	  ../src/common/logger.cpp -o $(OUT_DIR)/cp_iap2_link_test $(LDFLAGS) -pthread
 
 # Wireless CarPlay session: accessory state machine vs a scripted phone.
 cp_carplay_session_test: cp_carplay_session_test.cpp

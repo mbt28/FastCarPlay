@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <sys/socket.h>
 #include <thread>
+#include <unistd.h>
 
 #include "protocol/cp/cp_auth_setup.h"
 #include "protocol/cp/cp_carplay_session.h"
@@ -120,19 +121,37 @@ int main()
               "response is the MFi signature over the challenge");
     }
 
-    // 5) AuthenticationSucceeded -> CarPlayAvailability + CarPlayStartSession
+    // 5) AuthenticationSucceeded (no reply expected)
     phoneLink.sendControl(cp_iap2::packCsm(cp_carplay::MSG_AUTH_SUCCEEDED, {}));
-    check(phoneLink.recvControl(rx) && idOf(rx) == cp_carplay::MSG_CARPLAY_AVAILABILITY,
-          "accessory declares CarPlayAvailability");
+
+    // 6) RequestAccessoryWiFiConfiguration -> AccessoryWiFiConfigurationInformation
+    phoneLink.sendControl(cp_iap2::packCsm(cp_carplay::MSG_REQUEST_ACCESSORY_WIFI_CONFIG, {}));
+    check(phoneLink.recvControl(rx) && idOf(rx) == cp_carplay::MSG_ACCESSORY_WIFI_CONFIG,
+          "accessory replies AccessoryWiFiConfigurationInformation (0x5703)");
+    {
+        uint16_t mid; std::vector<cp_carplay::CsmParam> ps; bool ssidOk = false;
+        cp_iap2::parseCsm(rx, mid, ps);
+        for (auto &p : ps)
+            if (p.id == 1 && std::string(p.value.begin(), p.value.end() - 1) == wifi.ssid)
+                ssidOk = true;
+        check(ssidOk, "Wi-Fi config carries the SSID");
+    }
+
+    // 7) CarPlayAvailability -> CarPlayStartSession (the session start)
+    phoneLink.sendControl(cp_iap2::packCsm(cp_carplay::MSG_CARPLAY_AVAILABILITY, {}));
     check(phoneLink.recvControl(rx) && idOf(rx) == cp_carplay::MSG_CARPLAY_START_SESSION,
-          "accessory hands off CarPlayStartSession");
+          "accessory answers CarPlayStartSession");
     {
         cp_carplay::WirelessSession got;
         check(cp_carplay::parseStartSession(rx, got) && got.ssid == wifi.ssid &&
                   got.port == 7000 && got.passphrase == wifi.passphrase,
-              "handoff carries the correct Wi-Fi credentials + port");
+              "start-session carries the correct Wi-Fi credentials + port");
     }
 
+    // The real session now stays alive after the handoff (the BT control link
+    // persists); close the phone side so the accessory's link ends and run()
+    // returns, as a real phone dropping the link would.
+    ::close(sv[1]);
     acc.join();
     check(sessionOk && session.handoffDelivered(), "session completes with handoff delivered");
 
