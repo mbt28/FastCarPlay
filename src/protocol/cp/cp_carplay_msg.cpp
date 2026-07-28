@@ -154,6 +154,31 @@ Bytes buildWirelessCarPlayUpdate(bool available)
     return cp_iap2::packCsm(MSG_WIRELESS_CARPLAY_UPDATE, {{0, encU8(available ? 1 : 0)}});
 }
 
+Bytes buildAuthCertificate(const Bytes &certificate)
+{
+    return cp_iap2::packCsm(MSG_AUTH_CERTIFICATE, {{0, certificate}});
+}
+
+Bytes buildAuthResponse(const Bytes &response)
+{
+    return cp_iap2::packCsm(MSG_AUTH_RESPONSE, {{0, response}});
+}
+
+bool parseAuthChallenge(const Bytes &csm, Bytes &challenge)
+{
+    uint16_t msgId = 0;
+    std::vector<CsmParam> params;
+    if (!cp_iap2::parseCsm(csm, msgId, params) || msgId != MSG_REQUEST_AUTH_CHALLENGE_RESPONSE)
+        return false;
+    for (const CsmParam &p : params)
+        if (p.id == 0)
+        {
+            challenge = p.value;
+            return true;
+        }
+    return false;
+}
+
 bool parseGroup(const Bytes &value, std::vector<CsmParam> &params)
 {
     params.clear();

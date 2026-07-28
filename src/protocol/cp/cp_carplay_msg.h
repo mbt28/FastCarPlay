@@ -33,6 +33,12 @@ constexpr uint16_t MSG_START_IDENTIFICATION = 0x1D00;
 constexpr uint16_t MSG_IDENTIFICATION_INFORMATION = 0x1D01;
 constexpr uint16_t MSG_IDENTIFICATION_ACCEPTED = 0x1D02;
 constexpr uint16_t MSG_IDENTIFICATION_REJECTED = 0x1D03;
+constexpr uint16_t MSG_REQUEST_AUTH_CERTIFICATE = 0xAA00;
+constexpr uint16_t MSG_AUTH_CERTIFICATE = 0xAA01;
+constexpr uint16_t MSG_REQUEST_AUTH_CHALLENGE_RESPONSE = 0xAA02;
+constexpr uint16_t MSG_AUTH_RESPONSE = 0xAA03;
+constexpr uint16_t MSG_AUTH_FAILED = 0xAA04;
+constexpr uint16_t MSG_AUTH_SUCCEEDED = 0xAA05;
 constexpr uint16_t MSG_CARPLAY_AVAILABILITY = 0x4300;
 constexpr uint16_t MSG_CARPLAY_START_SESSION = 0x4301;
 constexpr uint16_t MSG_WIRELESS_CARPLAY_UPDATE = 0x4E0D;
@@ -113,6 +119,16 @@ Bytes buildStartSession(const WirelessSession &s);
 
 // Advertise that wireless CarPlay is available/unavailable.
 Bytes buildWirelessCarPlayUpdate(bool available);
+
+// ── iAP2 authentication (MFi coprocessor challenge/response) ─────────────
+// The phone drives: RequestAuthenticationCertificate -> we send the MFi cert;
+// RequestAuthenticationChallengeResponse{challenge} -> we sign it with the MFi
+// chip and send the response; the phone then sends Succeeded/Failed. These use
+// the same coprocessor as the auth-setup path (see mfi_auth / cp_auth_setup).
+Bytes buildAuthCertificate(const Bytes &certificate); // 0xAA01
+Bytes buildAuthResponse(const Bytes &response);       // 0xAA03
+// Pull the challenge bytes out of a RequestAuthenticationChallengeResponse.
+bool parseAuthChallenge(const Bytes &csm, Bytes &challenge);
 
 // ── Parsers (for tests / handling the phone's replies) ──────────────────
 // Split a param body (encGroup's inverse) back into sub-params.
