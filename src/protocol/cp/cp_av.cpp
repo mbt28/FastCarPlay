@@ -402,8 +402,12 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
         resp.set("keepAlivePort", cp_plist::Value::integer(keepAlivePort));
     }
     cp_plist::Value feats = cp_plist::Value::arr();
+    // Match the exact feature set a working head unit (LIVI, cluster+HEVC)
+    // advertises: iOS 26 rejects the session SETUP if this set doesn't line up.
+    feats.array.push_back(cp_plist::Value::str("hevc"));
     feats.array.push_back(cp_plist::Value::str("iAPChannel"));
-    feats.array.push_back(cp_plist::Value::str("viewAreas")); // request H.264 (no hevc)
+    feats.array.push_back(cp_plist::Value::str("viewAreas"));
+    feats.array.push_back(cp_plist::Value::str("altScreen"));
     resp.set("enabledFeatures", feats);
     res.body = cp_plist::encode(resp);
 
