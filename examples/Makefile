@@ -85,6 +85,18 @@ cp_mdns_test: cp_mdns_test.cpp
 	  ../src/protocol/cp/cp_crypto.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_mdns_test $(LDFLAGS) $(shell pkg-config --libs openssl) -pthread
 
+# CarPlay TCP server integration test (full handshake over a real socket).
+cp_server_test: cp_server_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_server_test.cpp \
+	  ../src/protocol/cp/cp_server.cpp ../src/protocol/cp/cp_control_channel.cpp \
+	  ../src/protocol/cp/cp_control_cipher.cpp ../src/protocol/cp/cp_rtsp.cpp \
+	  ../src/protocol/cp/cp_auth_setup.cpp ../src/protocol/cp/cp_pair_setup.cpp \
+	  ../src/protocol/cp/cp_srp.cpp ../src/protocol/cp/cp_pair_verify.cpp \
+	  ../src/protocol/cp/cp_identity.cpp ../src/protocol/cp/cp_tlv8.cpp \
+	  ../src/protocol/cp/cp_crypto.cpp ../src/protocol/cp/mfi_auth.cpp \
+	  ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_server_test $(LDFLAGS) $(shell pkg-config --libs openssl) -pthread
+
 # MFi authentication coprocessor bring-up probe (CarPlay P0).
 mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
