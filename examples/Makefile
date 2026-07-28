@@ -109,6 +109,21 @@ cp_serve: cp_serve.cpp
 	  ../src/protocol/cp/mfi_auth.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_serve $(LDFLAGS) $(shell pkg-config --libs openssl) -pthread
 
+# cp_wireless_serve -- live wireless CarPlay daemon (BT profiles + handoff +
+# :7000 server). Needs dbus/bluez; enable the Bluetooth layer with USE_CP_WIRELESS.
+cp_wireless_serve: cp_wireless_serve.cpp
+	$(CXX) $(CXXFLAGS) -DUSE_CP_WIRELESS -I../src $(shell pkg-config --cflags dbus-1) cp_wireless_serve.cpp \
+	  $(CP_DIR)/cp_bluetooth.cpp $(CP_DIR)/cp_carplay_session.cpp $(CP_DIR)/cp_iap2_link.cpp \
+	  $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
+	  $(CP_DIR)/cp_mdns.cpp $(CP_DIR)/cp_server.cpp \
+	  $(CP_DIR)/cp_control_channel.cpp $(CP_DIR)/cp_control_cipher.cpp \
+	  $(CP_DIR)/cp_rtsp.cpp $(CP_DIR)/cp_auth_setup.cpp \
+	  $(CP_DIR)/cp_pair_setup.cpp $(CP_DIR)/cp_srp.cpp \
+	  $(CP_DIR)/cp_pair_verify.cpp $(CP_DIR)/cp_identity.cpp \
+	  $(CP_DIR)/cp_tlv8.cpp $(CP_DIR)/cp_crypto.cpp \
+	  $(CP_DIR)/mfi_auth.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_wireless_serve $(LDFLAGS) $(shell pkg-config --libs openssl dbus-1) -pthread
+
 # iAP2 codec round-trip tests (link packets, SYN, control-session messages).
 cp_iap2_test: cp_iap2_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_iap2_test.cpp \
