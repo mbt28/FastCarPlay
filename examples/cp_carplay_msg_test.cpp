@@ -111,6 +111,28 @@ int main()
         check(hasBtMac, "bluetooth transport component carries the 6-byte MAC");
     }
 
+    printf("\niAP2 authentication (MFi challenge/response):\n");
+    {
+        Bytes cert = {0x30, 0x82, 0x01, 0x23}; // stand-in DER prefix
+        Bytes certMsg = cp_carplay::buildAuthCertificate(cert);
+        check(certMsg[4] == 0xAA && certMsg[5] == 0x01, "AuthenticationCertificate is 0xAA01");
+
+        // Phone asks us to sign a 32-byte challenge (a SHA-256 digest).
+        Bytes challenge(32, 0x5A);
+        Bytes req = cp_iap2::packCsm(cp_carplay::MSG_REQUEST_AUTH_CHALLENGE_RESPONSE, {{0, challenge}});
+        Bytes got;
+        check(cp_carplay::parseAuthChallenge(req, got) && got == challenge,
+              "challenge extracted from RequestAuthenticationChallengeResponse");
+
+        Bytes sig(64, 0x11); // what mfi.sign() would return (raw r||s)
+        Bytes respMsg = cp_carplay::buildAuthResponse(sig);
+        check(respMsg[4] == 0xAA && respMsg[5] == 0x03, "AuthenticationResponse is 0xAA03");
+        uint16_t mid = 0;
+        std::vector<cp_carplay::CsmParam> rp;
+        check(cp_iap2::parseCsm(respMsg, mid, rp) && rp.size() == 1 && rp[0].value == sig,
+              "response carries the signature bytes");
+    }
+
     printf("\nnested group encode/parse:\n");
     {
         Bytes g = cp_carplay::encGroup({{0, cp_carplay::encStr("hi")}, {7, cp_carplay::encU32(42)}});
