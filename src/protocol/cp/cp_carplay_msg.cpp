@@ -38,6 +38,82 @@ Bytes encStr(const std::string &s)
 }
 Bytes encGroup(const std::vector<CsmParam> &params) { return packParamBody(params); }
 
+namespace
+{
+// A list of CSM ids packed as raw big-endian u16s (the identification bitmap).
+Bytes encIdList(const std::vector<uint16_t> &ids)
+{
+    Bytes b;
+    for (uint16_t id : ids)
+    {
+        b.push_back(id >> 8);
+        b.push_back(id & 0xff);
+    }
+    return b;
+}
+} // namespace
+
+std::vector<uint16_t> defaultMessagesSent()
+{
+    return {
+        MSG_IDENTIFICATION_INFORMATION,
+        MSG_CARPLAY_AVAILABILITY,
+        MSG_CARPLAY_START_SESSION,
+        MSG_WIRELESS_CARPLAY_UPDATE,
+        MSG_DEVICE_TRANSPORT_ID_NOTIFY,
+        MSG_WIFI_INFORMATION,
+        MSG_ACCESSORY_WIFI_CONFIG,
+    };
+}
+
+std::vector<uint16_t> defaultMessagesReceived()
+{
+    return {
+        MSG_START_IDENTIFICATION,
+        MSG_IDENTIFICATION_ACCEPTED,
+        MSG_IDENTIFICATION_REJECTED,
+        MSG_REQUEST_WIFI_INFORMATION,
+        MSG_REQUEST_ACCESSORY_WIFI_CONFIG,
+    };
+}
+
+Bytes buildIdentification(const AccessoryIdentity &id)
+{
+    // BluetoothTransportComponent (param 17): id, name, supports-iap2 flag, MAC.
+    Bytes bt = encGroup({
+        {0, encU16(1)},                // transport component id
+        {1, encStr("Bluetooth")},      // name
+        {2, {}},                       // supports_iap2_connection (empty flag)
+        {3, id.bluetoothMac},          // bluetooth_transport_mac (6 raw bytes)
+    });
+
+    // WirelessCarPlayTransportComponent (param 24): the wireless CarPlay flag.
+    Bytes wcp = encGroup({
+        {0, encU16(2)},          // transport component id
+        {1, encStr("CarPlay")},  // name
+        {2, {}},                 // supports_iap2_connection
+        {4, {}},                 // supports_car_play (empty flag)
+    });
+
+    std::vector<CsmParam> params = {
+        {0, encStr(id.name)},
+        {1, encStr(id.modelIdentifier)},
+        {2, encStr(id.manufacturer)},
+        {3, encStr(id.serialNumber)},
+        {4, encStr(id.firmwareVersion)},
+        {5, encStr(id.hardwareVersion)},
+        {6, encIdList(id.messagesSent)},
+        {7, encIdList(id.messagesReceived)},
+        {8, encU8(0)},  // power_providing_capability = NONE
+        {9, encU16(0)}, // maximum_current_drawn_from_device
+        {12, encStr(id.currentLanguage)},
+        {13, encStr(id.currentLanguage)}, // supported_language (single entry)
+        {17, bt},
+        {24, wcp},
+    };
+    return cp_iap2::packCsm(MSG_IDENTIFICATION_INFORMATION, params);
+}
+
 Bytes buildCarPlayAvailability(const std::string &btTransportId, const std::string &usbTransportId)
 {
     std::vector<CsmParam> params;
