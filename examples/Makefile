@@ -114,6 +114,14 @@ cp_iap2_test: cp_iap2_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_iap2_test.cpp \
 	  ../src/protocol/cp/cp_iap2.cpp -o $(OUT_DIR)/cp_iap2_test $(LDFLAGS)
 
+# CarPlay USB probe: map a plugged iPhone's iAP2 interface + endpoints.
+cp_usb_probe: cp_usb_probe.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_usb_probe.cpp -o $(OUT_DIR)/cp_usb_probe $(LDFLAGS) $(shell pkg-config --libs libusb-1.0)
+
+# CarPlay wired trigger: reveal the iPhone's hidden CarPlay USB configs.
+cp_usb_trigger: cp_usb_trigger.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_usb_trigger.cpp -o $(OUT_DIR)/cp_usb_trigger $(LDFLAGS) $(shell pkg-config --libs libusb-1.0)
+
 # MFi authentication coprocessor bring-up probe (CarPlay P0).
 mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
