@@ -1,9 +1,36 @@
 #include "cp_control_channel.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "common/logger.h"
 
 namespace cp_control_channel
 {
+namespace
+{
+// Bring-up aid: when FCP_CP_CAPTURE is set, dump each request's body to
+// $FCP_CP_CAPTURE/<n>-<METHOD>.bin so the AV plists can be analysed offline.
+void captureRequest(const cp_rtsp::Request &req)
+{
+    const char *dir = getenv("FCP_CP_CAPTURE");
+    if (!dir)
+        return;
+    static int n = 0;
+    char path[512];
+    std::string m = req.method;
+    for (char &c : m) if (c == '/') c = '_';
+    snprintf(path, sizeof(path), "%s/%02d-%s.bin", dir, n++, m.c_str());
+    if (FILE *f = fopen(path, "wb"))
+    {
+        if (!req.body.empty())
+            fwrite(req.body.data(), 1, req.body.size(), f);
+        fclose(f);
+    }
+    log_i("[cp] AV req %s %s ct=%s body=%zuB -> %s", req.method.c_str(), req.path.c_str(),
+          req.header("content-type").c_str(), req.body.size(), path);
+}
+} // namespace
 namespace
 {
 // Path may carry a query string; compare the path part only.
@@ -52,6 +79,9 @@ cp_rtsp::Response ControlChannel::route(const cp_rtsp::Request &req)
         return res;
     }
 
+    // Anything past pairing is the CarPlay AV protocol (GET /info, SETUP,
+    // RECORD, POST /command|/feedback, ...). Capture it for bring-up.
+    captureRequest(req);
     log_w("[cp] unhandled %s %s", req.method.c_str(), req.path.c_str());
     res.status = 404;
     return res;
