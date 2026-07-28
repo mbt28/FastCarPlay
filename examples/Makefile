@@ -109,6 +109,11 @@ cp_serve: cp_serve.cpp
 	  ../src/protocol/cp/mfi_auth.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_serve $(LDFLAGS) $(shell pkg-config --libs openssl) -pthread
 
+# iAP2 codec round-trip tests (link packets, SYN, control-session messages).
+cp_iap2_test: cp_iap2_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_iap2_test.cpp \
+	  ../src/protocol/cp/cp_iap2.cpp -o $(OUT_DIR)/cp_iap2_test $(LDFLAGS)
+
 # MFi authentication coprocessor bring-up probe (CarPlay P0).
 mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
