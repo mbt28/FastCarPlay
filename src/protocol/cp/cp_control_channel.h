@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "cp_auth_setup.h"
+#include "cp_av.h"
 #include "cp_control_cipher.h"
 #include "cp_pair_setup.h"
 #include "cp_pair_verify.h"
@@ -45,6 +46,7 @@ private:
     cp_pair_setup::PairSetup _setup;
     cp_pair_verify::PairVerify _verify;
     std::unique_ptr<cp_control_cipher::ControlCipher> _cipher;
+    std::unique_ptr<cp_av::AvSession> _av; // the AV layer, created after pairing
     Bytes _cipherIn;  // ciphertext awaiting whole frames (encrypted mode)
     Bytes _plainIn;   // plaintext RTSP awaiting whole messages
     bool _activateCipherAfterResponse = false;
