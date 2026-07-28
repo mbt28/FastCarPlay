@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <thread>
 
+#include <netinet/in.h>
+
 #include "cp_auth_setup.h"
 
 namespace cp_server
@@ -27,7 +29,7 @@ public:
 
 private:
     void acceptLoop();
-    void serveConnection(int clientFd);
+    void serveConnection(int clientFd, const struct sockaddr_in6 &peer);
 
     int _listenFd = -1;
     uint16_t _port = 7000;

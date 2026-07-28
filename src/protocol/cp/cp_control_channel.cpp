@@ -84,7 +84,11 @@ cp_rtsp::Response ControlChannel::route(const cp_rtsp::Request &req)
     // is created once pair-verify has established the shared secret.
     captureRequest(req);
     if (!_av && _verify.verified())
+    {
         _av = std::make_unique<cp_av::AvSession>(_verify.sharedSecret(), cp_av::Config{});
+        if (_havePeer)
+            _av->setPeer(_peer);
+    }
     if (_av && _av->handle(req, res))
         return res;
 

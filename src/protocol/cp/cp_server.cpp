@@ -66,20 +66,25 @@ void Server::acceptLoop()
         int one = 1;
         setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         char host[INET6_ADDRSTRLEN] = "?";
+        struct sockaddr_in6 peer{};
         if (from.ss_family == AF_INET6)
-            inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&from)->sin6_addr, host, sizeof(host));
+        {
+            peer = *(struct sockaddr_in6 *)&from;
+            inet_ntop(AF_INET6, &peer.sin6_addr, host, sizeof(host));
+        }
         else
             inet_ntop(AF_INET, &((struct sockaddr_in *)&from)->sin_addr, host, sizeof(host));
         log_i("cp-server: connection from %s", host);
-        serveConnection(client); // one control connection at a time (single session)
+        serveConnection(client, peer); // one control connection at a time (single session)
         close(client);
         log_v("cp-server: connection closed");
     }
 }
 
-void Server::serveConnection(int clientFd)
+void Server::serveConnection(int clientFd, const struct sockaddr_in6 &peer)
 {
     cp_control_channel::ControlChannel channel(_signer);
+    channel.setPeer(peer);
     uint8_t buf[8192];
 
     while (_active)

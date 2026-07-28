@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -45,6 +46,25 @@ cp_plist::Value plistOf(const Bytes &body)
         cp_plist::decode(body, v);
     return v;
 }
+
+// Now as a 64-bit NTP timestamp (seconds since 1900 << 32 | fraction). The phone
+// derives a clock offset from these, so a monotonically increasing wall-clock is
+// enough for bring-up.
+uint64_t ntp64Now()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    uint64_t sec = (uint64_t)ts.tv_sec + 2208988800ULL; // 1970 -> 1900 epoch
+    uint64_t frac = ((uint64_t)ts.tv_nsec << 32) / 1000000000ULL;
+    return (sec << 32) | frac;
+}
+void putNtp(uint8_t *p, uint64_t v)
+{
+    for (int i = 0; i < 8; i++)
+        p[i] = (uint8_t)(v >> (8 * (7 - i)));
+}
+constexpr uint8_t PT_REQUEST = 210;
+constexpr uint8_t PT_RESPONSE = 211;
 } // namespace
 
 AvSession::AvSession(const Bytes &pairVerifyShared, const Config &cfg)
@@ -99,6 +119,89 @@ uint16_t AvSession::openListener(Listener &l, const char *tag, std::function<voi
         }
     });
     return l.port;
+}
+
+// ── UDP timing (RTCP-style NTP) ─────────────────────────────────────────
+uint16_t AvSession::startTiming(uint16_t phoneTimingPort)
+{
+    _timingFd = ::socket(AF_INET6, SOCK_DGRAM, 0);
+    if (_timingFd < 0)
+        return 0;
+    int no = 0;
+    ::setsockopt(_timingFd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
+    struct sockaddr_in6 addr{};
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_any;
+    if (::bind(_timingFd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+    {
+        ::close(_timingFd);
+        _timingFd = -1;
+        return 0;
+    }
+    socklen_t len = sizeof(addr);
+    ::getsockname(_timingFd, (struct sockaddr *)&addr, &len);
+    uint16_t port = ntohs(addr.sin6_port);
+    _timingThread = std::thread([this, phoneTimingPort] { timingLoop(phoneTimingPort); });
+    return port;
+}
+
+void AvSession::timingLoop(uint16_t phoneTimingPort)
+{
+    // Where to send our requests: the phone's address (from the control
+    // connection) on its advertised timing port, same link scope.
+    struct sockaddr_in6 dst = _peer;
+    dst.sin6_port = htons(phoneTimingPort);
+
+    auto sendRequest = [&] {
+        if (!_havePeer || !phoneTimingPort)
+            return;
+        uint8_t pkt[32] = {0};
+        pkt[0] = 0x80;
+        pkt[1] = PT_REQUEST;
+        pkt[2] = 0; pkt[3] = 7;               // length in 32-bit words - 1
+        putNtp(pkt + 24, ntp64Now());          // our transmit time (T1)
+        ::sendto(_timingFd, pkt, sizeof(pkt), 0, (struct sockaddr *)&dst, sizeof(dst));
+    };
+
+    sendRequest();
+    int64_t lastSend = 0;
+    while (_running && _timingFd >= 0)
+    {
+        struct pollfd pfd{_timingFd, POLLIN, 0};
+        int r = ::poll(&pfd, 1, 200);
+        if (r < 0) break;
+
+        if (r > 0 && (pfd.revents & POLLIN))
+        {
+            uint8_t msg[64];
+            struct sockaddr_in6 from{};
+            socklen_t fl = sizeof(from);
+            ssize_t n = ::recvfrom(_timingFd, msg, sizeof(msg), 0, (struct sockaddr *)&from, &fl);
+            if (n >= 32 && msg[1] == PT_REQUEST)
+            {
+                // The phone syncs to us: echo its transmit as originate, stamp T2/T3.
+                uint8_t resp[32] = {0};
+                resp[0] = 0x80;
+                resp[1] = PT_RESPONSE;
+                resp[2] = 0; resp[3] = 7;
+                std::memcpy(resp + 8, msg + 24, 8);   // request transmit -> originate
+                putNtp(resp + 16, ntp64Now());        // T2 receive
+                putNtp(resp + 24, ntp64Now());        // T3 transmit
+                ::sendto(_timingFd, resp, sizeof(resp), 0, (struct sockaddr *)&from, fl);
+            }
+            // PT_RESPONSE (our request's answer): bring-up ignores the offset math.
+        }
+
+        // Drive a request roughly every second.
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        int64_t nowMs = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        if (nowMs - lastSend >= 1000)
+        {
+            sendRequest();
+            lastSend = nowMs;
+        }
+    }
 }
 
 // ── Event channel ───────────────────────────────────────────────────────
@@ -278,9 +381,10 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
         return res;
     }
 
-    // Session-level SETUP: open the event + timing channels, advertise the ports.
+    // Session-level SETUP: open the event channel + drive UDP clock sync against
+    // the phone's timing port (without it the phone tears the session down).
     uint16_t eventPort = openListener(_event, "event", [this](int fd) { eventLoop(fd); });
-    uint16_t timingPort = openListener(_timing, "timing", [](int) {}); // passive for now
+    uint16_t timingPort = startTiming((uint16_t)body.intOr("timingPort"));
 
     cp_plist::Value resp = cp_plist::Value::map();
     resp.set("eventPort", cp_plist::Value::integer(eventPort));
@@ -328,10 +432,18 @@ void AvSession::stop()
         if (l.thread.joinable()) l.thread.join();
     };
     shut(_event);
-    shut(_timing);
     shut(_keepAlive);
     for (auto &l : _streams)
         shut(*l);
     _streams.clear();
+
+    if (_timingFd >= 0)
+    {
+        ::shutdown(_timingFd, SHUT_RDWR);
+        ::close(_timingFd);
+        _timingFd = -1;
+    }
+    if (_timingThread.joinable())
+        _timingThread.join();
 }
 } // namespace cp_av
