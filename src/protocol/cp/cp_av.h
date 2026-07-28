@@ -21,6 +21,8 @@
 #include <thread>
 #include <vector>
 
+#include <netinet/in.h>
+
 #include "cp_rtsp.h"
 
 namespace cp_control_cipher { class ControlCipher; }
@@ -65,6 +67,10 @@ public:
 
     void setSinks(const Sinks &sinks) { _sinks = sinks; }
 
+    // The controller's address (from the control connection). Needed so the
+    // UDP timing sync can reach the phone's timing port on the same link.
+    void setPeer(const struct sockaddr_in6 &peer) { _peer = peer; _havePeer = true; }
+
     // Handle one AV RTSP request. Returns true and fills `res` if it's an AV
     // method; returns false if the caller should treat it as unknown.
     bool handle(const cp_rtsp::Request &req, cp_rtsp::Response &res);
@@ -87,6 +93,11 @@ private:
     cp_rtsp::Response handleSetup(const cp_rtsp::Request &req);
     cp_rtsp::Response handleFeedback(const cp_rtsp::Request &req);
 
+    // UDP timing (RTCP-style NTP): bind a port, answer the phone's requests, and
+    // drive periodic requests to the phone's timing port. Returns our port.
+    uint16_t startTiming(uint16_t phoneTimingPort);
+    void timingLoop(uint16_t phoneTimingPort);
+
     void eventLoop(int fd);
     void screenLoop(int fd, int64_t streamId);
     void audioLoop(int fd, int64_t streamId, int type);
@@ -100,9 +111,13 @@ private:
     std::atomic<bool> _running{true};
 
     Listener _event;
-    Listener _timing;
     Listener _keepAlive;
     std::vector<std::unique_ptr<Listener>> _streams;
+
+    struct sockaddr_in6 _peer{};
+    bool _havePeer = false;
+    int _timingFd = -1;
+    std::thread _timingThread;
 
     std::unique_ptr<cp_control_cipher::ControlCipher> _eventCipher;
 };
