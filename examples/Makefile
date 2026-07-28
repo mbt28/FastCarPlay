@@ -50,6 +50,14 @@ cp_authsetup_test: cp_authsetup_test.cpp
 	  $(CP_DIR)/cp_auth_setup.cpp $(CP_DIR)/cp_crypto.cpp $(CP_DIR)/mfi_auth.cpp \
 	  -o $(OUT_DIR)/cp_authsetup_test $(LDFLAGS) $(shell pkg-config --libs openssl)
 
+# CarPlay pair-verify end-to-end test (no chip/phone; symmetric crypto).
+cp_pairverify_test: cp_pairverify_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_pairverify_test.cpp \
+	  ../src/protocol/cp/cp_pair_verify.cpp ../src/protocol/cp/cp_identity.cpp \
+	  ../src/protocol/cp/cp_tlv8.cpp ../src/protocol/cp/cp_crypto.cpp \
+	  ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_pairverify_test $(LDFLAGS) $(shell pkg-config --libs openssl)
+
 # MFi authentication coprocessor bring-up probe (CarPlay P0).
 mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
