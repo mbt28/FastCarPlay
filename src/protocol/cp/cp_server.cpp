@@ -20,16 +20,21 @@ bool Server::start(uint16_t port, cp_auth_setup::MfiSigner *signer)
     _port = port;
     _signer = signer;
 
-    _listenFd = socket(AF_INET, SOCK_STREAM, 0);
+    // Dual-stack IPv6: wireless CarPlay connects to the accessory's Wi-Fi IPv6
+    // link-local (fe80::), while the wired/desktop paths use IPv4. An
+    // AF_INET6 socket with IPV6_V6ONLY off accepts both (IPv4 as v4-mapped).
+    _listenFd = socket(AF_INET6, SOCK_STREAM, 0);
     if (_listenFd < 0)
         return false;
     int yes = 1;
     setsockopt(_listenFd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    int no = 0;
+    setsockopt(_listenFd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
 
-    struct sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(port);
+    struct sockaddr_in6 addr{};
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_any;
+    addr.sin6_port = htons(port);
     if (bind(_listenFd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
         listen(_listenFd, 1) != 0)
     {
@@ -53,14 +58,19 @@ void Server::acceptLoop()
         if (poll(&pfd, 1, 500) <= 0)
             continue;
 
-        struct sockaddr_in from{};
+        struct sockaddr_storage from{};
         socklen_t fromLen = sizeof(from);
         int client = accept(_listenFd, (struct sockaddr *)&from, &fromLen);
         if (client < 0)
             continue;
         int one = 1;
         setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-        log_i("cp-server: connection from %s", inet_ntoa(from.sin_addr));
+        char host[INET6_ADDRSTRLEN] = "?";
+        if (from.ss_family == AF_INET6)
+            inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&from)->sin6_addr, host, sizeof(host));
+        else
+            inet_ntop(AF_INET, &((struct sockaddr_in *)&from)->sin_addr, host, sizeof(host));
+        log_i("cp-server: connection from %s", host);
         serveConnection(client); // one control connection at a time (single session)
         close(client);
         log_v("cp-server: connection closed");

@@ -120,6 +120,14 @@ Bytes buildStartSession(const WirelessSession &s);
 // Advertise that wireless CarPlay is available/unavailable.
 Bytes buildWirelessCarPlayUpdate(bool available);
 
+// AccessoryWiFiConfigurationInformation (0x5703): the accessory's AP config,
+// sent in reply to the phone's RequestAccessoryWiFiConfigurationInformation
+// (0x5702). This is one of the two ways the phone learns the Wi-Fi credentials
+// (the other being CarPlayStartSession). Params: 1=ssid, 2=passphrase,
+// 3=security_type, 4=channel.
+Bytes buildAccessoryWifiConfig(const std::string &ssid, const std::string &passphrase,
+                               WifiSecurity security, uint8_t channel);
+
 // ── iAP2 authentication (MFi coprocessor challenge/response) ─────────────
 // The phone drives: RequestAuthenticationCertificate -> we send the MFi cert;
 // RequestAuthenticationChallengeResponse{challenge} -> we sign it with the MFi

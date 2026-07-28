@@ -14,11 +14,17 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <csignal>
+#include <fstream>
 #include <string>
 
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
 #include <unistd.h>
 
+#include "common/logger.h"
 #include "protocol/cp/cp_bluetooth.h"
 #include "protocol/cp/cp_crypto.h"
 #include "protocol/cp/cp_identity.h"
@@ -50,6 +56,39 @@ static std::string hex(const Bytes &b)
     return s;
 }
 
+// Wireless CarPlay runs over the AP interface's IPv6 link-local (fe80::). The
+// phone connects to this address (scoped to its own Wi-Fi link) on the control
+// port. Returns the bare fe80 string, or empty if the AP interface has none yet.
+static std::string wlanLinkLocal(const char *iface)
+{
+    struct ifaddrs *ifas = nullptr;
+    std::string out;
+    if (getifaddrs(&ifas) != 0)
+        return out;
+    for (struct ifaddrs *a = ifas; a; a = a->ifa_next)
+    {
+        if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET6 || strcmp(a->ifa_name, iface) != 0)
+            continue;
+        auto *s6 = (struct sockaddr_in6 *)a->ifa_addr;
+        if (!IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr))
+            continue;
+        char buf[INET6_ADDRSTRLEN];
+        if (inet_ntop(AF_INET6, &s6->sin6_addr, buf, sizeof(buf)))
+            out = buf;
+        break;
+    }
+    freeifaddrs(ifas);
+    return out;
+}
+
+static std::string ifaceMac(const char *iface)
+{
+    std::ifstream f(std::string("/sys/class/net/") + iface + "/address");
+    std::string m;
+    std::getline(f, m);
+    return m;
+}
+
 int main(int argc, char **argv)
 {
     const char *ssid = argc > 1 ? argv[1] : "FastCarPlay-AP";
@@ -58,9 +97,14 @@ int main(int argc, char **argv)
     int channel = argc > 4 ? atoi(argv[4]) : 36;
     const char *bus = argc > 5 ? argv[5] : "/dev/i2c-1";
     uint8_t addr = argc > 6 ? (uint8_t)strtol(argv[6], nullptr, 0) : 0x10;
+    const char *wlan = argc > 7 ? argv[7] : "wlan0";
 
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
+
+    // FCP_LOG=<0..6> (default Info) so the Bluetooth + session activity is visible.
+    const char *lvl = getenv("FCP_LOG");
+    Logger::instance().setLevel(lvl ? atoi(lvl) : (int)Logger::Level::Info);
 
     const cp_identity::Identity &id = cp_identity::loadOrCreateIdentity();
 
@@ -75,7 +119,14 @@ int main(int argc, char **argv)
     printf("  identity pi=%s pk=%s\n", id.pairingId.c_str(), hex(id.pubRaw).c_str());
     printf("  MFi chip: %s%s\n", haveChip ? "MFi " : "absent (auth will fail!)",
            haveChip ? (info.protocolMajor == 3 ? "3.0" : "2.0C") : "");
-    printf("  Wi-Fi AP: ssid=%s ip=%s ch=%d\n", ssid, apIp, channel);
+    // Wireless CarPlay uses the AP interface's IPv6 link-local + its MAC.
+    std::string fe80 = wlanLinkLocal(wlan);
+    std::string wlanMac = ifaceMac(wlan);
+    printf("  Wi-Fi AP: ssid=%s ch=%d  %s fe80=%s mac=%s\n", ssid, channel, wlan,
+           fe80.empty() ? "(NO link-local yet!)" : fe80.c_str(), wlanMac.c_str());
+    if (fe80.empty())
+        fprintf(stderr, "  WARN: %s has no IPv6 link-local -- is the AP up? falling back to %s\n",
+                wlan, apIp);
 
     // A stable device id derived from the pairing id, shared by mDNS + handoff.
     Bytes pidBytes(id.pairingId.begin(), id.pairingId.end());
@@ -112,10 +163,10 @@ int main(int argc, char **argv)
     cfg.wifi.ssid = ssid;
     cfg.wifi.passphrase = pass;
     cfg.wifi.channel = (uint8_t)channel;
-    cfg.wifi.ipAddress = apIp;
+    cfg.wifi.ipAddress = fe80.empty() ? apIp : fe80; // fe80 link-local for wireless
     cfg.wifi.security = cp_carplay::WifiSecurity::WpaWpa2;
     cfg.wifi.port = 7000;
-    cfg.wifi.deviceIdentifier = id.pairingId;
+    cfg.wifi.deviceIdentifier = wlanMac.empty() ? id.pairingId : wlanMac;
     cfg.wifi.publicKey = hex(id.pubRaw);
     cfg.wifi.sourceVersion = "550.1";
 

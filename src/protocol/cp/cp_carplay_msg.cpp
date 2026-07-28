@@ -53,27 +53,28 @@ Bytes encIdList(const std::vector<uint16_t> &ids)
 }
 } // namespace
 
+// The message sets a wireless-CarPlay accessory declares. The iPhone validates
+// these against the declared transport components -- declaring e.g. vehicle-
+// status or navigation messages without the matching component makes it reject
+// identification (fields 6/7). We advertise only the wireless CarPlay transport,
+// so we declare only the messages that path needs: the Wi-Fi credential exchange
+// and the CarPlay session/status messages. (LIVI declares far more because it
+// also advertises vehicle/location/route-guidance components.)
 std::vector<uint16_t> defaultMessagesSent()
 {
     return {
-        MSG_IDENTIFICATION_INFORMATION,
-        MSG_CARPLAY_AVAILABILITY,
-        MSG_CARPLAY_START_SESSION,
-        MSG_WIRELESS_CARPLAY_UPDATE,
-        MSG_DEVICE_TRANSPORT_ID_NOTIFY,
-        MSG_WIFI_INFORMATION,
-        MSG_ACCESSORY_WIFI_CONFIG,
+        0x5703, // AccessoryWiFiConfigurationInformation
+        0x4301, // CarPlayStartSession
     };
 }
 
 std::vector<uint16_t> defaultMessagesReceived()
 {
     return {
-        MSG_START_IDENTIFICATION,
-        MSG_IDENTIFICATION_ACCEPTED,
-        MSG_IDENTIFICATION_REJECTED,
-        MSG_REQUEST_WIFI_INFORMATION,
-        MSG_REQUEST_ACCESSORY_WIFI_CONFIG,
+        0x5702, // RequestAccessoryWiFiConfigurationInformation
+        0x4300, // CarPlayAvailability
+        0x4E0D, // WirelessCarPlayUpdate
+        0x4E0E, // DeviceTransportIdentifierNotification
     };
 }
 
@@ -152,6 +153,17 @@ Bytes buildWirelessCarPlayUpdate(bool available)
 {
     // status (param 0): 1 = AVAILABLE, 0 = UNAVAILABLE.
     return cp_iap2::packCsm(MSG_WIRELESS_CARPLAY_UPDATE, {{0, encU8(available ? 1 : 0)}});
+}
+
+Bytes buildAccessoryWifiConfig(const std::string &ssid, const std::string &passphrase,
+                               WifiSecurity security, uint8_t channel)
+{
+    return cp_iap2::packCsm(MSG_ACCESSORY_WIFI_CONFIG, {
+                                                           {1, encStr(ssid)},
+                                                           {2, encStr(passphrase)},
+                                                           {3, encU8((uint8_t)security)},
+                                                           {4, encU8(channel)},
+                                                       });
 }
 
 Bytes buildAuthCertificate(const Bytes &certificate)

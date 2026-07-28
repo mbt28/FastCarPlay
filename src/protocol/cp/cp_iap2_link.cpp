@@ -1,6 +1,11 @@
 #include "cp_iap2_link.h"
 
+#include <cerrno>
+#include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+#include "common/logger.h"
 
 namespace cp_iap2
 {
@@ -31,13 +36,38 @@ Iap2Link::Iap2Link(int fd) : _fd(fd)
 
 bool Iap2Link::readExact(uint8_t *buf, size_t n)
 {
+    // BlueZ hands us a non-blocking RFCOMM fd, so a bare read() returns
+    // EAGAIN with no data waiting. Poll first (like aa_aaw), then recv; a
+    // hangup/error or clean EOF ends the link. Blocks indefinitely between
+    // packets, which is correct for an idle-but-alive control session.
     size_t got = 0;
     while (got < n)
     {
-        ssize_t r = ::read(_fd, buf + got, n - got);
-        if (r <= 0)
+        struct pollfd pfd { _fd, POLLIN, 0 };
+        int r = ::poll(&pfd, 1, -1);
+        if (r < 0)
+        {
+            if (errno == EINTR)
+                continue;
             return false;
-        got += (size_t)r;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
+        {
+            // Drain any last readable bytes before giving up.
+            ssize_t k = ::recv(_fd, buf + got, n - got, 0);
+            if (k > 0) { got += (size_t)k; continue; }
+            return false;
+        }
+        ssize_t k = ::recv(_fd, buf + got, n - got, 0);
+        if (k == 0)
+            return false; // EOF
+        if (k < 0)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+                continue;
+            return false;
+        }
+        got += (size_t)k;
     }
     return true;
 }
@@ -88,13 +118,22 @@ void Iap2Link::writePacket(uint8_t control, uint8_t seq, uint8_t sessionId, cons
     size_t off = 0;
     while (off < pkt.size())
     {
-        ssize_t w = ::write(_fd, pkt.data() + off, pkt.size() - off);
-        if (w <= 0)
+        // MSG_NOSIGNAL: a mid-write hangup must not raise SIGPIPE and kill the
+        // daemon. Poll for writability to ride out a full (non-blocking) buffer.
+        ssize_t w = ::send(_fd, pkt.data() + off, pkt.size() - off, MSG_NOSIGNAL);
+        if (w > 0)
         {
-            _state = State::Dead;
-            return;
+            off += (size_t)w;
+            continue;
         }
-        off += (size_t)w;
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+        {
+            struct pollfd pfd { _fd, POLLOUT, 0 };
+            if (::poll(&pfd, 1, 2000) > 0 && (pfd.revents & POLLOUT))
+                continue;
+        }
+        _state = State::Dead;
+        return;
     }
 }
 
@@ -103,25 +142,42 @@ void Iap2Link::sendAck()
     writePacket(CONTROL_ACK, _sentPsn, 0, {});
 }
 
-bool Iap2Link::negotiate(bool initiate)
+bool Iap2Link::negotiate(bool /*initiate*/)
 {
     _state = State::Detect;
 
-    // Advertise iAP2 support with the detect marker.
+    // Advertise iAP2 support with the detect marker. A real iPhone then begins
+    // link negotiation by sending its own SYN link-packet (0xFF5A...) -- it does
+    // NOT echo the marker -- so we don't wait for a marker: we send our SYN too
+    // and let readPacket's resync skip any marker bytes the peer might send.
     Bytes marker = detectMarker();
     if (::write(_fd, marker.data(), marker.size()) != (ssize_t)marker.size())
         return false;
 
-    if (!initiate)
-    {
-        // Wait for the peer's detect marker before negotiating.
-        Bytes in(marker.size());
-        if (!readExact(in.data(), in.size()) || in != marker)
-            return false;
-    }
-
     _state = State::Negotiate;
     writePacket(CONTROL_SYN, _sentPsn, 0, packSync(_lsp));
+
+    // Diagnostic: peek (non-destructively) at the peer's opening bytes so we can
+    // see how a real iPhone starts the link (marker vs SYN vs nothing).
+    if (Logger::instance().enabled(Logger::Level::Debug))
+    {
+        uint8_t peek[48];
+        struct pollfd pfd { _fd, POLLIN, 0 };
+        ::poll(&pfd, 1, 3000); // let the opening bytes arrive before peeking
+        ssize_t pn = ::recv(_fd, peek, sizeof(peek), MSG_PEEK);
+        if (pn <= 0)
+        {
+            log_d("cp: peer sent no opening bytes (recv=%zd) -- likely closed the channel", pn);
+        }
+        else
+        {
+            char hex[48 * 3 + 1];
+            int o = 0;
+            for (ssize_t i = 0; i < pn; i++)
+                o += snprintf(hex + o, sizeof(hex) - o, "%02x ", peek[i]);
+            log_d("cp: peer opening %zd bytes: %s", pn, hex);
+        }
+    }
 
     // Drive SYN/ACK until NORMAL.
     while (_state == State::Negotiate)
@@ -130,9 +186,12 @@ bool Iap2Link::negotiate(bool initiate)
         Bytes payload;
         if (!readPacket(h, payload))
         {
+            log_w("cp: iAP2 negotiation read ended (EOF) before NORMAL");
             _state = State::Dead;
             return false;
         }
+        log_d("cp: rx link ctrl=0x%02x seq=%u ack=%u sid=%u len=%zu", h.control, h.seq, h.ack,
+              h.sessionId, payload.size());
         if (h.control & CONTROL_SYN)
         {
             LinkSync peer;
@@ -144,6 +203,7 @@ bool Iap2Link::negotiate(bool initiate)
         if (h.control & CONTROL_ACK)
             _state = State::Normal;
     }
+    log_i("cp: iAP2 link NORMAL (maxLen=%u sessions=%zu)", _lsp.maxLen, _lsp.sessions.size());
     return _state == State::Normal;
 }
 

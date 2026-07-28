@@ -41,7 +41,6 @@ public:
 private:
     // Dispatch one received CSM. Returns false to stop the loop.
     bool handle(uint16_t msgId, const Bytes &csm);
-    bool sendHandoff();
 
     cp_iap2::Iap2Link &_link;
     cp_auth_setup::MfiSigner &_signer;
