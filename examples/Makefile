@@ -58,6 +58,15 @@ cp_pairverify_test: cp_pairverify_test.cpp
 	  ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_pairverify_test $(LDFLAGS) $(shell pkg-config --libs openssl)
 
+# CarPlay pair-setup end-to-end test (SRP-6a client; no chip/phone).
+cp_pairsetup_test: cp_pairsetup_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_pairsetup_test.cpp \
+	  ../src/protocol/cp/cp_pair_setup.cpp ../src/protocol/cp/cp_srp.cpp \
+	  ../src/protocol/cp/cp_pair_verify.cpp ../src/protocol/cp/cp_identity.cpp \
+	  ../src/protocol/cp/cp_tlv8.cpp ../src/protocol/cp/cp_crypto.cpp \
+	  ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_pairsetup_test $(LDFLAGS) $(shell pkg-config --libs openssl)
+
 # MFi authentication coprocessor bring-up probe (CarPlay P0).
 mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
