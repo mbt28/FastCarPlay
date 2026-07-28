@@ -97,6 +97,18 @@ cp_server_test: cp_server_test.cpp
 	  ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_server_test $(LDFLAGS) $(shell pkg-config --libs openssl) -pthread
 
+# cp_serve -- the runnable CarPlay accessory daemon (identity+mDNS+TCP+chip).
+cp_serve: cp_serve.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_serve.cpp \
+	  ../src/protocol/cp/cp_mdns.cpp ../src/protocol/cp/cp_server.cpp \
+	  ../src/protocol/cp/cp_control_channel.cpp ../src/protocol/cp/cp_control_cipher.cpp \
+	  ../src/protocol/cp/cp_rtsp.cpp ../src/protocol/cp/cp_auth_setup.cpp \
+	  ../src/protocol/cp/cp_pair_setup.cpp ../src/protocol/cp/cp_srp.cpp \
+	  ../src/protocol/cp/cp_pair_verify.cpp ../src/protocol/cp/cp_identity.cpp \
+	  ../src/protocol/cp/cp_tlv8.cpp ../src/protocol/cp/cp_crypto.cpp \
+	  ../src/protocol/cp/mfi_auth.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_serve $(LDFLAGS) $(shell pkg-config --libs openssl) -pthread
+
 # MFi authentication coprocessor bring-up probe (CarPlay P0).
 mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
