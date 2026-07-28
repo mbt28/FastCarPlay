@@ -38,6 +38,18 @@ settings_user_test: settings_user_test.cpp
 	  ../src/settings.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/settings_user_test $(LDFLAGS)
 
+# CarPlay crypto substrate: known-answer + round-trip tests (no chip/phone).
+cp_crypto_test: cp_crypto_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_crypto_test.cpp \
+	  ../src/protocol/cp/cp_crypto.cpp -o $(OUT_DIR)/cp_crypto_test $(LDFLAGS) $(shell pkg-config --libs openssl)
+
+# CarPlay MFiSAP /auth-setup end-to-end test against the real MFi chip.
+CP_DIR := ../src/protocol/cp
+cp_authsetup_test: cp_authsetup_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_authsetup_test.cpp \
+	  $(CP_DIR)/cp_auth_setup.cpp $(CP_DIR)/cp_crypto.cpp $(CP_DIR)/mfi_auth.cpp \
+	  -o $(OUT_DIR)/cp_authsetup_test $(LDFLAGS) $(shell pkg-config --libs openssl)
+
 # MFi authentication coprocessor bring-up probe (CarPlay P0).
 mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
