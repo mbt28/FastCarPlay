@@ -126,6 +126,13 @@ cp_iap2_link_test: cp_iap2_link_test.cpp
 	  $(CP_DIR)/cp_iap2_link.cpp $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
 	  -o $(OUT_DIR)/cp_iap2_link_test $(LDFLAGS) -pthread
 
+# Wireless CarPlay session: accessory state machine vs a scripted phone.
+cp_carplay_session_test: cp_carplay_session_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_carplay_session_test.cpp \
+	  $(CP_DIR)/cp_carplay_session.cpp $(CP_DIR)/cp_iap2_link.cpp \
+	  $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_carplay_session_test $(LDFLAGS) -pthread
+
 # CarPlay USB probe: map a plugged iPhone's iAP2 interface + endpoints.
 cp_usb_probe: cp_usb_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_usb_probe.cpp -o $(OUT_DIR)/cp_usb_probe $(LDFLAGS) $(shell pkg-config --libs libusb-1.0)
