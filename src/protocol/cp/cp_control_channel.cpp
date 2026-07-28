@@ -80,8 +80,14 @@ cp_rtsp::Response ControlChannel::route(const cp_rtsp::Request &req)
     }
 
     // Anything past pairing is the CarPlay AV protocol (GET /info, SETUP,
-    // RECORD, POST /command|/feedback, ...). Capture it for bring-up.
+    // RECORD, POST /command|/feedback, ...). Route it to the AV session, which
+    // is created once pair-verify has established the shared secret.
     captureRequest(req);
+    if (!_av && _verify.verified())
+        _av = std::make_unique<cp_av::AvSession>(_verify.sharedSecret(), cp_av::Config{});
+    if (_av && _av->handle(req, res))
+        return res;
+
     log_w("[cp] unhandled %s %s", req.method.c_str(), req.path.c_str());
     res.status = 404;
     return res;
