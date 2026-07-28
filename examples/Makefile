@@ -78,6 +78,13 @@ cp_control_test: cp_control_test.cpp
 	  ../src/protocol/cp/mfi_auth.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_control_test $(LDFLAGS) $(shell pkg-config --libs openssl)
 
+# CarPlay mDNS responder test (announces _airplay._tcp; self-verifying).
+cp_mdns_test: cp_mdns_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_mdns_test.cpp \
+	  ../src/protocol/cp/cp_mdns.cpp ../src/protocol/cp/cp_identity.cpp \
+	  ../src/protocol/cp/cp_crypto.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_mdns_test $(LDFLAGS) $(shell pkg-config --libs openssl) -pthread
+
 # MFi authentication coprocessor bring-up probe (CarPlay P0).
 mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
