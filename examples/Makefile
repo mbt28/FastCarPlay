@@ -38,6 +38,11 @@ settings_user_test: settings_user_test.cpp
 	  ../src/settings.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/settings_user_test $(LDFLAGS)
 
+# MFi authentication coprocessor bring-up probe (CarPlay P0).
+mfi_probe: mfi_probe.cpp
+	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
+	  ../src/protocol/cp/mfi_auth.cpp -o $(OUT_DIR)/mfi_probe $(LDFLAGS)
+
 keylistener: keylistener.cpp
 	$(CXX) $(CXXFLAGS) keylistener.cpp -o $(OUT_DIR)/keylistener $(LDFLAGS)
 
