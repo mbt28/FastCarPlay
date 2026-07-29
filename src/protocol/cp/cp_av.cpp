@@ -14,6 +14,7 @@
 #include "common/logger.h"
 #include "cp_control_cipher.h"
 #include "cp_crypto.h"
+#include "cp_icons.h"
 #include "cp_plist.h"
 #include "cp_rtsp.h"
 
@@ -369,6 +370,25 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
     display.set("heightPhysical", V::integer(_cfg.screenHeightMm));
     display.set("features", V::integer(0x08 | 0x02)); // high-fidelity touch | knobs
     display.set("primaryInputDevice", V::integer(3));  // knobs (input refined later)
+    // We advertise the "viewAreas" feature, so the display must carry the view
+    // area geometry (a full-screen area + safe area). Omitting it while claiming
+    // the feature makes the phone tear the session down after RECORD.
+    {
+        V safe = V::map();
+        safe.set("widthPixels", V::integer(_cfg.screenWidth));
+        safe.set("heightPixels", V::integer(_cfg.screenHeight));
+        safe.set("originXPixels", V::integer(0));
+        safe.set("originYPixels", V::integer(0));
+        safe.set("drawUIOutsideSafeArea", V::boolean(true));
+        V view = V::map();
+        view.set("widthPixels", V::integer(_cfg.screenWidth));
+        view.set("heightPixels", V::integer(_cfg.screenHeight));
+        view.set("originXPixels", V::integer(0));
+        view.set("originYPixels", V::integer(0));
+        view.set("safeArea", safe);
+        display.set("viewAreas", arr({view}));
+        display.set("initialViewArea", V::integer(0));
+    }
 
     // ── audio formats (PCM/OPUS/AAC-LC at 44.1k) ──
     const int64_t PCM = 0x3fc | 0xc00;      // voice + media 44.1k mono+stereo
@@ -494,6 +514,22 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
     }));
 
     info.set("bluetoothIDs", arr({V::str("2c:cf:67:fb:12:de")}));
+
+    // OEM icon shown on the CarPlay home screen. iOS requires it -- without an
+    // icon there is nothing to place on the springboard and it tears the session
+    // down right after RECORD.
+    auto icon = [&](const Bytes &png, int px) {
+        V ic = V::map();
+        ic.set("imageData", V::bytes(png));
+        ic.set("widthPixels", V::integer(px));
+        ic.set("heightPixels", V::integer(px));
+        ic.set("prerendered", V::boolean(true));
+        return ic;
+    };
+    info.set("oemIconVisible", V::boolean(true));
+    info.set("oemIconLabel", V::str("FastCarPlay"));
+    info.set("oemIcons", arr({icon(FCP_ICON_120, 120), icon(FCP_ICON_180, 180), icon(FCP_ICON_256, 256)}));
+
     if (_cfg.hevc)
         info.set("hevcInfo", V::map());
 
@@ -607,7 +643,7 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
         }
     }
     cp_plist::Value feats = cp_plist::Value::arr();
-    feats.array.push_back(cp_plist::Value::str("hevc")); // request HEVC video
+    feats.array.push_back(cp_plist::Value::str("hevc"));
     feats.array.push_back(cp_plist::Value::str("iAPChannel"));
     feats.array.push_back(cp_plist::Value::str("viewAreas"));
     resp.set("enabledFeatures", feats);
