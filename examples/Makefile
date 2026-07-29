@@ -70,7 +70,7 @@ cp_pairsetup_test: cp_pairsetup_test.cpp
 # CarPlay control-channel integration test (RTSP + encryption + MFiSAP).
 cp_control_test: cp_control_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_control_test.cpp \
-	  ../src/protocol/cp/cp_control_channel.cpp ../src/protocol/cp/cp_av.cpp ../src/protocol/cp/cp_plist.cpp ../src/protocol/cp/cp_control_cipher.cpp \
+	  ../src/protocol/cp/cp_control_channel.cpp ../src/protocol/cp/cp_av.cpp ../src/protocol/cp/cp_nalu.cpp ../src/protocol/cp/cp_plist.cpp ../src/protocol/cp/cp_control_cipher.cpp \
 	  ../src/protocol/cp/cp_rtsp.cpp ../src/protocol/cp/cp_auth_setup.cpp \
 	  ../src/protocol/cp/cp_pair_setup.cpp ../src/protocol/cp/cp_srp.cpp \
 	  ../src/protocol/cp/cp_pair_verify.cpp ../src/protocol/cp/cp_identity.cpp \
@@ -88,7 +88,7 @@ cp_mdns_test: cp_mdns_test.cpp
 # CarPlay TCP server integration test (full handshake over a real socket).
 cp_server_test: cp_server_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_server_test.cpp \
-	  ../src/protocol/cp/cp_server.cpp ../src/protocol/cp/cp_control_channel.cpp ../src/protocol/cp/cp_av.cpp ../src/protocol/cp/cp_plist.cpp \
+	  ../src/protocol/cp/cp_server.cpp ../src/protocol/cp/cp_control_channel.cpp ../src/protocol/cp/cp_av.cpp ../src/protocol/cp/cp_nalu.cpp ../src/protocol/cp/cp_plist.cpp \
 	  ../src/protocol/cp/cp_control_cipher.cpp ../src/protocol/cp/cp_rtsp.cpp \
 	  ../src/protocol/cp/cp_auth_setup.cpp ../src/protocol/cp/cp_pair_setup.cpp \
 	  ../src/protocol/cp/cp_srp.cpp ../src/protocol/cp/cp_pair_verify.cpp \
@@ -101,7 +101,7 @@ cp_server_test: cp_server_test.cpp
 cp_serve: cp_serve.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_serve.cpp \
 	  ../src/protocol/cp/cp_mdns.cpp ../src/protocol/cp/cp_server.cpp \
-	  ../src/protocol/cp/cp_control_channel.cpp ../src/protocol/cp/cp_av.cpp ../src/protocol/cp/cp_plist.cpp ../src/protocol/cp/cp_control_cipher.cpp \
+	  ../src/protocol/cp/cp_control_channel.cpp ../src/protocol/cp/cp_av.cpp ../src/protocol/cp/cp_nalu.cpp ../src/protocol/cp/cp_plist.cpp ../src/protocol/cp/cp_control_cipher.cpp \
 	  ../src/protocol/cp/cp_rtsp.cpp ../src/protocol/cp/cp_auth_setup.cpp \
 	  ../src/protocol/cp/cp_pair_setup.cpp ../src/protocol/cp/cp_srp.cpp \
 	  ../src/protocol/cp/cp_pair_verify.cpp ../src/protocol/cp/cp_identity.cpp \
@@ -116,13 +116,19 @@ cp_wireless_serve: cp_wireless_serve.cpp
 	  $(CP_DIR)/cp_bluetooth.cpp $(CP_DIR)/cp_carplay_session.cpp $(CP_DIR)/cp_iap2_link.cpp \
 	  $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
 	  $(CP_DIR)/cp_mdns.cpp $(CP_DIR)/cp_server.cpp \
-	  $(CP_DIR)/cp_control_channel.cpp $(CP_DIR)/cp_av.cpp $(CP_DIR)/cp_plist.cpp $(CP_DIR)/cp_control_cipher.cpp \
+	  $(CP_DIR)/cp_control_channel.cpp $(CP_DIR)/cp_av.cpp $(CP_DIR)/cp_nalu.cpp $(CP_DIR)/cp_plist.cpp $(CP_DIR)/cp_control_cipher.cpp \
 	  $(CP_DIR)/cp_rtsp.cpp $(CP_DIR)/cp_auth_setup.cpp \
 	  $(CP_DIR)/cp_pair_setup.cpp $(CP_DIR)/cp_srp.cpp \
 	  $(CP_DIR)/cp_pair_verify.cpp $(CP_DIR)/cp_identity.cpp \
 	  $(CP_DIR)/cp_tlv8.cpp $(CP_DIR)/cp_crypto.cpp \
 	  $(CP_DIR)/mfi_auth.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_wireless_serve $(LDFLAGS) $(shell pkg-config --libs openssl dbus-1) -pthread
+
+# Screen framing + NALU/Annex-B conversion, validated offline against a real
+# captured screen stream (no phone/key needed).
+cp_nalu_test: cp_nalu_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_nalu_test.cpp \
+	  $(CP_DIR)/cp_nalu.cpp -o $(OUT_DIR)/cp_nalu_test $(LDFLAGS)
 
 # iAP2 codec round-trip tests (link packets, SYN, control-session messages).
 cp_iap2_test: cp_iap2_test.cpp
