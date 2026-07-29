@@ -101,6 +101,9 @@ private:
     void eventLoop(int fd);
     void screenLoop(int fd, int64_t streamId);
     void audioLoop(int fd, int64_t streamId, int type);
+    // The iAP2-over-CarPlay tunnel (stream 130): the phone continues iAP2 here
+    // after it drops Bluetooth. Receive-only (our replies ride the event channel).
+    void tunnelLoop(int fd, int64_t seed);
 
     // Derive a stream data key: HKDF-SHA512(shared, "DataStream-Salt"<id>, info).
     Bytes streamKey(int64_t streamId, const char *info);
