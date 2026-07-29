@@ -321,6 +321,71 @@ void AvSession::audioLoop(int fd, int64_t streamId, int type)
     log_i("[cp-av] audio stream %d closed (%zu bytes received)", type, total);
 }
 
+// ── iAP2-over-CarPlay tunnel (stream 130) ───────────────────────────────
+void AvSession::tunnelLoop(int fd, int64_t seed)
+{
+    // DataStream keys, salted with the SETUP seed (PRIu64 decimal). Layer 1 is
+    // the same ChaCha20-Poly1305 stream framing as the control channel, so we
+    // reuse ControlCipher with the DataStream keys.
+    const std::string salt = "DataStream-Salt" + std::to_string((uint64_t)seed);
+    Bytes readKey = cp_crypto::hkdfSha512(_shared, salt, "DataStream-Output-Encryption-Key", 32);
+    Bytes writeKey = cp_crypto::hkdfSha512(_shared, salt, "DataStream-Input-Encryption-Key", 32);
+    cp_control_cipher::ControlCipher cipher(readKey, writeKey);
+    log_i("[cp-av] iAP tunnel connected (salt=%s)", salt.c_str());
+
+    Bytes enc, plain;
+    uint8_t buf[16384];
+    size_t off = 0;
+    while (_running)
+    {
+        struct pollfd pfd{fd, POLLIN, 0};
+        int r = ::poll(&pfd, 1, 300);
+        if (r < 0) break;
+        if (r == 0) continue;
+        ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        if (n <= 0) break;
+        enc.insert(enc.end(), buf, buf + n);
+
+        Bytes dec;
+        if (!cipher.decrypt(enc, dec))
+        {
+            log_w("[cp-av] iAP tunnel DataStream decrypt failed");
+            break;
+        }
+        plain.insert(plain.end(), dec.begin(), dec.end());
+
+        // Layer 2: APTransportPackage -- 32-byte BE header (size@0, messageType@16).
+        while (plain.size() - off >= 32)
+        {
+            uint32_t size = (plain[off] << 24) | (plain[off + 1] << 16) | (plain[off + 2] << 8) | plain[off + 3];
+            if (size < 32 || size > 4 * 1024 * 1024)
+            {
+                log_w("[cp-av] iAP tunnel implausible package size %u", size);
+                return;
+            }
+            if (plain.size() - off < size)
+                break;
+            uint32_t messageType = (plain[off + 16] << 24) | (plain[off + 17] << 16) |
+                                   (plain[off + 18] << 8) | plain[off + 19];
+            Bytes iap(plain.begin() + off + 32, plain.begin() + off + size);
+            off += size;
+            if (messageType == 0x636f6d6d) // 'comm'
+                log_i("[cp-av] tunnel iAP2 msg (%zu bytes): %02x %02x %02x %02x %02x %02x",
+                      iap.size(), iap.size() > 0 ? iap[0] : 0, iap.size() > 1 ? iap[1] : 0,
+                      iap.size() > 2 ? iap[2] : 0, iap.size() > 3 ? iap[3] : 0,
+                      iap.size() > 4 ? iap[4] : 0, iap.size() > 5 ? iap[5] : 0);
+            else
+                log_i("[cp-av] tunnel package type 0x%08x (%u bytes)", messageType, size);
+        }
+        if (off)
+        {
+            plain.erase(plain.begin(), plain.begin() + off);
+            off = 0;
+        }
+    }
+    log_i("[cp-av] iAP tunnel closed");
+}
+
 // ── RTSP AV request routing ─────────────────────────────────────────────
 bool AvSession::handle(const cp_rtsp::Request &req, cp_rtsp::Response &res)
 {
@@ -582,6 +647,16 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
                 if (body.find("streams"))
                     entry.set("streamConnectionID", cp_plist::Value::integer(streamId));
                 log_i("[cp-av] SETUP audio (type %d) dataPort=%u id=%lld", type, port, (long long)streamId);
+            }
+            else if (type == STREAM_DATA)
+            {
+                // The iAP2-over-CarPlay tunnel. Key salt uses the stream "seed".
+                const int64_t seed = s.intOr("seed");
+                port = openListener(*l, "iap-tunnel", [this, seed](int fd) { tunnelLoop(fd, seed); });
+                entry.set("streamID", cp_plist::Value::integer(1));
+                entry.set("dataPort", cp_plist::Value::integer(port));
+                log_i("[cp-av] SETUP iAP tunnel (type 130) dataPort=%u seed=%lld", port,
+                      (long long)seed);
             }
             else
             {
