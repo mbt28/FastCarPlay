@@ -23,6 +23,7 @@
 
 #include <netinet/in.h>
 
+#include "cp_audio.h"
 #include "cp_rtsp.h"
 
 namespace cp_control_cipher { class ControlCipher; }
@@ -73,8 +74,9 @@ struct Sinks
     // A screen video access unit as Annex-B (00 00 00 01 start codes): first the
     // config parameter sets, then decoded frames. Ready for avcodec/cedrus.
     std::function<void(const Bytes &)> onVideo;
-    // A decoded/opaque audio payload with its CarPlay stream type.
-    std::function<void(int type, const Bytes &)> onAudio;
+    // Decoded audio: the CarPlay stream type (100/101 nav-speech, 102 media), the
+    // PCM rate + channel count, and S16 interleaved (native-endian) samples.
+    std::function<void(int type, int rate, int channels, const Bytes &pcm)> onAudio;
 };
 
 class AvSession
@@ -102,7 +104,8 @@ public:
 private:
     struct Listener
     {
-        int fd = -1;
+        int fd = -1;     // TCP listen socket, or UDP data socket (audio)
+        int ctrlFd = -1; // UDP RTCP control socket (audio only)
         uint16_t port = 0;
         std::thread thread;
     };
@@ -110,6 +113,8 @@ private:
     // Bind an ephemeral dual-stack TCP port; returns the port (0 on failure).
     uint16_t openListener(Listener &l, const char *tag,
                           std::function<void(int)> onClient);
+    // Bind an ephemeral dual-stack UDP socket into `fd`; returns the port.
+    uint16_t openUdp(int &fd);
 
     cp_rtsp::Response handleInfo(const cp_rtsp::Request &req);
     cp_rtsp::Response handleSetup(const cp_rtsp::Request &req);
@@ -125,7 +130,10 @@ private:
     // reverse-HTTP POST /command. Called only from the event-channel thread.
     void sendEventCommand(int fd, const Bytes &body);
     void screenLoop(int fd, int64_t streamId);
-    void audioLoop(int fd, int64_t streamId, int type);
+    // Audio is UDP/RTP: receive on the data socket, drain RTCP on the control
+    // socket, decrypt each packet, decode the access unit, and emit PCM.
+    void audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type, cp_audio::Codec codec,
+                   int rate, int channels, bool upmix);
     // The iAP2-over-CarPlay tunnel (stream 130): the phone continues iAP2 here
     // after it drops Bluetooth. Receive-only (our replies ride the event channel).
     void tunnelLoop(int fd, int64_t seed);

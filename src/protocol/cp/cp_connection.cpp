@@ -148,6 +148,38 @@ void CpConnection::onVideo(const Bytes &annexB)
         _state.store(PROTOCOL_STATUS_CONNECTED);
 }
 
+void CpConnection::onAudio(int type, int rate, int channels, const Bytes &pcm)
+{
+    if (pcm.empty())
+        return;
+    // The app's PcmAudio reads a format-type u32 at offset 0 (its _configTable:
+    // 4 = 48k stereo, 3/5/6/7 = 8k/16k/24k/16k mono/stereo, anything else =
+    // 44.1k stereo) and S16 interleaved PCM from offset 12.
+    auto fmtType = [](int r, int ch) -> uint32_t {
+        if (r == 8000 && ch == 1) return 3;
+        if (r == 48000 && ch == 2) return 4;
+        if (r == 16000 && ch == 1) return 5;
+        if (r == 24000 && ch == 1) return 6;
+        if (r == 16000 && ch == 2) return 7;
+        return 0; // -> PcmAudio default (44.1k stereo)
+    }(rate, channels);
+
+    auto m = Message::Payload(CMD_AUDIO_DATA, (int32_t)(12 + pcm.size()));
+    uint8_t *p = m->data();
+    if (!p)
+        return;
+    p[0] = (uint8_t)(fmtType & 0xff);
+    p[1] = (uint8_t)((fmtType >> 8) & 0xff);
+    p[2] = (uint8_t)((fmtType >> 16) & 0xff);
+    p[3] = (uint8_t)((fmtType >> 24) & 0xff);
+    std::memset(p + 4, 0, 8);
+    std::memcpy(p + 12, pcm.data(), pcm.size());
+    m->setOffset(12); // data()/length() now expose the PCM; getInt(0) still sees the type
+
+    // type 102 = buffered media (music) -> main; 100/101 = nav/speech/alert -> aux.
+    (type == 102 ? audioStreamMain : audioStreamAux).pushDiscard(std::move(m));
+}
+
 void CpConnection::onSessionConnect()
 {
     log_i("CarPlay: phone connected the :7000 control channel");
@@ -326,6 +358,7 @@ void CpConnection::start()
     cp_av::Sinks sinks;
     sinks.onVideoCodec = [this](bool hevc) { onVideoCodec(hevc); };
     sinks.onVideo = [this](const Bytes &b) { onVideo(b); };
+    sinks.onAudio = [this](int t, int r, int c, const Bytes &p) { onAudio(t, r, c, p); };
     _server.setAvSinks(sinks);
     _server.setInputSource(this); // touch/buttons the AV session forwards to the phone
     _server.setLifecycle([this] { onSessionConnect(); }, [this] { onSessionDisconnect(); });
