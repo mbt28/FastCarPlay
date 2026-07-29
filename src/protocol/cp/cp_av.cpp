@@ -15,6 +15,7 @@
 #include "cp_control_cipher.h"
 #include "cp_crypto.h"
 #include "cp_icons.h"
+#include "cp_nalu.h"
 #include "cp_plist.h"
 #include "cp_rtsp.h"
 
@@ -36,6 +37,21 @@ void capture(const char *tag, const Bytes &b)
     if (FILE *f = fopen(path, "ab"))
     {
         fwrite(b.data(), 1, b.size(), f);
+        fclose(f);
+    }
+}
+
+// Append a decoded Annex-B access unit to $FCP_CP_VIDEO_OUT (a single elementary
+// stream file) for offline decode/verify: `ffmpeg -i $FCP_CP_VIDEO_OUT out.png`.
+// No-op when the env var is unset.
+void videoOut(const Bytes &annexB)
+{
+    const char *path = getenv("FCP_CP_VIDEO_OUT");
+    if (!path || annexB.empty())
+        return;
+    if (FILE *f = fopen(path, "ab"))
+    {
+        fwrite(annexB.data(), 1, annexB.size(), f);
         fclose(f);
     }
 }
@@ -280,12 +296,40 @@ void AvSession::eventLoop(int fd)
     log_v("[cp-av] event channel closed");
 }
 
-// ── Media stream receivers (milestone A: receive + capture) ─────────────
+// ── Screen video receiver: reframe + decrypt into Annex-B ───────────────
+// The phone opens a TCP connection to the screen data port and sends a series of
+// messages, each a 128-byte header + body:
+//   bodySize = u32 LE @0, opcode = byte @4.
+//   opcode 1 (VideoConfig): the hvcC/avcC atom, in the clear.
+//   opcode 0 (VideoFrame):  ChaCha20-Poly1305 sealed with the 128-byte header as
+//                           AAD and an 8-byte LE frame counter as the nonce; the
+//                           plaintext is length-prefixed (4-byte BE) NAL units.
+//   opcode 2 (KeepAlive):   empty body; carries no payload and no nonce.
+// Both config and frames are re-emitted as Annex-B. The frame counter advances
+// only on decoded frames. Mirrors LIVI cp/stack/screenStream.ts.
 void AvSession::screenLoop(int fd, int64_t streamId)
 {
-    (void)streamId;
-    uint8_t buf[16384];
-    size_t total = 0;
+    constexpr size_t HEADER_LEN = 128;
+    constexpr uint8_t OP_VIDEO_FRAME = 0;
+    constexpr uint8_t OP_VIDEO_CONFIG = 1;
+    constexpr size_t MAX_BODY = 8 * 1024 * 1024;
+
+    // Per-stream key: HKDF-SHA512(shared, "DataStream-Salt"<id>, "…-Output-…").
+    const Bytes key = streamKey(streamId, "DataStream-Output-Encryption-Key");
+    uint64_t counter = 0;
+    bool codecReported = false;
+
+    auto emit = [&](const Bytes &annexB) {
+        if (annexB.empty())
+            return;
+        videoOut(annexB);
+        if (_sinks.onVideo)
+            _sinks.onVideo(annexB);
+    };
+
+    Bytes acc;
+    uint8_t buf[32768];
+    size_t total = 0, frames = 0, configs = 0;
     while (_running)
     {
         struct pollfd pfd{fd, POLLIN, 0};
@@ -295,9 +339,74 @@ void AvSession::screenLoop(int fd, int64_t streamId)
         ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
         if (n <= 0) break;
         total += (size_t)n;
-        capture("screen", Bytes(buf, buf + n));
+        capture("screen", Bytes(buf, buf + n)); // raw capture (FCP_CP_CAPTURE)
+        acc.insert(acc.end(), buf, buf + n);
+
+        size_t off = 0;
+        while (acc.size() - off >= HEADER_LEN)
+        {
+            const uint8_t *hdr = acc.data() + off;
+            const uint32_t bodySize =
+                hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
+            if (bodySize > MAX_BODY)
+            {
+                log_w("[cp-av] screen implausible bodySize %u -- dropping stream", bodySize);
+                return;
+            }
+            if (acc.size() - off < HEADER_LEN + bodySize)
+                break; // message not fully received yet
+            const uint8_t opcode = hdr[4];
+            const uint8_t *body = hdr + HEADER_LEN;
+
+            if (opcode == OP_VIDEO_CONFIG)
+            {
+                bool hevc = true;
+                Bytes annexB = cp_nalu::configToAnnexB(body, bodySize, hevc);
+                if (!codecReported)
+                {
+                    codecReported = true;
+                    log_i("[cp-av] screen codec=%s (config %uB -> %zuB param-sets)",
+                          hevc ? "HEVC/h265" : "h264", bodySize, annexB.size());
+                    if (_sinks.onVideoCodec)
+                        _sinks.onVideoCodec(hevc);
+                }
+                emit(annexB);
+                configs++;
+            }
+            else if (opcode == OP_VIDEO_FRAME)
+            {
+                Bytes plain;
+                if (bodySize >= 16)
+                {
+                    const Bytes ctAndTag(body, body + bodySize);
+                    const Bytes aad(hdr, hdr + HEADER_LEN);
+                    if (!cp_crypto::chachaOpen(key, cp_crypto::nonce64(counter), ctAndTag, aad, plain))
+                    {
+                        log_w("[cp-av] screen frame %llu decrypt FAILED (bodySize=%u) -- "
+                              "key/nonce mismatch, stream unrecoverable",
+                              (unsigned long long)counter, bodySize);
+                        return; // AEAD desync: the counter can no longer align
+                    }
+                    counter++;
+                }
+                else
+                {
+                    plain.assign(body, body + bodySize);
+                }
+                Bytes annexB = cp_nalu::avccFrameToAnnexB(plain.data(), plain.size(), 4);
+                if (frames == 0)
+                    log_i("[cp-av] screen first frame decrypted+reframed (%zuB annexB)", annexB.size());
+                emit(annexB);
+                frames++;
+            }
+            // opcode 2 (keepalive) & others: empty body, no nonce -- skip.
+
+            off += HEADER_LEN + bodySize;
+        }
+        if (off)
+            acc.erase(acc.begin(), acc.begin() + off);
     }
-    log_i("[cp-av] screen stream closed (%zu bytes received)", total);
+    log_i("[cp-av] screen stream closed (%zu bytes, %zu frames, %zu config)", total, frames, configs);
 }
 
 void AvSession::audioLoop(int fd, int64_t streamId, int type)

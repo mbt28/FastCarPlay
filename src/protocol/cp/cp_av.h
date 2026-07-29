@@ -49,11 +49,16 @@ struct Config
     bool hevc = true; // iOS 26 negotiates HEVC for wireless CarPlay
 };
 
-// Callbacks for received media (set before the streams connect). Milestone A
-// leaves these optional; later milestones feed the decoder/audio.
+// Callbacks for received media (set before the streams connect). Optional --
+// unset sinks are simply not called (the daemon runs headless; the F1C app wires
+// these to the decoder/display).
 struct Sinks
 {
-    // A complete video access unit (H.264 Annex-B, phone -> us).
+    // The negotiated screen codec, reported once before the first access unit
+    // (the phone may pick H.264 even when H.265 is offered). true = HEVC/H.265.
+    std::function<void(bool hevc)> onVideoCodec;
+    // A screen video access unit as Annex-B (00 00 00 01 start codes): first the
+    // config parameter sets, then decoded frames. Ready for avcodec/cedrus.
     std::function<void(const Bytes &)> onVideo;
     // A decoded/opaque audio payload with its CarPlay stream type.
     std::function<void(int type, const Bytes &)> onAudio;
