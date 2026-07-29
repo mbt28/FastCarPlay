@@ -60,6 +60,7 @@ public:
 private:
     void onVideoCodec(bool hevc);
     void onVideo(const std::vector<uint8_t> &annexB);
+    void onAudio(int type, int rate, int channels, const std::vector<uint8_t> &pcm);
     void onSessionConnect();
     void onSessionDisconnect();
 

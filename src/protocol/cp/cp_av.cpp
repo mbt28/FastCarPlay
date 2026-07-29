@@ -100,7 +100,12 @@ AvSession::~AvSession() { stop(); }
 
 Bytes AvSession::streamKey(int64_t streamId, const char *info)
 {
-    return cp_crypto::hkdfSha512(_shared, "DataStream-Salt" + std::to_string(streamId), info, 32);
+    // The streamConnectionID is a 64-bit id that is often >= 2^63 (appears
+    // negative as int64). The phone renders it UNSIGNED in the salt, so we must
+    // too -- a signed render gives the wrong key and every frame fails to
+    // decrypt. (The iAP tunnel already casts; this must match it.)
+    return cp_crypto::hkdfSha512(_shared, "DataStream-Salt" + std::to_string((uint64_t)streamId),
+                                 info, 32);
 }
 
 uint16_t AvSession::openListener(Listener &l, const char *tag, std::function<void(int)> onClient)
@@ -435,25 +440,90 @@ void AvSession::screenLoop(int fd, int64_t streamId)
     log_i("[cp-av] screen stream closed (%zu bytes, %zu frames, %zu config)", total, frames, configs);
 }
 
-void AvSession::audioLoop(int fd, int64_t streamId, int type)
+uint16_t AvSession::openUdp(int &fd)
 {
-    (void)streamId;
-    uint8_t buf[8192];
-    size_t total = 0;
+    fd = ::socket(AF_INET6, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return 0;
+    int no = 0;
+    ::setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
+    struct sockaddr_in6 addr{};
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_any;
+    if (::bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+    {
+        ::close(fd);
+        fd = -1;
+        return 0;
+    }
+    socklen_t len = sizeof(addr);
+    ::getsockname(fd, (struct sockaddr *)&addr, &len);
+    return ntohs(addr.sin6_port);
+}
+
+// The phone sends RTP/UDP audio packets to the data port: [12B RTP header]
+// [ciphertext][16B tag][8B nonce LE], ChaCha20-Poly1305 sealed with the RTP
+// timestamp+SSRC (header bytes 4..12) as AAD and the per-stream DataStream output
+// key. We decrypt each access unit, decode it (AAC-LC/OPUS -> PCM, or LPCM
+// passthrough), and emit S16 interleaved PCM. Mirrors LIVI cp/stack/audioStream.ts.
+void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
+                          cp_audio::Codec codec, int rate, int channels, bool upmix)
+{
+    const Bytes key = streamKey(streamId, "DataStream-Output-Encryption-Key");
+    cp_audio::Decoder dec;
+    if (!dec.init(codec, rate, channels, upmix))
+        log_w("[cp-av] audio %d decoder init failed -- draining only", type);
+    log_i("[cp-av] audio %d loop (codec=%d %dHz %dch -> %dHz %dch)", type, (int)codec, rate, channels,
+          dec.outRate(), dec.outChannels());
+
+    uint8_t buf[4096];
+    std::vector<int16_t> pcm;
+    size_t totalBytes = 0, packets = 0, decFails = 0;
     while (_running)
     {
-        struct pollfd pfd{fd, POLLIN, 0};
-        int r = ::poll(&pfd, 1, 300);
+        struct pollfd pfds[2] = {{dataFd, POLLIN, 0}, {ctrlFd, POLLIN, 0}};
+        int r = ::poll(pfds, 2, 300);
         if (r < 0) break;
         if (r == 0) continue;
-        ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-        if (n <= 0) break;
-        total += (size_t)n;
-        char tag[32];
-        snprintf(tag, sizeof(tag), "audio-%d", type);
-        capture(tag, Bytes(buf, buf + n));
+        if (pfds[1].revents & POLLIN)
+            ::recvfrom(ctrlFd, buf, sizeof(buf), 0, nullptr, nullptr); // drain RTCP
+        if (!(pfds[0].revents & POLLIN))
+            continue;
+        ssize_t n = ::recvfrom(dataFd, buf, sizeof(buf), 0, nullptr, nullptr);
+        if (n < 12 + 24) // RTP header + tail (16B tag + 8B nonce)
+            continue;
+        const size_t len = (size_t)n;
+
+        // AAD = RTP timestamp+SSRC (bytes 4..12); nonce = 4 zero + last 8 bytes;
+        // ciphertext+tag = bytes 12 .. len-8.
+        const Bytes aad(buf + 4, buf + 12);
+        Bytes nonce(12, 0);
+        std::memcpy(nonce.data() + 4, buf + len - 8, 8);
+        const Bytes ctTag(buf + 12, buf + len - 8);
+        Bytes au;
+        if (!cp_crypto::chachaOpen(key, nonce, ctTag, aad, au))
+        {
+            if (decFails++ == 0) // log once, not per packet
+                log_w("[cp-av] audio %d decrypt failed (key/nonce mismatch)", type);
+            continue;
+        }
+
+        pcm.clear();
+        dec.decode(au.data(), (int)au.size(), pcm);
+        if (pcm.empty())
+            continue;
+        totalBytes += pcm.size() * 2;
+        if (packets++ == 0)
+            log_i("[cp-av] audio %d first packet -> %zu samples @ %dHz %dch", type, pcm.size(),
+                  dec.outRate(), dec.outChannels());
+        if (_sinks.onAudio)
+        {
+            const uint8_t *p = (const uint8_t *)pcm.data();
+            _sinks.onAudio(type, dec.outRate(), dec.outChannels(), Bytes(p, p + pcm.size() * 2));
+        }
     }
-    log_i("[cp-av] audio stream %d closed (%zu bytes received)", type, total);
+    log_i("[cp-av] audio %d closed (%zu PCM bytes, %zu packets, %zu decrypt fails)", type, totalBytes,
+          packets, decFails);
 }
 
 // ── iAP2-over-CarPlay tunnel (stream 130) ───────────────────────────────
@@ -776,12 +846,33 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
             }
             else if (type == STREAM_MAIN_AUDIO || type == STREAM_ALT_AUDIO || type == STREAM_MAIN_HIGH_AUDIO)
             {
-                port = openListener(*l, "audio", [this, streamId, type](int fd) { audioLoop(fd, streamId, type); });
-                entry.set("dataPort", cp_plist::Value::integer(port));
-                // Echo the phone's streamConnectionID back or it rejects the stream.
-                if (body.find("streams"))
-                    entry.set("streamConnectionID", cp_plist::Value::integer(streamId));
-                log_i("[cp-av] SETUP audio (type %d) dataPort=%u id=%lld", type, port, (long long)streamId);
+                // Pick the codec + PCM shape from the format the phone negotiated.
+                const int64_t fmt = s.intOr("audioFormat");
+                constexpr int64_t AAC44 = 0x400000, AAC48 = 0x800000, OPUS = 0x70000000;
+                cp_audio::Codec codec = cp_audio::Codec::Pcm;
+                int arate = 44100, achan = 2;
+                bool upmix = false;
+                if (fmt & (AAC44 | AAC48)) { codec = cp_audio::Codec::AacLc; arate = (fmt & AAC48) ? 48000 : 44100; achan = 2; }
+                else if (fmt & OPUS)       { codec = cp_audio::Codec::Opus;  arate = 48000; achan = 1; upmix = true; }
+
+                // Audio is UDP/RTP: bind a data + control (RTCP) port.
+                uint16_t dataPort = openUdp(l->fd);
+                uint16_t ctrlPort = openUdp(l->ctrlFd);
+                if (!dataPort || !ctrlPort)
+                {
+                    log_w("[cp-av] SETUP audio %d: UDP bind failed", type);
+                    continue;
+                }
+                const int dataFd = l->fd, ctrlFd = l->ctrlFd;
+                l->thread = std::thread([this, dataFd, ctrlFd, streamId, type, codec, arate, achan, upmix] {
+                    audioLoop(dataFd, ctrlFd, streamId, type, codec, arate, achan, upmix);
+                });
+                port = dataPort;
+                entry.set("dataPort", cp_plist::Value::integer(dataPort));
+                entry.set("controlPort", cp_plist::Value::integer(ctrlPort));
+                entry.set("streamConnectionID", cp_plist::Value::integer(streamId));
+                log_i("[cp-av] SETUP audio (type %d) fmt=0x%llx codec=%d dataPort=%u ctrlPort=%u id=%lld",
+                      type, (unsigned long long)fmt, (int)codec, dataPort, ctrlPort, (long long)streamId);
             }
             else if (type == STREAM_DATA)
             {
@@ -881,6 +972,7 @@ void AvSession::stop()
         return;
     auto shut = [](Listener &l) {
         if (l.fd >= 0) { ::shutdown(l.fd, SHUT_RDWR); ::close(l.fd); l.fd = -1; }
+        if (l.ctrlFd >= 0) { ::close(l.ctrlFd); l.ctrlFd = -1; }
         if (l.thread.joinable()) l.thread.join();
     };
     shut(_event);
