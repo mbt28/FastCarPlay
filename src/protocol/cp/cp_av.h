@@ -46,7 +46,7 @@ struct Config
     int screenWidthMm = 154;
     int screenHeightMm = 90;
     int fps = 30;
-    bool hevc = false; // request H.264 (our decoder path), not HEVC
+    bool hevc = true; // iOS 26 negotiates HEVC for wireless CarPlay
 };
 
 // Callbacks for received media (set before the streams connect). Milestone A
