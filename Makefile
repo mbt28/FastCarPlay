@@ -63,6 +63,15 @@ CXXCOMMON += -DUSE_AA_WIRELESS $(shell $(PKG_CONFIG) --cflags dbus-1)
 LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1) -lbluetooth
 endif
 
+# Wireless CarPlay (protocol = carplay-wireless): the iPhone bootstrap over
+# Bluetooth (BlueZ/dbus) + Wi-Fi AP handoff, then the :7000 control server feeds
+# decoded HEVC screen video into the app. Enable USE_CP_WIRELESS=1 (needs dbus +
+# bluez, and at runtime hostapd + dnsmasq + the MFi auth chip on i2c).
+ifeq ($(USE_CP_WIRELESS),1)
+CXXCOMMON += -DUSE_CP_WIRELESS $(shell $(PKG_CONFIG) --cflags dbus-1)
+LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1)
+endif
+
 # On-device UI: LVGL 9.3.0 (MIT), vendored source in third_party/lvgl (see
 # its VENDORING.md), compiled in. Screens live in src/ui. Enable USE_LVGL=1.
 # The generated code is regenerated from ui.eez-project -- never hand-edited.

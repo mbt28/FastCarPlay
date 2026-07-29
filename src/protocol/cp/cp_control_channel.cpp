@@ -47,6 +47,10 @@ cp_rtsp::Response ControlChannel::route(const cp_rtsp::Request &req)
 {
     cp_rtsp::Response res;
 
+    // Trace every request so the flow can be compared against a known-good peer.
+    log_i("[cp] RTSP %s %s (body %zuB)%s", req.method.c_str(), req.path.c_str(), req.body.size(),
+          _cipher ? " [enc]" : "");
+
     if (pathIs(req.path, "/pair-setup"))
     {
         res.body = _setup.handle(req.body);
@@ -76,6 +80,8 @@ cp_rtsp::Response ControlChannel::route(const cp_rtsp::Request &req)
         res.headers["Content-Type"] = "application/octet-stream";
         if (res.body.empty())
             res.status = 400;
+        log_i("[cp] /auth-setup -> %zu-byte response%s", res.body.size(),
+              res.body.empty() ? " (FAILED)" : "");
         return res;
     }
 
@@ -86,6 +92,7 @@ cp_rtsp::Response ControlChannel::route(const cp_rtsp::Request &req)
     if (!_av && _verify.verified())
     {
         _av = std::make_unique<cp_av::AvSession>(_verify.sharedSecret(), cp_av::Config{});
+        _av->setSinks(_avSinks);
         if (_havePeer)
             _av->setPeer(_peer);
     }

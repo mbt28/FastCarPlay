@@ -11,6 +11,9 @@
 #ifdef USE_AA_WIRELESS
 #include "protocol/aa/aa_wireless.h"
 #endif
+#ifdef USE_CP_WIRELESS
+#include "protocol/cp/cp_connection.h"
+#endif
 #include "pipe_listener.h"
 #include "renderer.h"
 

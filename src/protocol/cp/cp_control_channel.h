@@ -41,6 +41,10 @@ public:
     // The controller's address, forwarded to the AV session for UDP timing.
     void setPeer(const struct sockaddr_in6 &peer) { _peer = peer; _havePeer = true; }
 
+    // Media sinks forwarded to the AV session when it is created (after
+    // pair-verify). Optional -- unset sinks are simply not called.
+    void setAvSinks(const cp_av::Sinks &sinks) { _avSinks = sinks; }
+
     bool paired() const { return _verify.verified(); }
     bool encrypted() const { return _cipher != nullptr; }
 
@@ -52,6 +56,7 @@ private:
     cp_pair_verify::PairVerify _verify;
     std::unique_ptr<cp_control_cipher::ControlCipher> _cipher;
     std::unique_ptr<cp_av::AvSession> _av; // the AV layer, created after pairing
+    cp_av::Sinks _avSinks;                 // media sinks handed to _av on creation
     struct sockaddr_in6 _peer{};
     bool _havePeer = false;
     Bytes _cipherIn;  // ciphertext awaiting whole frames (encrypted mode)
