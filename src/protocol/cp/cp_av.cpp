@@ -63,6 +63,13 @@ void putNtp(uint8_t *p, uint64_t v)
     for (int i = 0; i < 8; i++)
         p[i] = (uint8_t)(v >> (8 * (7 - i)));
 }
+uint64_t getNtp(const uint8_t *p)
+{
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++)
+        v = (v << 8) | p[i];
+    return v;
+}
 constexpr uint8_t PT_REQUEST = 210;
 constexpr uint8_t PT_RESPONSE = 211;
 } // namespace
@@ -149,19 +156,24 @@ uint16_t AvSession::startTiming(uint16_t phoneTimingPort)
 
 void AvSession::timingLoop(uint16_t phoneTimingPort)
 {
-    // Where to send our requests: the phone's address (from the control
-    // connection) on its advertised timing port, same link scope.
     struct sockaddr_in6 dst = _peer;
     dst.sin6_port = htons(phoneTimingPort);
 
+    // Our clock in the phone's NTP domain (raw wall-clock steered by the measured
+    // offset). The phone is the timing reference; if we report a wildly off clock
+    // it tears the session down, so we sync ours to it (as LIVI does).
+    auto synced = [&]() -> uint64_t { return (uint64_t)((int64_t)ntp64Now() + _clockOffsetNtp); };
+
+    uint64_t pendingT1 = 0;
     auto sendRequest = [&] {
         if (!_havePeer || !phoneTimingPort)
             return;
         uint8_t pkt[32] = {0};
         pkt[0] = 0x80;
         pkt[1] = PT_REQUEST;
-        pkt[2] = 0; pkt[3] = 7;               // length in 32-bit words - 1
-        putNtp(pkt + 24, ntp64Now());          // our transmit time (T1)
+        pkt[2] = 0; pkt[3] = 7;
+        pendingT1 = synced();
+        putNtp(pkt + 24, pendingT1); // our transmit time (T1)
         ::sendto(_timingFd, pkt, sizeof(pkt), 0, (struct sockaddr *)&dst, sizeof(dst));
     };
 
@@ -179,23 +191,33 @@ void AvSession::timingLoop(uint16_t phoneTimingPort)
             struct sockaddr_in6 from{};
             socklen_t fl = sizeof(from);
             ssize_t n = ::recvfrom(_timingFd, msg, sizeof(msg), 0, (struct sockaddr *)&from, &fl);
-            log_i("[cp-av] timing rx %zd bytes type=%d from the phone", n, n >= 2 ? msg[1] : -1);
             if (n >= 32 && msg[1] == PT_REQUEST)
             {
-                // The phone syncs to us: echo its transmit as originate, stamp T2/T3.
+                // The phone syncs to us: echo its transmit, stamp our T2/T3 in the
+                // synced domain so it measures ~zero offset against us.
                 uint8_t resp[32] = {0};
                 resp[0] = 0x80;
                 resp[1] = PT_RESPONSE;
                 resp[2] = 0; resp[3] = 7;
-                std::memcpy(resp + 8, msg + 24, 8);   // request transmit -> originate
-                putNtp(resp + 16, ntp64Now());        // T2 receive
-                putNtp(resp + 24, ntp64Now());        // T3 transmit
+                std::memcpy(resp + 8, msg + 24, 8);
+                putNtp(resp + 16, synced());
+                putNtp(resp + 24, synced());
                 ::sendto(_timingFd, resp, sizeof(resp), 0, (struct sockaddr *)&from, fl);
             }
-            // PT_RESPONSE (our request's answer): bring-up ignores the offset math.
+            else if (n >= 32 && msg[1] == PT_RESPONSE)
+            {
+                // Answer to our request -> steer our clock onto the phone's.
+                uint64_t t1 = getNtp(msg + 8), t2 = getNtp(msg + 16), t3 = getNtp(msg + 24);
+                uint64_t t4 = synced();
+                if (t1 == pendingT1)
+                {
+                    int64_t offset = ((int64_t)(t2 - t1) + (int64_t)(t3 - t4)) / 2;
+                    _clockOffsetNtp += offset;
+                    pendingT1 = 0;
+                }
+            }
         }
 
-        // Drive a request roughly every second.
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
         int64_t nowMs = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
