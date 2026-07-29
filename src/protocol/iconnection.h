@@ -1,6 +1,11 @@
 #ifndef SRC_PROTOCOL_ICONNECTION
 #define SRC_PROTOCOL_ICONNECTION
 
+extern "C"
+{
+#include <libavcodec/avcodec.h> // AVCodecID
+}
+
 #include <atomic>
 #include <memory>
 #include <string>
@@ -40,6 +45,11 @@ public:
     virtual void start() = 0;
     virtual void stop() = 0;
     virtual const std::string status() const = 0;
+
+    // The codec of the frames fed into videoStream. Carlinkit and Android Auto
+    // are H.264; wireless CarPlay negotiates HEVC. The decoder is started with
+    // this, so a backend that streams H.265 must override it.
+    virtual AVCodecID videoCodec() const { return AV_CODEC_ID_H264; }
 
     // True while the phone is actually projecting. A session can be connected
     // but backgrounded -- the user pressed exit, the phone handed the screen

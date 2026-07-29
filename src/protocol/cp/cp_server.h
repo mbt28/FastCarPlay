@@ -10,11 +10,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <thread>
 
 #include <netinet/in.h>
 
 #include "cp_auth_setup.h"
+#include "cp_av.h"
 
 namespace cp_server
 {
@@ -27,6 +29,17 @@ public:
     bool start(uint16_t port, cp_auth_setup::MfiSigner *signer = nullptr);
     void stop();
 
+    // Media sinks forwarded to each connection's AV session (decoded video /
+    // audio). Set before start(); unset sinks are simply not called.
+    void setAvSinks(const cp_av::Sinks &sinks) { _avSinks = sinks; }
+    // Called (on the accept thread) when a control connection opens and closes,
+    // so a backend can track the session lifecycle for its state machine.
+    void setLifecycle(std::function<void()> onConnect, std::function<void()> onDisconnect)
+    {
+        _onConnect = std::move(onConnect);
+        _onDisconnect = std::move(onDisconnect);
+    }
+
 private:
     void acceptLoop();
     void serveConnection(int clientFd, const struct sockaddr_in6 &peer);
@@ -34,6 +47,9 @@ private:
     int _listenFd = -1;
     uint16_t _port = 7000;
     cp_auth_setup::MfiSigner *_signer = nullptr;
+    cp_av::Sinks _avSinks;
+    std::function<void()> _onConnect;
+    std::function<void()> _onDisconnect;
     std::atomic<bool> _active{false};
     std::thread _thread;
 };

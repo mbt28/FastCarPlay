@@ -85,9 +85,14 @@ void Server::serveConnection(int clientFd, const struct sockaddr_in6 &peer)
 {
     cp_control_channel::ControlChannel channel(_signer);
     channel.setPeer(peer);
+    channel.setAvSinks(_avSinks);
     uint8_t buf[8192];
 
-    while (_active)
+    if (_onConnect)
+        _onConnect();
+
+    bool sendFailed = false;
+    while (_active && !sendFailed)
     {
         struct pollfd pfd{clientFd, POLLIN, 0};
         const int r = poll(&pfd, 1, 500);
@@ -106,10 +111,16 @@ void Server::serveConnection(int clientFd, const struct sockaddr_in6 &peer)
         {
             ssize_t w = send(clientFd, out.data() + off, out.size() - off, 0);
             if (w <= 0)
-                return;
+            {
+                sendFailed = true;
+                break;
+            }
             off += (size_t)w;
         }
     }
+
+    if (_onDisconnect)
+        _onDisconnect();
 }
 
 void Server::stop()

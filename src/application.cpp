@@ -673,6 +673,13 @@ std::unique_ptr<IConnection> Application::makeConnection()
     if (Settings::aaWireless())
         log_w("protocol = aa-wireless needs a USE_AA_WIRELESS build, using carlinkit");
 #endif
+#ifdef USE_CP_WIRELESS
+    if (Settings::carplayWireless())
+        return std::make_unique<CpConnection>();
+#else
+    if (Settings::carplayWireless())
+        log_w("protocol = carplay-wireless needs a USE_CP_WIRELESS build, using carlinkit");
+#endif
     if (Settings::aaUsb())
         return std::make_unique<AaConnection>();
     return std::make_unique<Connection>();
@@ -688,7 +695,7 @@ void Application::loopHeadless()
     std::unique_ptr<IDecoder> decoder = makeDecoder();
     PcmAudio audioMain("main"), audioAux("aux");
 
-    decoder->start(&protocol.videoStream, AV_CODEC_ID_H264);
+    decoder->start(&protocol.videoStream, protocol.videoCodec());
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
@@ -774,7 +781,7 @@ void Application::loopDrm()
     std::unique_ptr<IDecoder> decoder = makeDecoder();
     PcmAudio audioMain("main"), audioAux("aux");
 
-    decoder->start(&protocol.videoStream, AV_CODEC_ID_H264);
+    decoder->start(&protocol.videoStream, protocol.videoCodec());
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
@@ -984,7 +991,7 @@ void Application::loop()
     if (Settings::keyPipe.value.length() > 2)
         _keyListener = new PipeListener(Settings::keyPipe.value.c_str());
 
-    decoder->start(&protocol.videoStream, AV_CODEC_ID_H264);
+    decoder->start(&protocol.videoStream, protocol.videoCodec());
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();

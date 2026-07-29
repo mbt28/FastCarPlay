@@ -39,6 +39,13 @@ public:
     static inline Setting<std::string> apIp{"wifi-ap-ip", "192.168.53.1"};
     static inline Setting<std::string> btName{"bluetooth-name", "FastCarPlay"};
     static inline bool aaWireless() { return protocol.value == "aa-wireless"; }
+    // Wireless CarPlay (protocol = carplay-wireless): same Wi-Fi AP + Bluetooth
+    // bootstrap as aa-wireless, but for the iPhone. Reuses wifi-* / wifi-ap-ip /
+    // wifi-channel above (use a 5GHz channel, e.g. 36 -- Apple requires 5GHz).
+    // The MFi 3.0 auth coprocessor sits on this i2c bus/address.
+    static inline Setting<std::string> mfiI2cBus{"mfi-i2c-bus", "/dev/i2c-1"};
+    static inline Setting<int> mfiI2cAddr{"mfi-i2c-addr", 0x10};
+    static inline bool carplayWireless() { return protocol.value == "carplay-wireless"; }
     // ms to wait for the phone to re-enumerate in accessory mode after the
     // AOAP switch (first connections show a consent dialog on the phone).
     static inline Setting<int> aaAccessoryTimeout{"aa-accessory-timeout", 5000};
