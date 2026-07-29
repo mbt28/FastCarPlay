@@ -16,12 +16,47 @@
 
 #include "cp_carplay_msg.h"
 #include "cp_crypto.h"
+#include "cp_hid.h"
 #include "cp_identity.h"
+#include "cp_plist.h"
 
 using Bytes = std::vector<uint8_t>;
 
 namespace
 {
+// Must match the main display uuid advertised in cp_av handleInfo.
+constexpr const char *MAIN_DISPLAY_UUID = "b7e6c5a0-1111-4000-8000-000000000001";
+
+// Event-channel command bodies (binary plists) the phone understands.
+Bytes hidCommand(const char *uuid, const Bytes &report)
+{
+    cp_plist::Value m = cp_plist::Value::map();
+    m.set("type", cp_plist::Value::str("hidSendReport"));
+    m.set("uuid", cp_plist::Value::str(uuid));
+    m.set("hidReport", cp_plist::Value::bytes(report));
+    return cp_plist::encode(m);
+}
+
+Bytes siriCommand(int action) // 2 = button down, 3 = button up (a tap = down+up)
+{
+    cp_plist::Value params = cp_plist::Value::map();
+    params.set("siriAction", cp_plist::Value::integer(action));
+    cp_plist::Value m = cp_plist::Value::map();
+    m.set("type", cp_plist::Value::str("requestSiri"));
+    m.set("params", params);
+    return cp_plist::encode(m);
+}
+
+Bytes forceKeyFrameCommand()
+{
+    cp_plist::Value params = cp_plist::Value::map();
+    params.set("uuid", cp_plist::Value::str(MAIN_DISPLAY_UUID));
+    cp_plist::Value m = cp_plist::Value::map();
+    m.set("type", cp_plist::Value::str("forceKeyFrame"));
+    m.set("params", params);
+    return cp_plist::encode(m);
+}
+
 // An MfiSigner backed by the i2c auth coprocessor (mirrors the daemon's).
 class ChipSigner : public cp_auth_setup::MfiSigner
 {
@@ -116,6 +151,7 @@ void CpConnection::onVideo(const Bytes &annexB)
 void CpConnection::onSessionConnect()
 {
     log_i("CarPlay: phone connected the :7000 control channel");
+    clearInput(); // drop anything stale from a previous session
     if (_state.load() != PROTOCOL_STATUS_CONNECTED)
         _state.store(PROTOCOL_STATUS_ONLINE);
 }
@@ -123,7 +159,130 @@ void CpConnection::onSessionConnect()
 void CpConnection::onSessionDisconnect()
 {
     log_i("CarPlay: control channel closed");
+    clearInput();
     _state.store(PROTOCOL_STATUS_LINKING); // back to waiting for the phone
+}
+
+// ── Input: app writeQueue -> CarPlay event-channel commands ─────────────
+bool CpConnection::nextCommand(Bytes &body)
+{
+    std::lock_guard<std::mutex> lk(_inputMutex);
+    if (_inputQueue.empty())
+        return false;
+    body = std::move(_inputQueue.front());
+    _inputQueue.pop_front();
+    return true;
+}
+
+void CpConnection::enqueueCommand(Bytes body)
+{
+    if (body.empty())
+        return;
+    std::lock_guard<std::mutex> lk(_inputMutex);
+    if (_inputQueue.size() >= 256)
+        _inputQueue.pop_front(); // cap: drop the oldest rather than grow unbounded
+    _inputQueue.push_back(std::move(body));
+}
+
+void CpConnection::clearInput()
+{
+    std::lock_guard<std::mutex> lk(_inputMutex);
+    _inputQueue.clear();
+}
+
+void CpConnection::handleInput(const Message &m)
+{
+    // The screen we advertise in /info is 800x480 (cp_av::Config default); touch
+    // coordinates must be in that pixel space.
+    const int W = cp_av::Config{}.screenWidth;
+    const int H = cp_av::Config{}.screenHeight;
+    auto clampPx = [](int v, int max) { return v < 0 ? 0 : (v > max ? max : v); };
+
+    switch (m.type())
+    {
+    case CMD_TOUCH:
+    {
+        // action 14=down, 15=move, 16=up; x/y are normalised * 10000.
+        const int action = m.getInt(0);
+        const int px = clampPx(m.getInt(4) * W / 10000, W);
+        const int py = clampPx(m.getInt(8) * H / 10000, H);
+        const bool down = (action == 14 || action == 15);
+        if (action != 15) // log taps (down/up), not every move
+            log_i("[cp-in] touch %s px=%d py=%d", action == 14 ? "down" : "up", px, py);
+        enqueueCommand(hidCommand(cp_hid::TOUCH_UUID, cp_hid::touchReport(px, py, down)));
+        break;
+    }
+    case CMD_MULTI_TOUCH:
+    {
+        // N contacts, 16 bytes each: float x@0, float y@4, u32 state@8, u32 id@12.
+        std::vector<cp_hid::Contact> contacts;
+        const uint8_t *d = m.data();
+        const int n = d ? m.length() / 16 : 0;
+        for (int i = 0; i < n && (int)contacts.size() < cp_hid::TOUCH_CONTACTS; i++)
+        {
+            const uint8_t *p = d + i * 16;
+            float fx = 0, fy = 0;
+            uint32_t state = 0;
+            std::memcpy(&fx, p, 4);
+            std::memcpy(&fy, p + 4, 4);
+            std::memcpy(&state, p + 8, 4);
+            const int px = clampPx((int)(fx * W), W);
+            const int py = clampPx((int)(fy * H), H);
+            contacts.push_back({(int)contacts.size(), px, py, state != MT_ACTION_UP});
+        }
+        enqueueCommand(hidCommand(cp_hid::TOUCH_UUID, cp_hid::touchReport(contacts)));
+        break;
+    }
+    case CMD_CONTROL:
+    {
+        const int btn = m.getInt(0);
+        log_i("[cp-in] control btn=%d", btn);
+        auto media = [&](int idx) {
+            enqueueCommand(hidCommand(cp_hid::MEDIA_UUID, cp_hid::mediaReport(idx)));
+            enqueueCommand(hidCommand(cp_hid::MEDIA_UUID, cp_hid::mediaReport(cp_hid::MEDIA_NONE)));
+        };
+        auto knobTap = [&](bool home, bool back) {
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, home, back)));
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false)));
+        };
+        switch (btn)
+        {
+        case BTN_HOME: knobTap(true, false); break;
+        case BTN_BACK: knobTap(false, true); break;
+        case BTN_SELECT_DOWN:
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(true, false, false)));
+            break;
+        case BTN_SELECT_UP:
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false)));
+            break;
+        case BTN_PLAY: media(cp_hid::MEDIA_PLAY); break;
+        case BTN_PAUSE: media(cp_hid::MEDIA_PAUSE); break;
+        case BTN_203: media(cp_hid::MEDIA_PLAY_PAUSE); break;
+        case BTN_NEXT_TRACK: media(cp_hid::MEDIA_NEXT); break;
+        case BTN_PREVIOUS_TRACK: media(cp_hid::MEDIA_PREV); break;
+        case BTN_SIRI: // a tap: button down then up
+            enqueueCommand(siriCommand(2));
+            enqueueCommand(siriCommand(3));
+            break;
+        case BTN_SCREEN_REFRESH: enqueueCommand(forceKeyFrameCommand()); break;
+        default: break; // dpad/others: no CarPlay HID mapping yet
+        }
+        break;
+    }
+    default: break; // CMD_HEARTBEAT etc. -- nothing to forward
+    }
+}
+
+void CpConnection::writerLoop()
+{
+    while (_active.load())
+    {
+        if (!writeQueue.waitFor(_active, 200))
+            break; // _active cleared
+        std::unique_ptr<Message> m;
+        while ((m = writeQueue.pop()))
+            handleInput(*m);
+    }
 }
 
 void CpConnection::start()
@@ -131,6 +290,7 @@ void CpConnection::start()
     if (_started)
         return;
     _started = true;
+    _active.store(true);
 
     const cp_identity::Identity &id = cp_identity::loadOrCreateIdentity();
 
@@ -167,6 +327,7 @@ void CpConnection::start()
     sinks.onVideoCodec = [this](bool hevc) { onVideoCodec(hevc); };
     sinks.onVideo = [this](const Bytes &b) { onVideo(b); };
     _server.setAvSinks(sinks);
+    _server.setInputSource(this); // touch/buttons the AV session forwards to the phone
     _server.setLifecycle([this] { onSessionConnect(); }, [this] { onSessionDisconnect(); });
 
     cp_mdns::Config mdns;
@@ -211,6 +372,7 @@ void CpConnection::start()
         return;
     }
 
+    _writer = std::thread([this] { writerLoop(); }); // app writeQueue -> HID over event channel
     _state.store(PROTOCOL_STATUS_LINKING);
     log_i("CarPlay wireless ready: %s, AP %s ch%d on %s (fe80=%s), pair the iPhone then pick it in "
           "Settings > General > CarPlay",
@@ -222,6 +384,13 @@ void CpConnection::stop()
 {
     if (!_started)
         return;
+    // Stop the writer first (no more producing), then the server (its stop joins
+    // the accept thread, so the AV session's event thread -- the only caller of
+    // nextCommand -- is finished before we return and can be destroyed).
+    _active.store(false);
+    writeQueue.notify(); // wake the writer out of waitFor
+    if (_writer.joinable())
+        _writer.join();
     _bt.stop();
     _server.stop();
     _mdns.stop();

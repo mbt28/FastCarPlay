@@ -49,6 +49,19 @@ struct Config
     bool hevc = true; // iOS 26 negotiates HEVC for wireless CarPlay
 };
 
+// A source of outbound event-channel commands (touch/button HID reports, etc.)
+// the accessory sends to the phone. The AV session pulls from it on the event
+// channel's own thread and POSTs each body, so the event cipher stays
+// single-threaded. The consumer (a connection backend) builds the binary-plist
+// bodies (e.g. {type:'hidSendReport', uuid, hidReport}).
+struct InputSource
+{
+    virtual ~InputSource() = default;
+    // Pop the next pending command body (a binary plist) to POST to the phone,
+    // or return false if none is queued. Called on the event-channel thread.
+    virtual bool nextCommand(std::vector<uint8_t> &body) = 0;
+};
+
 // Callbacks for received media (set before the streams connect). Optional --
 // unset sinks are simply not called (the daemon runs headless; the F1C app wires
 // these to the decoder/display).
@@ -71,6 +84,10 @@ public:
     ~AvSession();
 
     void setSinks(const Sinks &sinks) { _sinks = sinks; }
+
+    // Outbound input (touch/buttons) to forward to the phone over the event
+    // channel. Optional; the pointer must outlive the session.
+    void setInputSource(InputSource *src) { _inputSource = src; }
 
     // The controller's address (from the control connection). Needed so the
     // UDP timing sync can reach the phone's timing port on the same link.
@@ -104,6 +121,9 @@ private:
     void timingLoop(uint16_t phoneTimingPort);
 
     void eventLoop(int fd);
+    // Send one event-channel command (a binary plist body) to the phone as a
+    // reverse-HTTP POST /command. Called only from the event-channel thread.
+    void sendEventCommand(int fd, const Bytes &body);
     void screenLoop(int fd, int64_t streamId);
     void audioLoop(int fd, int64_t streamId, int type);
     // The iAP2-over-CarPlay tunnel (stream 130): the phone continues iAP2 here
@@ -116,6 +136,8 @@ private:
     Config _cfg;
     Bytes _shared;
     Sinks _sinks;
+    InputSource *_inputSource = nullptr;
+    unsigned _eventCseq = 0; // reverse-HTTP CSeq for our event commands
     std::atomic<bool> _running{true};
 
     Listener _event;
