@@ -199,8 +199,10 @@ Bytes encode(const Value &root)
     for (uint64_t off : offsets)
         putBE(out, off, offsetSize);
 
-    // 32-byte trailer.
-    for (int i = 0; i < 6; i++) out.push_back(0); // unused
+    // 32-byte trailer. Exactly 5 unused bytes (CFBinaryPlistTrailer); a 6th
+    // would push the trailer to 33 bytes, leaving a 1-byte gap that iOS's strict
+    // parser rejects (offsetTableOffset + count*offsetSize must equal size-32).
+    for (int i = 0; i < 5; i++) out.push_back(0); // unused
     out.push_back(0);                             // sort version
     out.push_back((uint8_t)offsetSize);
     out.push_back((uint8_t)refSize);
