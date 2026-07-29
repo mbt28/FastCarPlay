@@ -119,6 +119,7 @@ private:
     std::thread _timingThread;
     int _keepAliveFd = -1; // UDP, like the phone expects (not TCP)
     std::thread _keepAliveThread;
+    int64_t _clockOffsetNtp = 0; // steers our clock onto the phone's NTP domain
 
     std::unique_ptr<cp_control_cipher::ControlCipher> _eventCipher;
 };
