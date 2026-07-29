@@ -141,6 +141,8 @@ uint16_t AvSession::startTiming(uint16_t phoneTimingPort)
     socklen_t len = sizeof(addr);
     ::getsockname(_timingFd, (struct sockaddr *)&addr, &len);
     uint16_t port = ntohs(addr.sin6_port);
+    log_i("[cp-av] timing UDP on :%u -> phone timingPort=%u (havePeer=%d)", port, phoneTimingPort,
+          (int)_havePeer);
     _timingThread = std::thread([this, phoneTimingPort] { timingLoop(phoneTimingPort); });
     return port;
 }
@@ -177,6 +179,7 @@ void AvSession::timingLoop(uint16_t phoneTimingPort)
             struct sockaddr_in6 from{};
             socklen_t fl = sizeof(from);
             ssize_t n = ::recvfrom(_timingFd, msg, sizeof(msg), 0, (struct sockaddr *)&from, &fl);
+            log_i("[cp-av] timing rx %zd bytes type=%d from the phone", n, n >= 2 ? msg[1] : -1);
             if (n >= 32 && msg[1] == PT_REQUEST)
             {
                 // The phone syncs to us: echo its transmit as originate, stamp T2/T3.
@@ -213,6 +216,7 @@ void AvSession::eventLoop(int fd)
     Bytes readKey = cp_crypto::hkdfSha512(_shared, "Events-Salt", "Events-Read-Encryption-Key", 32);
     _eventCipher = std::make_unique<cp_control_cipher::ControlCipher>(readKey, writeKey);
 
+    log_i("[cp-av] event channel loop started (fd %d)", fd);
     Bytes enc, plain;
     uint8_t buf[4096];
     while (_running)
@@ -222,16 +226,19 @@ void AvSession::eventLoop(int fd)
         if (r < 0) break;
         if (r == 0) continue;
         ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-        if (n <= 0) break;
+        if (n <= 0) { log_i("[cp-av] event channel EOF (recv=%zd)", n); break; }
+        log_i("[cp-av] event channel rx %zd bytes", n);
         enc.insert(enc.end(), buf, buf + n);
 
         Bytes dec;
         if (!_eventCipher->decrypt(enc, dec))
         {
-            log_w("[cp-av] event channel decrypt failed");
+            log_w("[cp-av] event channel decrypt FAILED (%zu enc bytes buffered)", enc.size());
             break;
         }
         plain.insert(plain.end(), dec.begin(), dec.end());
+        if (!dec.empty())
+            log_i("[cp-av] event channel decrypted %zu bytes", dec.size());
 
         // The phone sends reverse-HTTP requests over this channel; each MUST get
         // a 200 or the session stalls. Parse and answer.
@@ -317,16 +324,161 @@ bool AvSession::handle(const cp_rtsp::Request &req, cp_rtsp::Response &res)
 
 cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
 {
-    cp_plist::Value info = cp_plist::Value::map();
-    info.set("name", cp_plist::Value::str("FastCarPlay"));
-    info.set("deviceID", cp_plist::Value::str("FastCarPlay"));
-    info.set("model", cp_plist::Value::str("FastCarPlay1,1"));
-    info.set("sourceVersion", cp_plist::Value::str("550.1"));
+    using V = cp_plist::Value;
+    // The accessory's full AV capabilities. Without this (displays / audio
+    // formats / features / modes) the phone tears the session down after RECORD.
+    // Mirrors LIVI cp/stack/getInfo.ts buildInfoPlist (main-screen only).
+    const char *MAIN_UUID = "b7e6c5a0-1111-4000-8000-000000000001";
+
+    auto arr = [](std::vector<V> items) {
+        V a = V::arr();
+        a.array = std::move(items);
+        return a;
+    };
+
+    // ── display (main screen) ──
+    V display = V::map();
+    display.set("uuid", V::str(MAIN_UUID));
+    display.set("type", V::integer(STREAM_MAIN_SCREEN)); // 110
+    display.set("maxFPS", V::integer(_cfg.fps));
+    display.set("widthPixels", V::integer(_cfg.screenWidth));
+    display.set("heightPixels", V::integer(_cfg.screenHeight));
+    display.set("widthPhysical", V::integer(_cfg.screenWidthMm));
+    display.set("heightPhysical", V::integer(_cfg.screenHeightMm));
+    display.set("features", V::integer(0x08 | 0x02)); // high-fidelity touch | knobs
+    display.set("primaryInputDevice", V::integer(3));  // knobs (input refined later)
+
+    // ── audio formats (PCM/OPUS/AAC-LC at 44.1k) ──
+    const int64_t PCM = 0x3fc | 0xc00;      // voice + media 44.1k mono+stereo
+    const int64_t PCM_MONO = 0x154 | 0x400; // voice mono + media mono
+    const int64_t OPUS = 0x70000000;        // OPUS 16/24/48k mono
+    const int64_t AAC_LC = 0x400000;        // AAC-LC 44.1k
+    auto af = [&](int type, const char *at, int64_t out, int64_t in, bool hasIn) {
+        V d = V::map();
+        d.set("type", V::integer(type));
+        d.set("audioType", V::str(at));
+        d.set("audioOutputFormats", V::integer(out));
+        if (hasIn) d.set("audioInputFormats", V::integer(in));
+        return d;
+    };
+    V audioFormats = arr({
+        af(100, "compatibility", PCM, PCM_MONO, true),
+        af(101, "compatibility", PCM, 0, false),
+        af(100, "default", PCM | OPUS, PCM_MONO | OPUS, true),
+        af(100, "alert", PCM | OPUS, 0, false),
+        af(100, "media", PCM, 0, false),
+        af(100, "telephony", PCM_MONO | OPUS, PCM_MONO | OPUS, true),
+        af(100, "speechRecognition", PCM_MONO | OPUS, PCM_MONO | OPUS, true),
+        af(101, "default", PCM | OPUS, 0, false),
+        af(102, "media", AAC_LC, 0, false),
+    });
+
+    // ── audio latencies (informational) ──
+    auto lat = [&](int type, const char *at, bool hasAt) {
+        V d = V::map();
+        d.set("type", V::integer(type));
+        d.set("inputLatencyMicros", V::integer(0));
+        d.set("outputLatencyMicros", V::integer(0));
+        if (hasAt) d.set("audioType", V::str(at));
+        return d;
+    };
+    V audioLatencies = arr({
+        lat(100, "", false), lat(100, "default", true), lat(100, "media", true),
+        lat(100, "telephony", true), lat(100, "speechRecognition", true), lat(100, "alert", true),
+        lat(101, "", false), lat(101, "default", true), lat(102, "default", true),
+    });
+
+    // ── modes (resources + app states) ──
+    auto resource = [&](int id) {
+        V r = V::map();
+        r.set("resourceID", V::integer(id));
+        r.set("transferType", V::integer(1));       // take
+        r.set("transferPriority", V::integer(100));  // nice-to-have
+        r.set("takeConstraint", V::integer(100));    // anytime
+        r.set("borrowConstraint", V::integer(100));
+        r.set("unborrowConstraint", V::integer(100));
+        return r;
+    };
+    V modes = V::map();
+    modes.set("resources", arr({resource(1), resource(2)}));
+    V appState1 = V::map(); appState1.set("appStateID", V::integer(2)); appState1.set("state", V::boolean(false));
+    V appState2 = V::map(); appState2.set("appStateID", V::integer(1)); appState2.set("speechMode", V::integer(-1));
+    V appState3 = V::map(); appState3.set("appStateID", V::integer(3)); appState3.set("state", V::boolean(false));
+    modes.set("appStates", arr({appState1, appState2, appState3}));
+
+    // ── the info dict ──
+    V info = V::map();
+    info.set("sourceVersion", V::str("550.1"));
+    info.set("features", V::integer(0x615653aee2LL)); // CarPlay feature bitmask
+    info.set("statusFlags", V::integer(4));
+    info.set("model", V::str("FastCarPlay1,1"));
+    info.set("manufacturer", V::str("FastCarPlay"));
+    info.set("deviceID", V::str("FastCarPlay"));
+    info.set("name", V::str("FastCarPlay"));
+    info.set("rightHandDrive", V::boolean(false));
+    info.set("keepAliveLowPower", V::boolean(true));
+    info.set("keepAliveSendStatsAsBody", V::boolean(false));
+    info.set("modes", modes);
+    info.set("audioLatencies", audioLatencies);
+    info.set("audioFormats", audioFormats);
+    info.set("extendedFeatures", arr({V::str("vocoderInfo"), V::str("enhancedRequestCarUI")}));
+    info.set("displays", arr({display}));
+
+    // ── HID: a multitouch touchscreen (CarPlay needs an input device) ──
+    auto fingerCollection = [&](int xMax, int yMax) {
+        return Bytes{
+            0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02, 0x09, 0x38, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+            0x15, 0x00, 0x25, 0x01, 0x09, 0x33, 0x75, 0x01, 0x95, 0x01, 0x81, 0x02, 0x95, 0x07,
+            0x81, 0x03, 0x05, 0x01, 0x26, (uint8_t)(xMax & 0xff), (uint8_t)((xMax >> 8) & 0xff),
+            0x09, 0x30, 0x75, 0x10, 0x95, 0x01, 0x81, 0x02, 0x26, (uint8_t)(yMax & 0xff),
+            (uint8_t)((yMax >> 8) & 0xff), 0x09, 0x31, 0x81, 0x02, 0xc0};
+    };
+    Bytes hidDesc = {0x05, 0x0d, 0x09, 0x04, 0xa1, 0x01}; // digitizers / touch screen / app
+    for (int c = 0; c < 2; c++)                            // 2 contacts
+    {
+        Bytes fc = fingerCollection(_cfg.screenWidth, _cfg.screenHeight);
+        hidDesc.insert(hidDesc.end(), fc.begin(), fc.end());
+    }
+    hidDesc.push_back(0xc0); // end collection
+    auto hidDevice = [&](const char *uuid, const char *name, const Bytes &desc) {
+        V h = V::map();
+        h.set("hidProductID", V::integer(1));
+        h.set("hidVendorID", V::integer(2));
+        h.set("hidCountryCode", V::integer(0));
+        h.set("uuid", V::str(uuid));
+        h.set("name", V::str(name));
+        h.set("displayUUID", V::str(MAIN_UUID));
+        h.set("hidDescriptor", V::bytes(desc));
+        return h;
+    };
+    // Full input set (touch + knob + media + telephony) matching a working HU;
+    // the display declares knobs primary, so a knob device must be present.
+    Bytes knobDesc = {0x05,0x01,0x09,0x08,0xa1,0x01,0x05,0x09,0x09,0x01,0x15,0x00,0x25,0x01,0x75,
+        0x01,0x95,0x01,0x81,0x02,0x05,0x0c,0x0a,0x23,0x02,0x0a,0x24,0x02,0x95,0x02,0x81,0x02,0x95,
+        0x05,0x81,0x01,0x05,0x01,0x09,0x01,0xa1,0x00,0x09,0x30,0x09,0x31,0x15,0x81,0x25,0x7f,0x75,
+        0x08,0x95,0x02,0x81,0x02,0xc0,0x09,0x38,0x15,0x81,0x25,0x7f,0x75,0x08,0x95,0x01,0x81,0x06,0xc0};
+    Bytes mediaDesc = {0x05,0x0c,0x09,0x01,0xa1,0x01,0x15,0x00,0x25,0x06,0x05,0x0c,0x0a,0x00,0x00,
+        0x0a,0xb0,0x00,0x0a,0xb1,0x00,0x0a,0xcd,0x00,0x0a,0xb5,0x00,0x0a,0xb6,0x00,0x0a,0x9e,0x02,
+        0x75,0x08,0x95,0x01,0x81,0x00,0xc0};
+    Bytes telDesc = {0x05,0x0b,0x09,0x07,0xa1,0x01,0x15,0x00,0x25,0x11,0x05,0x0b,0x09,0x00,0x09,
+        0x20,0x09,0x21,0x09,0x26,0x09,0x2f,0x09,0xb0,0x09,0xb1,0x09,0xb2,0x09,0xb3,0x09,0xb4,0x09,
+        0xb5,0x09,0xb6,0x09,0xb7,0x09,0xb8,0x09,0xb9,0x09,0xba,0x09,0xbb,0x05,0x07,0x09,0x2a,0x75,
+        0x08,0x95,0x01,0x81,0x00,0xc0};
+    info.set("hidDevices", arr({
+        hidDevice("2a2a2a2a", "FastCarPlay Touchscreen", hidDesc),
+        hidDevice("2a2a2a2b", "FastCarPlay Knob", knobDesc),
+        hidDevice("2a2a2a2c", "FastCarPlay Media", mediaDesc),
+        hidDevice("2a2a2a2d", "FastCarPlay Telephony", telDesc),
+    }));
+
+    info.set("bluetoothIDs", arr({V::str("2c:cf:67:fb:12:de")}));
+    if (_cfg.hevc)
+        info.set("hevcInfo", V::map());
 
     cp_rtsp::Response res;
     res.headers["Content-Type"] = PLIST_CT;
     res.body = cp_plist::encode(info);
-    log_i("[cp-av] GET /info -> capabilities");
+    log_i("[cp-av] GET /info -> capabilities (%zu bytes)", res.body.size());
     return res;
 }
 
@@ -402,12 +554,9 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
         resp.set("keepAlivePort", cp_plist::Value::integer(keepAlivePort));
     }
     cp_plist::Value feats = cp_plist::Value::arr();
-    // Match the exact feature set a working head unit (LIVI, cluster+HEVC)
-    // advertises: iOS 26 rejects the session SETUP if this set doesn't line up.
-    feats.array.push_back(cp_plist::Value::str("hevc"));
+    feats.array.push_back(cp_plist::Value::str("hevc")); // request HEVC video
     feats.array.push_back(cp_plist::Value::str("iAPChannel"));
     feats.array.push_back(cp_plist::Value::str("viewAreas"));
-    feats.array.push_back(cp_plist::Value::str("altScreen"));
     resp.set("enabledFeatures", feats);
     res.body = cp_plist::encode(resp);
 
