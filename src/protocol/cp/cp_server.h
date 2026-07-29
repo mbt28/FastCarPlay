@@ -32,6 +32,9 @@ public:
     // Media sinks forwarded to each connection's AV session (decoded video /
     // audio). Set before start(); unset sinks are simply not called.
     void setAvSinks(const cp_av::Sinks &sinks) { _avSinks = sinks; }
+    // Source of outbound input (touch/buttons) forwarded to the AV session.
+    // The pointer must outlive the server.
+    void setInputSource(cp_av::InputSource *src) { _inputSource = src; }
     // Called (on the accept thread) when a control connection opens and closes,
     // so a backend can track the session lifecycle for its state machine.
     void setLifecycle(std::function<void()> onConnect, std::function<void()> onDisconnect)
@@ -48,6 +51,7 @@ private:
     uint16_t _port = 7000;
     cp_auth_setup::MfiSigner *_signer = nullptr;
     cp_av::Sinks _avSinks;
+    cp_av::InputSource *_inputSource = nullptr;
     std::function<void()> _onConnect;
     std::function<void()> _onDisconnect;
     std::atomic<bool> _active{false};

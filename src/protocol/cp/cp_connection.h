@@ -13,8 +13,12 @@
 // behind IConnection. Requires a USE_CP_WIRELESS build (dbus/bluez).
 
 #include <atomic>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 extern "C"
 {
@@ -24,12 +28,18 @@ extern "C"
 #include "protocol/iconnection.h"
 
 #include "cp_auth_setup.h"
+#include "cp_av.h"
 #include "cp_bluetooth.h"
 #include "cp_mdns.h"
 #include "cp_server.h"
 #include "mfi_auth.h"
 
-class CpConnection : public IConnection
+class Message;
+
+// Also a cp_av::InputSource: the writer thread translates the app's writeQueue
+// (CMD_TOUCH / CMD_MULTI_TOUCH / CMD_CONTROL) into CarPlay event-channel commands
+// (HID reports etc.) that the AV session pulls and POSTs to the phone.
+class CpConnection : public IConnection, public cp_av::InputSource
 {
 public:
     CpConnection();
@@ -44,11 +54,19 @@ public:
     AVCodecID videoCodec() const override { return _codec.load(); }
     bool videoFocused() const override { return true; }
 
+    // cp_av::InputSource: pop the next queued event-channel command body.
+    bool nextCommand(std::vector<uint8_t> &body) override;
+
 private:
     void onVideoCodec(bool hevc);
     void onVideo(const std::vector<uint8_t> &annexB);
     void onSessionConnect();
     void onSessionDisconnect();
+
+    void writerLoop();
+    void handleInput(const Message &m);
+    void enqueueCommand(std::vector<uint8_t> body);
+    void clearInput();
 
     MfiAuth _chip;
     bool _haveChip = false;
@@ -57,6 +75,11 @@ private:
     cp_server::Server _server;
     cp_mdns::MdnsResponder _mdns;
     cp_bt::CpBluetooth _bt;
+
+    std::thread _writer;
+    std::atomic<bool> _active{false};
+    std::mutex _inputMutex;
+    std::deque<std::vector<uint8_t>> _inputQueue; // outbound event-command bodies
 
     std::atomic<AVCodecID> _codec{AV_CODEC_ID_HEVC};
     std::atomic<uint32_t> _frames{0};

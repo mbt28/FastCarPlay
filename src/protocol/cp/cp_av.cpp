@@ -260,40 +260,66 @@ void AvSession::eventLoop(int fd)
     uint8_t buf[4096];
     while (_running)
     {
+        // A short timeout when we have input to forward keeps touch responsive;
+        // otherwise we only need to wake to answer the phone's own requests.
         struct pollfd pfd{fd, POLLIN, 0};
-        int r = ::poll(&pfd, 1, 300);
+        int r = ::poll(&pfd, 1, _inputSource ? 15 : 300);
         if (r < 0) break;
-        if (r == 0) continue;
-        ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-        if (n <= 0) { log_i("[cp-av] event channel EOF (recv=%zd)", n); break; }
-        log_i("[cp-av] event channel rx %zd bytes", n);
-        enc.insert(enc.end(), buf, buf + n);
 
-        Bytes dec;
-        if (!_eventCipher->decrypt(enc, dec))
+        if (r > 0 && (pfd.revents & POLLIN))
         {
-            log_w("[cp-av] event channel decrypt FAILED (%zu enc bytes buffered)", enc.size());
-            break;
+            ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+            if (n <= 0) { log_i("[cp-av] event channel EOF (recv=%zd)", n); break; }
+            enc.insert(enc.end(), buf, buf + n);
+
+            Bytes dec;
+            if (!_eventCipher->decrypt(enc, dec))
+            {
+                log_w("[cp-av] event channel decrypt FAILED (%zu enc bytes buffered)", enc.size());
+                break;
+            }
+            plain.insert(plain.end(), dec.begin(), dec.end());
+
+            // The phone sends reverse-HTTP requests over this channel; each MUST
+            // get a 200 or the session stalls. Parse and answer.
+            std::vector<cp_rtsp::Request> reqs = cp_rtsp::parse(plain);
+            for (const cp_rtsp::Request &req : reqs)
+            {
+                if (req.method.rfind("RTSP/", 0) == 0 || req.method.rfind("HTTP/", 0) == 0)
+                    continue; // a response to one of our commands
+                log_v("[cp-av] event < %s %s (%zuB)", req.method.c_str(), req.path.c_str(), req.body.size());
+                cp_rtsp::Response res; // 200
+                Bytes out = cp_rtsp::build(req, res);
+                Bytes sealed = _eventCipher->encrypt(out);
+                ::send(fd, sealed.data(), sealed.size(), MSG_NOSIGNAL);
+            }
         }
-        plain.insert(plain.end(), dec.begin(), dec.end());
-        if (!dec.empty())
-            log_i("[cp-av] event channel decrypted %zu bytes", dec.size());
 
-        // The phone sends reverse-HTTP requests over this channel; each MUST get
-        // a 200 or the session stalls. Parse and answer.
-        std::vector<cp_rtsp::Request> reqs = cp_rtsp::parse(plain);
-        for (const cp_rtsp::Request &req : reqs)
+        // Forward any queued outbound input (touch/button HID reports). All event
+        // sends happen on this thread, so the cipher's write counter stays in order.
+        if (_inputSource)
         {
-            if (req.method.rfind("RTSP/", 0) == 0 || req.method.rfind("HTTP/", 0) == 0)
-                continue; // a response to one of our commands
-            log_i("[cp-av] event < %s %s (%zuB)", req.method.c_str(), req.path.c_str(), req.body.size());
-            cp_rtsp::Response res; // 200
-            Bytes out = cp_rtsp::build(req, res);
-            Bytes sealed = _eventCipher->encrypt(out);
-            ::send(fd, sealed.data(), sealed.size(), MSG_NOSIGNAL);
+            Bytes body;
+            while (_inputSource->nextCommand(body))
+                sendEventCommand(fd, body);
         }
     }
     log_v("[cp-av] event channel closed");
+}
+
+void AvSession::sendEventCommand(int fd, const Bytes &body)
+{
+    if (!_eventCipher)
+        return;
+    char head[160];
+    int hn = snprintf(head, sizeof(head),
+                      "POST /command RTSP/1.0\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
+                      "CSeq: %u\r\n\r\n",
+                      PLIST_CT, body.size(), ++_eventCseq);
+    Bytes msg(head, head + hn);
+    msg.insert(msg.end(), body.begin(), body.end());
+    Bytes sealed = _eventCipher->encrypt(msg);
+    ::send(fd, sealed.data(), sealed.size(), MSG_NOSIGNAL);
 }
 
 // ── Screen video receiver: reframe + decrypt into Annex-B ───────────────
