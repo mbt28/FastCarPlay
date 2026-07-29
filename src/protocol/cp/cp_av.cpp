@@ -478,6 +478,12 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
     cp_rtsp::Response res;
     res.headers["Content-Type"] = PLIST_CT;
     res.body = cp_plist::encode(info);
+    if (const char *dir = getenv("FCP_CP_CAPTURE"))
+    {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/info-response.bin", dir);
+        if (FILE *f = fopen(path, "wb")) { fwrite(res.body.data(), 1, res.body.size(), f); fclose(f); }
+    }
     log_i("[cp-av] GET /info -> capabilities (%zu bytes)", res.body.size());
     return res;
 }
@@ -547,11 +553,36 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
     const cp_plist::Value *ka = body.find("keepAliveLowPower");
     if (ka && ka->type == cp_plist::Value::Type::Bool && ka->b)
     {
-        keepAlivePort = openListener(_keepAlive, "keepAlive", [](int fd) {
-            uint8_t b[256];
-            while (::recv(fd, b, sizeof(b), 0) > 0) {} // drain until closed
-        });
-        resp.set("keepAlivePort", cp_plist::Value::integer(keepAlivePort));
+        // The keep-alive channel is UDP (dgram), not TCP -- the phone sends
+        // low-power keepalive datagrams and expects the port to simply absorb
+        // them. A TCP listener here makes the phone's UDP probes bounce (ICMP
+        // port unreachable) and it tears the session down.
+        _keepAliveFd = ::socket(AF_INET6, SOCK_DGRAM, 0);
+        if (_keepAliveFd >= 0)
+        {
+            int no = 0;
+            ::setsockopt(_keepAliveFd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
+            struct sockaddr_in6 ka6{};
+            ka6.sin6_family = AF_INET6;
+            ka6.sin6_addr = in6addr_any;
+            if (::bind(_keepAliveFd, (struct sockaddr *)&ka6, sizeof(ka6)) == 0)
+            {
+                socklen_t l = sizeof(ka6);
+                ::getsockname(_keepAliveFd, (struct sockaddr *)&ka6, &l);
+                keepAlivePort = ntohs(ka6.sin6_port);
+                _keepAliveThread = std::thread([this] {
+                    uint8_t b[256];
+                    while (_running && _keepAliveFd >= 0)
+                    {
+                        struct pollfd p{_keepAliveFd, POLLIN, 0};
+                        if (::poll(&p, 1, 300) > 0)
+                            ::recvfrom(_keepAliveFd, b, sizeof(b), 0, nullptr, nullptr); // absorb
+                    }
+                });
+                resp.set("keepAlivePort", cp_plist::Value::integer(keepAlivePort));
+            }
+            else { ::close(_keepAliveFd); _keepAliveFd = -1; }
+        }
     }
     cp_plist::Value feats = cp_plist::Value::arr();
     feats.array.push_back(cp_plist::Value::str("hevc")); // request HEVC video
@@ -585,18 +616,15 @@ void AvSession::stop()
         if (l.thread.joinable()) l.thread.join();
     };
     shut(_event);
-    shut(_keepAlive);
     for (auto &l : _streams)
         shut(*l);
     _streams.clear();
 
-    if (_timingFd >= 0)
-    {
-        ::shutdown(_timingFd, SHUT_RDWR);
-        ::close(_timingFd);
-        _timingFd = -1;
-    }
+    if (_timingFd >= 0) { ::shutdown(_timingFd, SHUT_RDWR); ::close(_timingFd); _timingFd = -1; }
     if (_timingThread.joinable())
         _timingThread.join();
+    if (_keepAliveFd >= 0) { ::shutdown(_keepAliveFd, SHUT_RDWR); ::close(_keepAliveFd); _keepAliveFd = -1; }
+    if (_keepAliveThread.joinable())
+        _keepAliveThread.join();
 }
 } // namespace cp_av

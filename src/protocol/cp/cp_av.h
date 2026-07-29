@@ -111,13 +111,14 @@ private:
     std::atomic<bool> _running{true};
 
     Listener _event;
-    Listener _keepAlive;
     std::vector<std::unique_ptr<Listener>> _streams;
 
     struct sockaddr_in6 _peer{};
     bool _havePeer = false;
     int _timingFd = -1;
     std::thread _timingThread;
+    int _keepAliveFd = -1; // UDP, like the phone expects (not TCP)
+    std::thread _keepAliveThread;
 
     std::unique_ptr<cp_control_cipher::ControlCipher> _eventCipher;
 };
