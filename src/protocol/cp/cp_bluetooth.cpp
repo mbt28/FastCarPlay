@@ -329,12 +329,22 @@ void CpBluetooth::onNewConnection(int fd)
         cp_iap2::Iap2Link link(fd);
         if (link.negotiate(false))
         {
-            log_i("cp-bt: iAP2 link up -- running CarPlay session");
-            cp_carplay::CarplaySession session(link, *_cfg.signer, _cfg.identity, _cfg.wifi);
-            if (session.run())
-                log_i("cp-bt: Wi-Fi handoff delivered; phone should join the AP");
+            if (!_cfg.signer)
+            {
+                // No MFi auth chip (e.g. it lost power): the session dereferences
+                // the signer during authentication, so refuse rather than crash.
+                log_e("cp-bt: no MFi auth chip -- cannot authenticate CarPlay "
+                      "(is the chip powered? GPIO4)");
+            }
             else
-                log_w("cp-bt: CarPlay session ended before handoff");
+            {
+                log_i("cp-bt: iAP2 link up -- running CarPlay session");
+                cp_carplay::CarplaySession session(link, *_cfg.signer, _cfg.identity, _cfg.wifi);
+                if (session.run())
+                    log_i("cp-bt: Wi-Fi handoff delivered; phone should join the AP");
+                else
+                    log_w("cp-bt: CarPlay session ended before handoff");
+            }
         }
         else
         {
