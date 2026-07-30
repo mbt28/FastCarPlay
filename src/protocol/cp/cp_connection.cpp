@@ -280,10 +280,20 @@ void CpConnection::handleInput(const Message &m)
             enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, home, back)));
             enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false)));
         };
+        // Directional nav: the knob's X/Y are absolute axes, so deflect fully in
+        // the pressed direction then re-center -- one focus nudge per press.
+        auto knobMove = [&](int dx, int dy) {
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false, dx, dy, 0)));
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false, 0, 0, 0)));
+        };
         switch (btn)
         {
         case BTN_HOME: knobTap(true, false); break;
         case BTN_BACK: knobTap(false, true); break;
+        case BTN_LEFT: knobMove(-127, 0); break;
+        case BTN_RIGHT: knobMove(127, 0); break;
+        case BTN_UP: knobMove(0, -127); break;
+        case BTN_DOWN: knobMove(0, 127); break;
         case BTN_SELECT_DOWN:
             enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(true, false, false)));
             break;

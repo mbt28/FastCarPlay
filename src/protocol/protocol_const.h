@@ -55,6 +55,7 @@ static const uint16_t CARLINKIT_PIDS[] = {0x1520, 0x1521};
 #define BTN_SELECT_DOWN 104
 #define BTN_SELECT_UP 105
 #define BTN_BACK 106
+#define BTN_UP 113
 #define BTN_DOWN 114
 #define BTN_HOME 200
 // Play control buttons
