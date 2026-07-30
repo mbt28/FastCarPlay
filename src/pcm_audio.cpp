@@ -188,8 +188,26 @@ void PcmAudio::play(SDL_AudioDeviceID device, ChannelConfig config, int32_t segm
             }
         }
 
-        if (!_data->waitFor(_active, waitTimeMs))
-            return;
+        // Wait for the next chunk before looping back to pop(). Note waitFor()
+        // returns true on BOTH new data and timeout while active, so we must loop
+        // until data is actually queued (has(1)). A bursty source -- wireless
+        // CarPlay buffers ~1s of media ahead and ships it in bursts, with gaps
+        // longer than one chunk -- would otherwise leave pop() empty during a
+        // gap, and loop() then pauses/re-opens the device, chopping the audio
+        // still queued in SDL. So once we're playing, ride out the gap on SDL's
+        // own queue and only give up when it is nearly dry (a real underrun / end
+        // of stream). Steady sources fall straight through on the first wait.
+        const Uint32 lowWater = (Uint32)(config.rate * config.channels * 2 / 20); // ~50ms
+        while (_playing && !_data->has(1))
+        {
+            _data->waitFor(_active, 50); // short poll: catch the next burst promptly
+            if (!_active)
+                return;
+            if (!_data->has(1) && SDL_GetQueuedAudioSize(device) <= lowWater)
+                return; // genuinely dry
+        }
+        if (!_playing && !_data->waitFor(_active, waitTimeMs))
+            return; // still prefilling: original behaviour
     }
 }
 

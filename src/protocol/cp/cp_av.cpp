@@ -479,6 +479,12 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
     uint8_t buf[4096];
     std::vector<int16_t> pcm;
     size_t totalBytes = 0, packets = 0, decFails = 0;
+    // Throughput probe: compare audio delivered vs wall-clock so we can tell a
+    // slow/starved feed from a bursty-but-realtime one.
+    struct timespec t0{};
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int64_t lastLogMs = 0;
+    size_t lastSamples = 0, totalSamples = 0;
     while (_running)
     {
         struct pollfd pfds[2] = {{dataFd, POLLIN, 0}, {ctrlFd, POLLIN, 0}};
@@ -513,9 +519,27 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
         if (pcm.empty())
             continue;
         totalBytes += pcm.size() * 2;
+        totalSamples += pcm.size() / (dec.outChannels() > 0 ? dec.outChannels() : 1);
         if (packets++ == 0)
             log_i("[cp-av] audio %d first packet -> %zu samples @ %dHz %dch", type, pcm.size(),
                   dec.outRate(), dec.outChannels());
+        // Every ~2s report audio-ms delivered vs wall-clock-ms (100% = realtime).
+        {
+            struct timespec now{};
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t elapsedMs = (now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+            if (elapsedMs - lastLogMs >= 2000)
+            {
+                const int rate = dec.outRate() > 0 ? dec.outRate() : 44100;
+                int64_t audioMs = (int64_t)(totalSamples - lastSamples) * 1000 / rate;
+                int64_t wallMs = elapsedMs - lastLogMs;
+                log_v("[cp-av] audio %d throughput: %lld ms audio / %lld ms wall (%lld%%), %zu pkts",
+                      type, (long long)audioMs, (long long)wallMs, (long long)(audioMs * 100 / (wallMs ? wallMs : 1)),
+                      packets);
+                lastLogMs = elapsedMs;
+                lastSamples = totalSamples;
+            }
+        }
         if (_sinks.onAudio)
         {
             const uint8_t *p = (const uint8_t *)pcm.data();
