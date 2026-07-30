@@ -968,7 +968,8 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
         }
     }
     cp_plist::Value feats = cp_plist::Value::arr();
-    feats.array.push_back(cp_plist::Value::str("hevc"));
+    if (_cfg.hevc) // else the phone streams H.264 (e.g. F1C200s cedrus: no HEVC)
+        feats.array.push_back(cp_plist::Value::str("hevc"));
     feats.array.push_back(cp_plist::Value::str("iAPChannel"));
     feats.array.push_back(cp_plist::Value::str("viewAreas"));
     resp.set("enabledFeatures", feats);

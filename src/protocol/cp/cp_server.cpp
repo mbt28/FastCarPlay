@@ -85,6 +85,7 @@ void Server::serveConnection(int clientFd, const struct sockaddr_in6 &peer)
 {
     cp_control_channel::ControlChannel channel(_signer);
     channel.setPeer(peer);
+    channel.setAvConfig(_avConfig);
     channel.setAvSinks(_avSinks);
     channel.setInputSource(_inputSource);
     uint8_t buf[8192];

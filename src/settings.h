@@ -45,6 +45,10 @@ public:
     // The MFi 3.0 auth coprocessor sits on this i2c bus/address.
     static inline Setting<std::string> mfiI2cBus{"mfi-i2c-bus", "/dev/i2c-1"};
     static inline Setting<int> mfiI2cAddr{"mfi-i2c-addr", 0x10};
+    // Offer HEVC to the phone (it then streams H.265). Leave true where the
+    // decoder can do H.265 (desktop/Pi software, D1/H6 cedrus); set FALSE on the
+    // F1C200s, whose cedrus does H.264 only -- the phone then streams H.264.
+    static inline Setting<bool> carplayHevc{"carplay-hevc", true};
     static inline bool carplayWireless() { return protocol.value == "carplay-wireless"; }
     // ms to wait for the phone to re-enumerate in accessory mode after the
     // AOAP switch (first connections show a consent dialog on the phone).
