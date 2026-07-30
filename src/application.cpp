@@ -217,6 +217,11 @@ void Application::start(const char *title)
 // overlay. Mirrors the wording of Interface::drawHome.
 static const char *uiStatusText(int state)
 {
+    // Wired CarPlay has no dongle -- while it waits for a phone, prompt to plug in.
+    if (Settings::carplayWired() &&
+        (state == PROTOCOL_STATUS_NO_DEVICE || state == PROTOCOL_STATUS_INITIALISING ||
+         state == PROTOCOL_STATUS_LINKING))
+        return "Plug in iPhone";
     switch (state)
     {
     case PROTOCOL_STATUS_ERROR:

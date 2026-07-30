@@ -1,0 +1,24 @@
+# F1C200s wired CarPlay (protocol = carplay-wired). No Wi-Fi / Bluetooth / ESP32:
+# the board brings the USB-plugged iPhone to config 6, opens com.apple.carkit.service
+# (via cp_usbmux + libimobiledevice), and the phone streams CarPlay over the USB-NCM
+# link to the :7000 server. Cross-build with USE_CP_WIRED=1 (needs libimobiledevice
+# + libplist in the rootfs). Runs as root on the device.
+protocol      = carplay-wired
+carplay-hevc  = false          # cedrus decodes H.264 only, so ask the phone for H.264
+mfi-i2c-bus   = /dev/i2c-1
+mfi-i2c-addr  = 16
+
+# cedrus HW H.264 -> DRM/DEFE, sized for the panel.
+renderer      = drm
+cedrus-decode = true
+window-mode   = 2
+width         = 480
+height        = 272
+source-fps    = 30
+
+# The arm926 has no AES instructions -- force ChaCha20 for the CarPlay ciphers.
+force-chacha20 = true
+
+audio-driver      = alsa
+audio-buffer-wait = 40
+log-level = 3
