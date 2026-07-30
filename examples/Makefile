@@ -154,6 +154,12 @@ cp_carplay_session_test: cp_carplay_session_test.cpp
 	  $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_carplay_session_test $(LDFLAGS) -pthread
 
+# Wired CarPlay bring-up (run as root): usbfs 0x52 reveal + sysfs config-6 switch
+# (the path that works on iOS 26 where libusb stalls). Next: the usbmux mux-TCP
+# shim + a libimobiledevice com.apple.carkit.service open.
+cp_usb_carkit: cp_usb_carkit.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_usb_carkit.cpp -o $(OUT_DIR)/cp_usb_carkit $(LDFLAGS)
+
 # CarPlay USB probe: map a plugged iPhone's iAP2 interface + endpoints.
 cp_usb_probe: cp_usb_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_usb_probe.cpp -o $(OUT_DIR)/cp_usb_probe $(LDFLAGS) $(shell pkg-config --libs libusb-1.0)
