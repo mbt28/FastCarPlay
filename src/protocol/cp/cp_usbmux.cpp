@@ -845,26 +845,35 @@ bool Usbmux::configCarplay()
             return false;
         }
     }
-    // Select config 6 via sysfs. Right after the 0x52 reveal the device has just
-    // re-enumerated and can reject the write (EBUSY) for a moment, so retry a few
-    // times (re-finding the sysfs path, which can change on re-enumeration).
-    for (int i = 0; i < 20 && readSys(sysdir + "bConfigurationValue") != "6"; i++)
+    // Let the just-revealed device finish re-enumerating before switching.
+    usleep(500000);
+    findDev(_serial, bus, dev, sysdir);
+    // Select config 6. Use a raw write() -- a sysfs attribute wants a single
+    // write() syscall, and std::ofstream's buffering/seek can make the write
+    // silently no-op. Retry: right after the reveal the device can briefly EBUSY.
+    for (int i = 0; i < 20; i++)
     {
+        std::string cur = readSys(sysdir + "bConfigurationValue");
+        if (cur == "6")
+            return true;
+        int cfd = ::open((sysdir + "bConfigurationValue").c_str(), O_WRONLY | O_CLOEXEC);
+        int wrote = -1, err = 0;
+        if (cfd >= 0)
         {
-            std::ofstream f(sysdir + "bConfigurationValue");
-            f << 6;
-            f.flush();
+            wrote = (int)::write(cfd, "6", 1);
+            err = errno;
+            ::close(cfd);
         }
-        usleep(300000);
+        else
+            err = errno;
+        log_d("cp-usbmux: config->6 attempt %d: cur=%s write=%d (%s)", i, cur.c_str(), wrote,
+              wrote == 1 ? "ok" : strerror(err));
+        usleep(400000);
         findDev(_serial, bus, dev, sysdir);
     }
-    if (readSys(sysdir + "bConfigurationValue") != "6")
-    {
-        log_e("cp-usbmux: could not select config 6 (still %s)",
-              readSys(sysdir + "bConfigurationValue").c_str());
-        return false;
-    }
-    return true;
+    log_e("cp-usbmux: could not select config 6 (still %s)",
+          readSys(sysdir + "bConfigurationValue").c_str());
+    return false;
 }
 
 bool Usbmux::start(const std::string &serial)
