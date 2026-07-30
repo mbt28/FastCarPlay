@@ -115,6 +115,89 @@ Bytes buildIdentification(const AccessoryIdentity &id)
     return cp_iap2::packCsm(MSG_IDENTIFICATION_INFORMATION, params);
 }
 
+namespace
+{
+// The wired-CarPlay message sets. This is LIVI's carkit identification minus the
+// droppable vehicle/location/route components it drops when the phone rejects --
+// i.e. the set it converges to. None of these need a transport component beyond
+// USBHostTransport, so the phone accepts this directly (no reject/retry).
+std::vector<uint16_t> wiredMessagesSent()
+{
+    return {
+        0x5703, // AccessoryWiFiConfigurationInformation
+        0x5000, // StartNowPlayingUpdates
+        0x5002, // StopNowPlayingUpdates
+        0xAE00, // StartPowerUpdates
+        0xAE02, // StopPowerUpdates
+        0x4157, // StartCommunicationsUpdates
+        0x4159, // StopCommunicationsUpdates
+        0x4154, // StartCallStateUpdates
+        0x4156, // StopCallStateUpdates
+        0xAE03, // PowerSourceUpdate
+        0x4301, // CarPlayStartSession
+    };
+}
+std::vector<uint16_t> wiredMessagesReceived()
+{
+    return {
+        0xEA00, // StartExternalAccessoryProtocolSession
+        0xEA01, // StopExternalAccessoryProtocolSession
+        0x4E0D, // WirelessCarPlayUpdate
+        0x4E0E, // DeviceTransportIdentifierNotification
+        0x5702, // RequestAccessoryWiFiConfigurationInformation
+        0x5001, // NowPlayingUpdate
+        0xAE01, // PowerUpdate
+        0x4158, // CommunicationsUpdate
+        0x4155, // CallStateUpdate
+        0x4300, // CarPlayAvailability
+    };
+}
+} // namespace
+
+Bytes buildWiredIdentification(const AccessoryIdentity &id)
+{
+    // USBHostTransportComponent (param 16): id, name, supports_iap2_connection,
+    // car_play_interface_number = 3 (the NCM/usb0 interface), supports_car_play.
+    Bytes usbHost = encGroup({
+        {0, encU16(0)},                  // transport component id
+        {1, encStr("USBHostTransport")}, // name
+        {2, {}},                         // supports_iap2_connection (flag)
+        {3, encU8(3)},                   // car_play_interface_number
+        {4, {}},                         // supports_car_play (flag)
+    });
+
+    // supported_external_accessory_protocol (param 10, one-element list): the
+    // list is serialized as its concatenated elements, so a single group here.
+    Bytes eaProto = encGroup({
+        {0, encU8(1)},                       // protocol id
+        {1, encStr("en.opencarplay.test")},  // protocol name
+        {2, encU8(0)},                       // match_action = NONE
+    });
+
+    // supported_language (param 13, list): "en","de" as concatenated NUL strings.
+    Bytes langs = encStr("en");
+    Bytes de = encStr("de");
+    langs.insert(langs.end(), de.begin(), de.end());
+
+    std::vector<CsmParam> params = {
+        {0, encStr(id.name)},
+        {1, encStr(id.modelIdentifier)},
+        {2, encStr(id.manufacturer)},
+        {3, encStr("0123456")}, // serial_number
+        {4, encStr("1.0.0")},   // firmware_version
+        {5, encStr("1.0")},     // hardware_version
+        {6, encIdList(wiredMessagesSent())},
+        {7, encIdList(wiredMessagesReceived())},
+        {8, encU8(2)},   // power_providing_capability = ADVANCED
+        {9, encU16(20)}, // maximum_current_drawn_from_device
+        {10, eaProto},
+        {12, encStr("en")}, // current_language
+        {13, langs},        // supported_language
+        {16, usbHost},      // usb_host_transport_component
+    };
+    return cp_iap2::packCsm(MSG_IDENTIFICATION_INFORMATION, params);
+}
+
 Bytes buildCarPlayAvailability(const std::string &btTransportId, const std::string &usbTransportId)
 {
     std::vector<CsmParam> params;
@@ -141,6 +224,22 @@ Bytes buildStartSession(const WirelessSession &s)
 
     std::vector<CsmParam> params = {
         {1, wireless},
+        {2, encU32(s.port)},
+        {3, encStr(s.deviceIdentifier)},
+        {4, encStr(s.publicKey)},
+        {5, encStr(s.sourceVersion)},
+    };
+    return cp_iap2::packCsm(MSG_CARPLAY_START_SESSION, params);
+}
+
+Bytes buildWiredStartSession(const WiredSession &s)
+{
+    // wired_attributes (param 0): ip_address (sub-param 0) is a list of strings;
+    // one entry -- our fe80 link-local on the NCM interface.
+    Bytes wired = encGroup({{0, encStr(s.ipAddress)}});
+
+    std::vector<CsmParam> params = {
+        {0, wired},
         {2, encU32(s.port)},
         {3, encStr(s.deviceIdentifier)},
         {4, encStr(s.publicKey)},

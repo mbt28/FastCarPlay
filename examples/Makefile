@@ -58,6 +58,37 @@ cp_pairverify_test: cp_pairverify_test.cpp
 	  ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_pairverify_test $(LDFLAGS) $(shell pkg-config --libs openssl libavcodec libavutil)
 
+# Live wired-CarPlay (config-6/carkit) handshake probe. Run as root with the
+# phone in config 6 and a usbmux socket served (LIVI muxd or our cp_usbmux):
+#   sudo $(OUT_DIR)/cp_wired_probe <dashed-udid> /tmp/livi-usbmux-<serial8>.sock usb0 /dev/i2c-1
+cp_wired_probe: cp_wired_probe.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_wired_probe.cpp \
+	  $(CP_DIR)/cp_iap2.cpp $(CP_DIR)/cp_iap2_link.cpp $(CP_DIR)/cp_carplay_msg.cpp \
+	  $(CP_DIR)/mfi_auth.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_wired_probe $(LDFLAGS) -pthread \
+	  $(shell pkg-config --cflags --libs libimobiledevice-1.0)
+
+# Standalone C++ usbmux daemon (cp_usbmux) -- the muxd.py replacement. Run as root:
+#   sudo $(OUT_DIR)/cp_usbmux_serve <sysfs-serial>
+cp_usbmux_serve: cp_usbmux_serve.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_usbmux_serve.cpp \
+	  $(CP_DIR)/cp_usbmux.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_usbmux_serve $(LDFLAGS) -pthread $(shell pkg-config --cflags --libs libplist-2.0)
+
+# Full wired CarPlay SESSION over USB: the carkit/iAP2 trigger + the real :7000
+# server + AV sinks (counts video/audio). Run as root, phone at config 6 + muxd:
+#   sudo $(OUT_DIR)/cp_wired_serve <dashed-udid> /tmp/livi-usbmux-<serial8>.sock usb0 /dev/i2c-1
+cp_wired_serve: cp_wired_serve.cpp
+	$(CXX) $(CXXFLAGS) -I../src cp_wired_serve.cpp \
+	  $(CP_DIR)/cp_iap2_link.cpp $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
+	  $(CP_DIR)/cp_server.cpp $(CP_DIR)/cp_control_channel.cpp $(CP_DIR)/cp_av.cpp \
+	  $(CP_DIR)/cp_nalu.cpp $(CP_DIR)/cp_audio.cpp $(CP_DIR)/cp_plist.cpp $(CP_DIR)/cp_control_cipher.cpp \
+	  $(CP_DIR)/cp_rtsp.cpp $(CP_DIR)/cp_auth_setup.cpp $(CP_DIR)/cp_pair_setup.cpp $(CP_DIR)/cp_srp.cpp \
+	  $(CP_DIR)/cp_pair_verify.cpp $(CP_DIR)/cp_identity.cpp $(CP_DIR)/cp_tlv8.cpp $(CP_DIR)/cp_crypto.cpp \
+	  $(CP_DIR)/mfi_auth.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/cp_wired_serve $(LDFLAGS) -pthread \
+	  $(shell pkg-config --cflags --libs libimobiledevice-1.0) $(shell pkg-config --libs openssl libavcodec libavutil)
+
 # CarPlay pair-setup end-to-end test (SRP-6a client; no chip/phone).
 cp_pairsetup_test: cp_pairsetup_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_pairsetup_test.cpp \

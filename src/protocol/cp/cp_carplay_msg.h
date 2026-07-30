@@ -58,6 +58,21 @@ enum class WifiSecurity : uint8_t
     Wpa3Only = 4,
 };
 
+// Everything the phone needs to reach the CarPlay server over the wired USB-NCM
+// link. Sent as CarPlayStartSession (0x4301) with wired_attributes instead of
+// wireless_attributes: the accessory's link-local IPv6 on the NCM interface +
+// the :7000 control port + pairing identity. The phone then opens the reverse
+// control connection to [ip%iface]:port. Mirrors LIVI car_play.py
+// CarPlayStartSessionWiredAttributes.
+struct WiredSession
+{
+    std::string ipAddress;        // our fe80:: link-local on the usb0/NCM iface
+    uint32_t port = 7000;         // CarPlay control port
+    std::string deviceIdentifier; // pairing id / Bluetooth MAC string
+    std::string publicKey;        // AirPlay-2 pairing identity (pi/pk)
+    std::string sourceVersion;    // e.g. "280.33.8"
+};
+
 // Everything the phone needs to join our AP and reach the CarPlay server.
 struct WirelessSession
 {
@@ -108,6 +123,16 @@ std::vector<uint16_t> defaultMessagesReceived();
 // CarPlay transport component keyed to the Bluetooth MAC.
 Bytes buildIdentification(const AccessoryIdentity &id);
 
+// IdentificationInformation (0x1D01) for WIRED CarPlay (config-6 / carkit): a
+// USBHostTransportComponent (car_play_interface_number = the NCM interface, 3)
+// instead of the Bluetooth/wireless components, power_providing = ADVANCED, and
+// the message set a wired accessory declares. This is the identification LIVI
+// converges to after dropping the droppable vehicle/location/route components,
+// so it is sent directly (no reject/retry round-trip). Mirrors LIVI
+// cp_handler.build_identification(carkit=True). Only id.name/modelIdentifier/
+// manufacturer are used; the rest are wired-fixed.
+Bytes buildWiredIdentification(const AccessoryIdentity &id);
+
 // Declare wireless (and optionally wired) CarPlay availability. The transport
 // identifiers are the Bluetooth/USB MACs the phone uses to correlate transports.
 Bytes buildCarPlayAvailability(const std::string &btTransportId,
@@ -116,6 +141,12 @@ Bytes buildCarPlayAvailability(const std::string &btTransportId,
 // The wireless handoff: tells the phone which Wi-Fi to join and where CarPlay
 // lives on it.
 Bytes buildStartSession(const WirelessSession &s);
+
+// The wired handoff (0x4301): hands the phone the accessory's link-local IPv6 on
+// the USB-NCM interface + the :7000 port + pairing identity. The phone then
+// connects to [ip%iface]:port over the NCM link. Mirrors LIVI
+// _send_carplay_start_session (carkit branch).
+Bytes buildWiredStartSession(const WiredSession &s);
 
 // Advertise that wireless CarPlay is available/unavailable.
 Bytes buildWirelessCarPlayUpdate(bool available);
