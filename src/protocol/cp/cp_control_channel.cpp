@@ -91,7 +91,7 @@ cp_rtsp::Response ControlChannel::route(const cp_rtsp::Request &req)
     captureRequest(req);
     if (!_av && _verify.verified())
     {
-        _av = std::make_unique<cp_av::AvSession>(_verify.sharedSecret(), cp_av::Config{});
+        _av = std::make_unique<cp_av::AvSession>(_verify.sharedSecret(), _avConfig);
         _av->setSinks(_avSinks);
         _av->setInputSource(_inputSource);
         if (_havePeer)

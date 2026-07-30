@@ -120,6 +120,9 @@ std::string ifaceMac(const std::string &iface)
 CpConnection::CpConnection()
 {
     _method = "carplay-wireless";
+    // videoCodec() is read (to start the decoder) before start() runs, so fix the
+    // default here: HEVC unless we'll be advertising H.264 only (F1C200s cedrus).
+    _codec.store(Settings::carplayHevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
 }
 
 CpConnection::~CpConnection() { stop(); }
@@ -359,6 +362,11 @@ void CpConnection::start()
     sinks.onVideoCodec = [this](bool hevc) { onVideoCodec(hevc); };
     sinks.onVideo = [this](const Bytes &b) { onVideo(b); };
     sinks.onAudio = [this](int t, int r, int c, const Bytes &p) { onAudio(t, r, c, p); };
+    // Advertise HEVC only where the decoder can do it; the F1C200s cedrus is
+    // H.264-only, so carplay-hevc=false makes the phone stream H.264.
+    cp_av::Config avcfg;
+    avcfg.hevc = Settings::carplayHevc;
+    _server.setAvConfig(avcfg);
     _server.setAvSinks(sinks);
     _server.setInputSource(this); // touch/buttons the AV session forwards to the phone
     _server.setLifecycle([this] { onSessionConnect(); }, [this] { onSessionDisconnect(); });

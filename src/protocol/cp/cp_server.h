@@ -29,6 +29,8 @@ public:
     bool start(uint16_t port, cp_auth_setup::MfiSigner *signer = nullptr);
     void stop();
 
+    // AV capabilities advertised to the phone (screen size, HEVC vs H.264, ...).
+    void setAvConfig(const cp_av::Config &cfg) { _avConfig = cfg; }
     // Media sinks forwarded to each connection's AV session (decoded video /
     // audio). Set before start(); unset sinks are simply not called.
     void setAvSinks(const cp_av::Sinks &sinks) { _avSinks = sinks; }
@@ -50,6 +52,7 @@ private:
     int _listenFd = -1;
     uint16_t _port = 7000;
     cp_auth_setup::MfiSigner *_signer = nullptr;
+    cp_av::Config _avConfig;
     cp_av::Sinks _avSinks;
     cp_av::InputSource *_inputSource = nullptr;
     std::function<void()> _onConnect;
