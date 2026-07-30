@@ -848,30 +848,46 @@ bool Usbmux::configCarplay()
     // Let the just-revealed device finish re-enumerating before switching.
     usleep(500000);
     findDev(_serial, bus, dev, sysdir);
-    // Select config 6. Use a raw write() -- a sysfs attribute wants a single
-    // write() syscall, and std::ofstream's buffering/seek can make the write
-    // silently no-op. Retry: right after the reveal the device can briefly EBUSY.
+    // Select config 6. Prefer the usbfs USBDEVFS_SETCONFIGURATION ioctl on the
+    // device node: with the fastcarplay udev rule granting the node, a NON-root
+    // user can switch config this way (the kernel detaches the config-4 drivers)
+    // -- so the app needs no root. Fall back to a raw sysfs write (needs root;
+    // std::ofstream silently no-ops on sysfs, so use write()). Retry: the just-
+    // revealed device can briefly EBUSY.
     for (int i = 0; i < 20; i++)
     {
         std::string cur = readSys(sysdir + "bConfigurationValue");
         if (cur == "6")
             return true;
-        int cfd = ::open((sysdir + "bConfigurationValue").c_str(), O_WRONLY | O_CLOEXEC);
-        int wrote = -1, err = 0;
-        if (cfd >= 0)
+        char node[64];
+        snprintf(node, sizeof(node), "/dev/bus/usb/%03d/%03d", bus, dev);
+        int ir = -1, ierr = 0;
+        int ufd = ::open(node, O_RDWR | O_CLOEXEC);
+        if (ufd >= 0)
         {
-            wrote = (int)::write(cfd, "6", 1);
-            err = errno;
-            ::close(cfd);
+            int cfg6 = 6;
+            ir = ioctl(ufd, USBDEVFS_SETCONFIGURATION, &cfg6);
+            ierr = errno;
+            ::close(ufd);
         }
         else
-            err = errno;
-        log_d("cp-usbmux: config->6 attempt %d: cur=%s write=%d (%s)", i, cur.c_str(), wrote,
-              wrote == 1 ? "ok" : strerror(err));
+            ierr = errno;
+        int wrote = -1;
+        if (ir < 0) // ioctl unavailable (no node access) -> sysfs (root)
+        {
+            int cfd = ::open((sysdir + "bConfigurationValue").c_str(), O_WRONLY | O_CLOEXEC);
+            if (cfd >= 0)
+            {
+                wrote = (int)::write(cfd, "6", 1);
+                ::close(cfd);
+            }
+        }
+        log_d("cp-usbmux: config->6 attempt %d cur=%s ioctl=%d(%s) sysfs-write=%d", i, cur.c_str(), ir,
+              ir < 0 ? strerror(ierr) : "ok", wrote);
         usleep(400000);
         findDev(_serial, bus, dev, sysdir);
     }
-    log_e("cp-usbmux: could not select config 6 (still %s)",
+    log_e("cp-usbmux: could not select config 6 (still %s) -- run the setup script (udev rule) or as root",
           readSys(sysdir + "bConfigurationValue").c_str());
     return false;
 }
