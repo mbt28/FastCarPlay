@@ -1,6 +1,8 @@
 #ifndef SRC_PROTOCOL_CP_CP_USBMUX
 #define SRC_PROTOCOL_CP_CP_USBMUX
 
+#ifdef USE_CP_WIRED
+
 // A self-contained usbmux daemon for wired CarPlay -- the C++ replacement for
 // LIVI's muxd.py. It brings a plugged iPhone to USB config 6 (the CarPlay USB
 // mode: vendor request 0xC0/0x52 to reveal the hidden configs, then select
@@ -54,4 +56,5 @@ private:
 };
 } // namespace cp_usbmux
 
+#endif /* USE_CP_WIRED */
 #endif /* SRC_PROTOCOL_CP_CP_USBMUX */

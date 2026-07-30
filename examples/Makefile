@@ -71,7 +71,7 @@ cp_wired_probe: cp_wired_probe.cpp
 # Standalone C++ usbmux daemon (cp_usbmux) -- the muxd.py replacement. Run as root:
 #   sudo $(OUT_DIR)/cp_usbmux_serve <sysfs-serial>
 cp_usbmux_serve: cp_usbmux_serve.cpp
-	$(CXX) $(CXXFLAGS) -I../src cp_usbmux_serve.cpp \
+	$(CXX) $(CXXFLAGS) -DUSE_CP_WIRED -I../src cp_usbmux_serve.cpp \
 	  $(CP_DIR)/cp_usbmux.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/cp_usbmux_serve $(LDFLAGS) -pthread $(shell pkg-config --cflags --libs libplist-2.0)
 
