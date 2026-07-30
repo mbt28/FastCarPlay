@@ -72,6 +72,16 @@ CXXCOMMON += -DUSE_CP_WIRELESS $(shell $(PKG_CONFIG) --cflags dbus-1)
 LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1)
 endif
 
+# Wired CarPlay (protocol = carplay-wired): bring the USB-plugged iPhone to
+# config 6 and open com.apple.carkit.service via our own usbmux (cp_usbmux) +
+# libimobiledevice; the phone then streams CarPlay over the USB-NCM link to the
+# :7000 server. Enable USE_CP_WIRED=1 (needs libimobiledevice + libplist; at
+# runtime the MFi auth chip on i2c and root for usbfs/sysfs).
+ifeq ($(USE_CP_WIRED),1)
+CXXCOMMON += -DUSE_CP_WIRED $(shell $(PKG_CONFIG) --cflags libimobiledevice-1.0 libplist-2.0)
+LDOPTIONS += $(shell $(PKG_CONFIG) --libs libimobiledevice-1.0 libplist-2.0)
+endif
+
 # On-device UI: LVGL 9.3.0 (MIT), vendored source in third_party/lvgl (see
 # its VENDORING.md), compiled in. Screens live in src/ui. Enable USE_LVGL=1.
 # The generated code is regenerated from ui.eez-project -- never hand-edited.

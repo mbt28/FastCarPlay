@@ -50,6 +50,11 @@ public:
     // F1C200s, whose cedrus does H.264 only -- the phone then streams H.264.
     static inline Setting<bool> carplayHevc{"carplay-hevc", true};
     static inline bool carplayWireless() { return protocol.value == "carplay-wireless"; }
+    // Wired CarPlay (protocol = carplay-wired): no Wi-Fi/Bluetooth. Brings the
+    // USB-plugged iPhone to config 6, opens com.apple.carkit.service, runs the
+    // iAP2 handshake, and the phone streams CarPlay over the USB-NCM link to the
+    // :7000 server. Reuses the MFi chip (mfi-i2c-*) and carplay-hevc above.
+    static inline bool carplayWired() { return protocol.value == "carplay-wired"; }
     // ms to wait for the phone to re-enumerate in accessory mode after the
     // AOAP switch (first connections show a consent dialog on the phone).
     static inline Setting<int> aaAccessoryTimeout{"aa-accessory-timeout", 5000};

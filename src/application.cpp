@@ -680,6 +680,13 @@ std::unique_ptr<IConnection> Application::makeConnection()
     if (Settings::carplayWireless())
         log_w("protocol = carplay-wireless needs a USE_CP_WIRELESS build, using carlinkit");
 #endif
+#ifdef USE_CP_WIRED
+    if (Settings::carplayWired())
+        return std::make_unique<CpWiredConnection>();
+#else
+    if (Settings::carplayWired())
+        log_w("protocol = carplay-wired needs a USE_CP_WIRED build, using carlinkit");
+#endif
     if (Settings::aaUsb())
         return std::make_unique<AaConnection>();
     return std::make_unique<Connection>();

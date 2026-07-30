@@ -1,5 +1,7 @@
 #include "cp_usbmux.h"
 
+#ifdef USE_CP_WIRED
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -908,3 +910,5 @@ void Usbmux::stop()
     _host.reset();
 }
 } // namespace cp_usbmux
+
+#endif /* USE_CP_WIRED */

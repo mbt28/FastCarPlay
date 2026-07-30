@@ -14,6 +14,9 @@
 #ifdef USE_CP_WIRELESS
 #include "protocol/cp/cp_connection.h"
 #endif
+#ifdef USE_CP_WIRED
+#include "protocol/cp/cp_wired_connection.h"
+#endif
 #include "pipe_listener.h"
 #include "renderer.h"
 
