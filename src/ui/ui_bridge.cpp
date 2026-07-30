@@ -31,6 +31,7 @@ const ProtocolEntry PROTOCOLS[] = {
     {ui_bridge::PROTOCOL_CARLINKIT, "carlinkit", "Dongle"},
     {ui_bridge::PROTOCOL_AA_USB, "aa-usb", "AA Wired"},
     {ui_bridge::PROTOCOL_AA_WIRELESS, "aa-wireless", "AA Wireless"},
+    {ui_bridge::PROTOCOL_CARPLAY_WIRED, "carplay-wired", "CarPlay Wired"},
 };
 
 // Persist the choice and ask for a restart. Writes to

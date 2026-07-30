@@ -17,6 +17,7 @@ struct Source
 const Source SOURCES[] = {
     {ui_bridge::PROTOCOL_AA_USB, icons::ICON_USB, "AA Wired"},
     {ui_bridge::PROTOCOL_AA_WIRELESS, icons::ICON_WIRELESS, "AA Wireless"},
+    {ui_bridge::PROTOCOL_CARPLAY_WIRED, icons::ICON_USB, "CarPlay Wired"},
     {ui_bridge::PROTOCOL_CARLINKIT, icons::ICON_DONGLE, "Dongle"},
 };
 constexpr int SOURCE_COUNT = (int)(sizeof(SOURCES) / sizeof(SOURCES[0]));

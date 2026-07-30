@@ -67,8 +67,11 @@ bool Interface::drawHome(bool force, int state, std::string name)
         if (_textStatus.prepare(_renderer, "Dongle error", colorError))
             drawText = true;
 
+    // Wired CarPlay has no dongle; while it waits for a phone, prompt to plug in.
+    const bool wired = Settings::carplayWired();
+
     if (state == PROTOCOL_STATUS_NO_DEVICE)
-        if (_textStatus.prepare(_renderer, "Insert dongle", colorError))
+        if (_textStatus.prepare(_renderer, wired ? "Plug in iPhone" : "Insert dongle", colorError))
             drawText = true;
 
     if (state == PROTOCOL_STATUS_INITIALISING)
@@ -76,7 +79,7 @@ bool Interface::drawHome(bool force, int state, std::string name)
             drawText = true;
 
     if (state == PROTOCOL_STATUS_LINKING)
-        if (_textStatus.prepare(_renderer, "Initialising", color2))
+        if (_textStatus.prepare(_renderer, wired ? "Plug in iPhone" : "Initialising", color2))
             drawText = true;
 
     if (state == PROTOCOL_STATUS_ONLINE)
