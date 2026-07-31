@@ -6,7 +6,7 @@
 protocol      = carplay-wired
 carplay-hevc  = false          # cedrus decodes H.264 only, so ask the phone for H.264
 mfi-i2c-bus   = /dev/i2c-1
-mfi-i2c-addr  = 16
+mfi-i2c-addr  = 0x10
 
 # cedrus HW H.264 -> DRM/DEFE, sized for the panel.
 renderer      = drm
