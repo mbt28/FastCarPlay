@@ -388,6 +388,11 @@ void CpConnection::start()
     sinks.onVideoCodec = [this](bool hevc) { onVideoCodec(hevc); };
     sinks.onVideo = [this](const Bytes &b) { onVideo(b); };
     sinks.onAudio = [this](int t, int r, int c, const Bytes &p) { onAudio(t, r, c, p); };
+    // The CarPlay dock's car icon (requestUI) hands the screen back to us.
+    sinks.onRequestNativeUI = [this] {
+        log_i("CarPlay: dock car icon -- backgrounding to FastCarPlay (resume to return)");
+        _videoFocused.store(false);
+    };
     // Advertise HEVC only where the decoder can do it; the F1C200s cedrus is
     // H.264-only, so carplay-hevc=false makes the phone stream H.264.
     cp_av::Config avcfg;

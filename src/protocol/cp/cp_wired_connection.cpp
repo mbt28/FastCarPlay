@@ -604,6 +604,11 @@ void CpWiredConnection::start()
     sinks.onVideoCodec = [this](bool hevc) { onVideoCodec(hevc); };
     sinks.onVideo = [this](const Bytes &b) { onVideo(b); };
     sinks.onAudio = [this](int t, int r, int c, const Bytes &p) { onAudio(t, r, c, p); };
+    // The CarPlay dock's car icon (requestUI) hands the screen back to us.
+    sinks.onRequestNativeUI = [this] {
+        log_i("CarPlay: dock car icon -- backgrounding to FastCarPlay (resume to return)");
+        _videoFocused.store(false);
+    };
     cp_av::Config avcfg;
     avcfg.hevc = Settings::carplayHevc;
     _server.setAvConfig(avcfg);
