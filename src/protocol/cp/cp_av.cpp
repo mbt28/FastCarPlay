@@ -635,7 +635,25 @@ bool AvSession::handle(const cp_rtsp::Request &req, cp_rtsp::Response &res)
     if (m == "SET_PARAMETER" || m == "GET_PARAMETER" || m == "OPTIONS" || m == "FLUSH") return true;
     if (m == "TEARDOWN") { log_i("[cp-av] TEARDOWN"); return true; }
     if (m == "POST" && endsWith("/feedback")) { res = handleFeedback(req); return true; }
-    if (m == "POST" && endsWith("/command")) { return true; } // ack; commands handled later
+    if (m == "POST" && endsWith("/command"))
+    {
+        // The phone's control commands are binary plists keyed by "type". The
+        // CarPlay dock's car/home icon sends {type:'requestUI'} (no url) to ask
+        // the head unit to bring its own UI up -- hand video focus back so the
+        // app shows FastCarPlay (resumable), like AA's host-ui-requested.
+        cp_plist::Value cmd;
+        if (cp_plist::decode(req.body, cmd))
+        {
+            const cp_plist::Value *t = cmd.find("type");
+            if (t != nullptr && t->type == cp_plist::Value::Type::Str && t->s == "requestUI")
+            {
+                log_i("[cp-av] requestUI -- phone asked for the head-unit UI");
+                if (_sinks.onRequestNativeUI)
+                    _sinks.onRequestNativeUI();
+            }
+        }
+        return true; // ack
+    }
     return false;
 }
 

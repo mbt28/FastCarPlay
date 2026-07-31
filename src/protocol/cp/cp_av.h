@@ -77,6 +77,11 @@ struct Sinks
     // Decoded audio: the CarPlay stream type (100/101 nav-speech, 102 media), the
     // PCM rate + channel count, and S16 interleaved (native-endian) samples.
     std::function<void(int type, int rate, int channels, const Bytes &pcm)> onAudio;
+    // The phone tapped the CarPlay dock's car/home icon (a POST /command
+    // {type:'requestUI'}), asking us to bring the head-unit's own UI to the
+    // foreground -- the CarPlay equivalent of Android Auto's host-ui-requested.
+    // Optional; wired to the connection's video-focus release.
+    std::function<void()> onRequestNativeUI;
 };
 
 class AvSession
