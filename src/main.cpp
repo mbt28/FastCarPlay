@@ -40,10 +40,22 @@ static void restartSelf()
         return;
 
     std::cout << "Restarting to apply settings" << std::endl;
+    // The device init (S99carplay) launches us once and does NOT respawn, so a
+    // failed exec = shutdown. Try hard: the resolved absolute path first (some
+    // environments won't exec the /proc/self/exe magic symlink), then the
+    // symlink, then the invoked name via PATH.
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n > 0)
+    {
+        exe[n] = '\0';
+        execv(exe, savedArgv);
+        std::cerr << "[Main] execv " << exe << " failed > " << strerror(errno) << std::endl;
+    }
     execv("/proc/self/exe", savedArgv);
-    // Only reached if exec failed; the caller then exits normally and a
-    // supervisor (S99carplay) can still bring us back.
-    std::cerr << "[Main] Restart failed > " << strerror(errno) << std::endl;
+    std::cerr << "[Main] execv /proc/self/exe failed > " << strerror(errno) << std::endl;
+    execvp(savedArgv[0], savedArgv);
+    std::cerr << "[Main] execvp " << savedArgv[0] << " failed > " << strerror(errno) << std::endl;
 }
 
 int main(int argc, char **argv)
