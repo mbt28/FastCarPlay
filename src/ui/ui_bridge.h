@@ -42,7 +42,8 @@ enum Protocol
     PROTOCOL_CARLINKIT = 0,
     PROTOCOL_AA_USB = 1,
     PROTOCOL_AA_WIRELESS = 2,
-    PROTOCOL_CARPLAY_WIRED = 3, // wired CarPlay over USB (config-6 / carkit)
+    PROTOCOL_CARPLAY_WIRED = 3,    // wired CarPlay over USB (config-6 / carkit)
+    PROTOCOL_CARPLAY_WIRELESS = 4, // wireless CarPlay (Wi-Fi AP + Bluetooth)
 };
 
 // Status line shown on the picker (connection state, phone name...).

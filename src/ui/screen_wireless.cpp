@@ -225,6 +225,11 @@ lv_obj_t *build(const ui_style::Metrics &m)
     lv_obj_t *screen = ui_style::listScreen(m);
     g_header = ui_style::header(screen, m, "Wireless");
 
+    // Back at the top (below the header) -- easier to reach on a car screen.
+    lv_obj_t *back = ui_style::row(screen, m, icons::ICON_BACK, "Back");
+    lv_obj_add_event_cb(back, onRowClicked, LV_EVENT_CLICKED, (void *)(intptr_t)ROW_BACK);
+    g_rows[ROW_BACK] = back;
+
     for (int i = 0; i < (int)(sizeof(FIELDS) / sizeof(FIELDS[0])); i++)
     {
         lv_obj_t *row = ui_style::row(screen, m, FIELDS[i].icon, FIELDS[i].label);
@@ -232,10 +237,6 @@ lv_obj_t *build(const ui_style::Metrics &m)
         g_rows[i] = row;
         g_values[i] = ui_style::rowValue(row, m, "");
     }
-
-    lv_obj_t *back = ui_style::row(screen, m, icons::ICON_BACK, "Back");
-    lv_obj_add_event_cb(back, onRowClicked, LV_EVENT_CLICKED, (void *)(intptr_t)ROW_BACK);
-    g_rows[ROW_BACK] = back;
 
     update();
     return screen;

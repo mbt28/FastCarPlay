@@ -310,12 +310,28 @@ void CpConnection::handleInput(const Message &m)
             enqueueCommand(siriCommand(3));
             break;
         case BTN_SCREEN_REFRESH: enqueueCommand(forceKeyFrameCommand()); break;
+        case 500: // video focus -- re-project (same as the home Resume row)
+            requestVideoFocus();
+            break;
+        case 501: // video release -- hand the screen back to the FastCarPlay UI
+            log_i("[cp-in] video release -- backgrounding to FastCarPlay");
+            _videoFocused.store(false);
+            break;
         default: break; // dpad/others: no CarPlay HID mapping yet
         }
         break;
     }
     default: break; // CMD_HEARTBEAT etc. -- nothing to forward
     }
+}
+
+// Re-show the phone's screen after the user handed it back to FastCarPlay. The
+// CarPlay session was never dropped, so we just re-focus and force a keyframe so
+// the picture returns immediately rather than at the next natural I-frame.
+void CpConnection::requestVideoFocus()
+{
+    _videoFocused.store(true);
+    enqueueCommand(forceKeyFrameCommand());
 }
 
 void CpConnection::writerLoop()

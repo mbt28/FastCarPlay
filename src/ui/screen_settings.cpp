@@ -135,6 +135,8 @@ lv_obj_t *build(const ui_style::Metrics &m)
     lv_obj_t *screen = ui_style::listScreen(m);
     g_header = ui_style::header(screen, m, "Settings");
 
+    // Back at the top (below the header) -- easier to reach on a car screen.
+    addRow(screen, m, ROW_BACK, icons::ICON_BACK, "Back", false);
     addRow(screen, m, ROW_SOURCE, icons::ICON_USB, "Source", true);
     addRow(screen, m, ROW_NIGHT, icons::ICON_NIGHT, "Night", true);
     addRow(screen, m, ROW_FPS, icons::ICON_VIDEO, "Video", true);
@@ -142,7 +144,6 @@ lv_obj_t *build(const ui_style::Metrics &m)
     addRow(screen, m, ROW_ICONS, icons::ICON_THEME, "Icons", true);
     addRow(screen, m, ROW_WIRELESS, icons::ICON_WIRELESS, "Wireless", false);
     addRow(screen, m, ROW_RESTART, icons::ICON_RESTART, "Restart now", false);
-    addRow(screen, m, ROW_BACK, icons::ICON_BACK, "Back", false);
 
     update();
     return screen;

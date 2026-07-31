@@ -54,7 +54,11 @@ public:
     const std::string status() const override;
 
     AVCodecID videoCodec() const override { return _codec.load(); }
-    bool videoFocused() const override { return true; }
+    // The user can hand the screen back to FastCarPlay (video-release button) and
+    // resume (video-focus button / the home Resume row) without dropping the
+    // CarPlay session -- same UX as Android Auto.
+    bool videoFocused() const override { return _videoFocused.load(); }
+    void requestVideoFocus() override;
 
     bool nextCommand(std::vector<uint8_t> &body) override;
 
@@ -91,6 +95,7 @@ private:
     std::deque<std::vector<uint8_t>> _inputQueue;
 
     std::atomic<AVCodecID> _codec{AV_CODEC_ID_HEVC};
+    std::atomic<bool> _videoFocused{true}; // false = handed back to FastCarPlay
     std::atomic<uint32_t> _frames{0};
     std::string _mfiInfo = "no chip";
     bool _started = false;

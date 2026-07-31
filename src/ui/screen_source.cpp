@@ -18,6 +18,7 @@ const Source SOURCES[] = {
     {ui_bridge::PROTOCOL_AA_USB, icons::ICON_USB, "AA Wired"},
     {ui_bridge::PROTOCOL_AA_WIRELESS, icons::ICON_WIRELESS, "AA Wireless"},
     {ui_bridge::PROTOCOL_CARPLAY_WIRED, icons::ICON_USB, "CarPlay Wired"},
+    {ui_bridge::PROTOCOL_CARPLAY_WIRELESS, icons::ICON_WIRELESS, "CarPlay Wireless"},
     {ui_bridge::PROTOCOL_CARLINKIT, icons::ICON_DONGLE, "Dongle"},
 };
 constexpr int SOURCE_COUNT = (int)(sizeof(SOURCES) / sizeof(SOURCES[0]));
@@ -45,6 +46,10 @@ lv_obj_t *build(const ui_style::Metrics &m)
     lv_obj_t *screen = ui_style::listScreen(m);
     ui_style::header(screen, m, "Source");
 
+    // Back at the top (below the header) -- easier to reach on a car screen.
+    lv_obj_t *back = ui_style::row(screen, m, icons::ICON_BACK, "Back");
+    lv_obj_add_event_cb(back, onBackClicked, LV_EVENT_CLICKED, nullptr);
+
     for (int i = 0; i < SOURCE_COUNT; i++)
     {
         lv_obj_t *row = ui_style::row(screen, m, SOURCES[i].icon, SOURCES[i].label);
@@ -53,9 +58,6 @@ lv_obj_t *build(const ui_style::Metrics &m)
         g_rows[i] = row;
         g_ticks[i] = ui_style::rowValue(row, m, "");
     }
-
-    lv_obj_t *back = ui_style::row(screen, m, icons::ICON_BACK, "Back");
-    lv_obj_add_event_cb(back, onBackClicked, LV_EVENT_CLICKED, nullptr);
 
     update();
     return screen;
