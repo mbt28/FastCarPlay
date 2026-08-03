@@ -114,7 +114,6 @@ android-resolution = 1
 # Prefer HW decoding.
 # If you have input lag that means that your hardware decoder can't work in streaming mode
 # This is happening or Raspberry Pi Zero 2W. Disable this to use SW decoding for that case.
-#hw-decode = true
 
 # Allwinner F1C200s, blob-free: mainline cedrus via ffmpeg's V4L2-Request hwaccel.
 # The decoder drives the in-kernel sunxi-cedrus decoder and presents the decoded

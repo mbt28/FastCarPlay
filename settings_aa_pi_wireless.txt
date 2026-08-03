@@ -17,5 +17,4 @@ window-mode = 0
 width = 800
 height = 480
 source-fps = 30
-hw-decode = false
 log-level = 5

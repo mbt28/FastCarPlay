@@ -25,7 +25,6 @@ height = 480
 source-fps = 30
 
 # Software H.264 decode (no Allwinner cedrus on the Pi).
-hw-decode = false
 
 # Real audio out through SDL on the Pi (F1C200s uses dummy).
 # audio-driver =
