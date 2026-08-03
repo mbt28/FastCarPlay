@@ -48,8 +48,6 @@ android-dpi = 135
 # 3. Application ------------------------------------------------------------
 
 # Mainline blob-free cedrus HW H.264 decode + DEFE display.
-cedrus-decode = true
-renderer = drm
 
 # USB read pipeline tuning (unused in wireless, harmless to keep).
 async-usb-calls = 64

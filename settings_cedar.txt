@@ -104,13 +104,11 @@ android-resolution = 1
 #hw-decode = true
 
 # Allwinner F1C200s: use the Cedar hardware decoder without SDL video.
-cedar-decode = true
 # renderer = drm  -> video on the DRM/DEFE plane (HW de-tile + CSC, lowest CPU)
 #                    plus the UI (home screen, toasts, debug) on an ARGB overlay
 #                    plane above it -- same screens as the SDL interface.
 # renderer = none -> no UI at all; CPU de-tile + YUV->RGB to /dev/fb0
 #                    (fallback if drm misbehaves), serial-console navigation.
-renderer = drm
 
 # Rendeing buffer size, increse for smoothness but can introduce lag. Minimum size is 3
 #rendering-buffer = 5

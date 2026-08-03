@@ -45,15 +45,14 @@ public:
     // The MFi 3.0 auth coprocessor sits on this i2c bus/address.
     static inline Setting<std::string> mfiI2cBus{"mfi-i2c-bus", "/dev/i2c-1"};
     static inline Setting<int> mfiI2cAddr{"mfi-i2c-addr", 0x10};
-    // Offer HEVC to the phone (it then streams H.265). Leave true where the
-    // decoder can do H.265 (desktop/Pi software, D1/H6 cedrus); set FALSE on the
-    // F1C200s, whose cedrus does H.264 only -- the phone then streams H.264.
-    static inline Setting<bool> carplayHevc{"carplay-hevc", true};
+    // Which codec CarPlay is offered (HEVC vs H.264) is not a setting: it is
+    // derived from what this board's decoder actually supports -- see
+    // video_path::preferredCodec().
     static inline bool carplayWireless() { return protocol.value == "carplay-wireless"; }
     // Wired CarPlay (protocol = carplay-wired): no Wi-Fi/Bluetooth. Brings the
     // USB-plugged iPhone to config 6, opens com.apple.carkit.service, runs the
     // iAP2 handshake, and the phone streams CarPlay over the USB-NCM link to the
-    // :7000 server. Reuses the MFi chip (mfi-i2c-*) and carplay-hevc above.
+    // :7000 server. Reuses the MFi chip (mfi-i2c-*) above.
     static inline bool carplayWired() { return protocol.value == "carplay-wired"; }
     // ms to wait for the phone to re-enumerate in accessory mode after the
     // AOAP switch (first connections show a consent dialog on the phone).
@@ -88,24 +87,13 @@ public:
     static inline Setting<int> fontSize{"font-size", 40};
     static inline Setting<bool> vsync{"vsync", false};
     static inline Setting<bool> hwDecode{"hw-decode", true};
-    // Use the Allwinner Cedar hardware decoder (libcedarc) instead of ffmpeg.
-    // Only honoured on builds compiled with USE_CEDAR (e.g. the F1C200s).
-    static inline Setting<bool> cedar{"cedar-decode", false};
-    // Use the mainline cedrus decoder via ffmpeg's V4L2-Request hwaccel (blob-free,
-    // no libcedarc). Decodes to a tiled-NV12 dma-buf presented on the DEFE.
-    // Only honoured on builds compiled with USE_CEDRUS (e.g. the F1C200s).
-    static inline Setting<bool> cedrus{"cedrus-decode", false};
-    // Display backend. "sdl" = the SDL renderer (default). "drm" = the decoder
-    // presents video on the DRM/DEFE plane and the UI (home screen, toasts,
-    // debug) is drawn on an ARGB overlay plane above it -- same interface as
-    // the SDL path, no SDL video driver needed. "none" = no UI at all
-    // (lightest): a minimal loop, the decoder presents frames itself.
-    static inline Setting<std::string> renderer{"renderer", "sdl"};
-    // Anything other than "sdl" (none, drm, ...) skips the SDL video subsystem
-    // and window. The decoder presents frames itself.
-    static inline bool noRenderer() { return renderer.value != "sdl"; }
-    // The DRM path additionally drives the UI overlay plane (needs TTF).
-    static inline bool drmUi() { return renderer.value == "drm"; }
+    // How video is decoded and shown. "auto" (default) probes the board: a
+    // desktop session -> an SDL window with software decode; otherwise, if we
+    // can become DRM master, video goes on a DRM plane (hardware decode when
+    // the chip has a block for the codec, software otherwise) with the UI on an
+    // overlay plane above it; failing both, headless. Override with "hw", "sw"
+    // or "headless" for bring-up or a board that misreports. See video_path.h.
+    static inline Setting<std::string> videoPath{"video-path", "auto"};
     // Touchscreen for the headless DRM/DEFE path (read directly from evdev).
     // Empty device = auto-detect the first node with an absolute-position axis
     // (e.g. the GT911). swap/invert are for panel orientation calibration.

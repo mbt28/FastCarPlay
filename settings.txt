@@ -120,7 +120,6 @@
 # Use the Allwinner Cedar hardware decoder (libcedarc) instead of ffmpeg.
 # Only effective on builds compiled with USE_CEDAR (e.g. Allwinner F1C200s);
 # ignored on other builds. Default off.
-#cedar-decode = true
 
 # Display backend: "sdl" (default) or "none". With "none" no SDL window/renderer
 # is created at all (lightest); the decoder presents frames itself (Cedar fb0).

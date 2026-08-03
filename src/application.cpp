@@ -16,6 +16,7 @@
 #include "settings.h"
 #include "interface.h"
 #include "decoder.h"
+#include "video_path.h" // probes how video is decoded + shown on this board
 
 #ifdef USE_LVGL
 #include "ui/lvgl_osd.h"  // LVGL bound to SDL_Renderer; EEZ Studio screens
@@ -80,12 +81,12 @@ Application::Application(/* args */) : _window(nullptr),
 
     // Without a renderer we need no video subsystem, fonts or display mode.
     Uint32 sdlSubsystems = SDL_INIT_TIMER | SDL_INIT_AUDIO;
-    if (!Settings::noRenderer())
+    if (video_path::detect().mode == video_path::Mode::Sdl)
         sdlSubsystems |= SDL_INIT_VIDEO;
     if (SDL_Init(sdlSubsystems) != 0)
         throw std::runtime_error(std::string("SDL initialisation failed > ") + SDL_GetError());
 
-    if (!Settings::noRenderer() || Settings::drmUi())
+    if (video_path::detect().mode != video_path::Mode::Headless)
     {
         // The DRM-UI path renders text too; TTF needs no SDL video driver.
         if (TTF_Init() != 0)
@@ -95,7 +96,7 @@ Application::Application(/* args */) : _window(nullptr),
         }
     }
 
-    if (!Settings::noRenderer())
+    if (video_path::detect().mode == video_path::Mode::Sdl)
     {
         if (SDL_GetCurrentDisplayMode(0, &_displayMode) != 0)
         {
@@ -133,7 +134,7 @@ void Application::start(const char *title)
 {
     log_d("Initialising");
 
-    if (Settings::drmUi())
+    if (video_path::detect().mode == video_path::Mode::Drm)
     {
         log_v("Starting (drm + UI overlay)");
         loopDrm();
@@ -141,7 +142,7 @@ void Application::start(const char *title)
         return;
     }
 
-    if (Settings::noRenderer())
+    if (video_path::detect().mode != video_path::Mode::Sdl)
     {
         log_v("Starting (no renderer)");
         loopHeadless();
@@ -212,18 +213,23 @@ void Application::start(const char *title)
 }
 
 // The decoder has to be started before the phone has told us anything, so it
-// opens with the codec the backend *expects* (CarPlay's carplay-hevc, H.264
-// elsewhere). The real codec only arrives with the stream config, and a phone
-// may pick H.264 even when HEVC is offered -- so re-open the decoder when the
-// backend reports a different one rather than decoding with the wrong codec.
-// IDecoder::start() stops any running decode first, so this is a safe restart.
-static void syncDecoderCodec(IDecoder &decoder, IConnection &protocol, AVCodecID &started)
+// opens with the codec the backend expects. The real codec only arrives with
+// the stream config, and a phone may pick H.264 even when HEVC is offered -- so
+// rebuild the decoder when the backend reports a different one rather than
+// decoding with the wrong codec. It is rebuilt, not just restarted, because the
+// right backend can differ per codec (a chip may decode H.264 in hardware but
+// not HEVC). Safe here: this runs on the render thread, and every buffer access
+// goes through the pointer, so nothing holds a reference to the old decoder.
+void Application::syncDecoderCodec(std::unique_ptr<IDecoder> &decoder, IConnection &protocol,
+                                   AVCodecID &started)
 {
     const AVCodecID want = protocol.videoCodec();
     if (want == started)
         return;
     log_i("Video codec is now %s -- reopening the decoder", avcodec_get_name(want));
-    decoder.start(&protocol.videoStream, want);
+    decoder->stop();
+    decoder = makeDecoder(want);
+    decoder->start(&protocol.videoStream, want);
     started = want;
 }
 
@@ -670,18 +676,23 @@ void onQuitSignal(int)
 }
 } // namespace
 
-std::unique_ptr<IDecoder> Application::makeDecoder()
+std::unique_ptr<IDecoder> Application::makeDecoder(AVCodecID codecId)
 {
     // Cedar HW decoder is selectable at runtime but only linked in on USE_CEDAR
     // builds; otherwise (and by default) the software avcodec Decoder is used.
+    // Hardware decode is only worth taking when we own a DRM plane to hand the
+    // dma-buf to (see video_path.h), and only for a codec this chip has a block
+    // for -- otherwise fall through to software, which always works.
 #ifdef USE_CEDRUS
-    if (Settings::cedrus)
+    if (video_path::hwAvailable(codecId))
         return std::make_unique<V4l2DrmDecoder>();
 #endif
 #ifdef USE_CEDAR
-    if (Settings::cedar)
+    // libcedarc is H.264-only and needs the DRM/DEFE presentation path.
+    if (codecId == AV_CODEC_ID_H264 && video_path::detect().mode == video_path::Mode::Drm)
         return std::make_unique<CedarDecoder>();
 #endif
+    (void)codecId;
     return std::make_unique<Decoder>();
 }
 
@@ -720,7 +731,7 @@ void Application::loopHeadless()
 {
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
-    std::unique_ptr<IDecoder> decoder = makeDecoder();
+    std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
     PcmAudio audioMain("main"), audioAux("aux");
 
     decoder->start(&protocol.videoStream, protocol.videoCodec());
@@ -746,7 +757,7 @@ void Application::loopHeadless()
     uint32_t frameId = 0;
     while (_active && !g_quit)
     {
-        syncDecoderCodec(*decoder, protocol, startedCodec);
+        syncDecoderCodec(decoder, protocol, startedCodec);
         auto state = protocol.state();
         if (state != lastState)
         {
@@ -808,7 +819,7 @@ void Application::loopDrm()
 
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
-    std::unique_ptr<IDecoder> decoder = makeDecoder();
+    std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
     PcmAudio audioMain("main"), audioAux("aux");
 
     decoder->start(&protocol.videoStream, protocol.videoCodec());
@@ -846,7 +857,7 @@ void Application::loopDrm()
 
     while (_active && !g_quit)
     {
-        syncDecoderCodec(*decoder, protocol, startedCodec);
+        syncDecoderCodec(decoder, protocol, startedCodec);
         Uint32 now = SDL_GetTicks();
         auto state = protocol.state();
         uint32_t frames = drm_display::videoFrames();
@@ -1017,7 +1028,7 @@ void Application::loop()
 
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
-    std::unique_ptr<IDecoder> decoder = makeDecoder();
+    std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
     PcmAudio audioMain("main"), audioAux("aux");
 
     if (Settings::keyPipe.value.length() > 2)
@@ -1051,7 +1062,7 @@ void Application::loop()
 #endif
     while (_active && !g_quit)
     {
-        syncDecoderCodec(*decoder, protocol, startedCodec);
+        syncDecoderCodec(decoder, protocol, startedCodec);
         bool newFrame = false;
 
         if (_state.showToast > 0)
