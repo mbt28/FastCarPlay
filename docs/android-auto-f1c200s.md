@@ -3,7 +3,7 @@
 This is the checklist for running the dongle-free Android Auto backend
 (`protocol = aa-usb`) on the F1C200s. The protocol is fully verified on desktop
 (Raspberry Pi 5); this covers getting it onto the board and the on-device
-bring-up. Profile file: `settings_cedrus_aa.txt`.
+bring-up. Profile file: `settings_drm.txt`.
 
 ## 0. Prerequisites
 
@@ -37,7 +37,7 @@ Verify: `readelf -A out/app | grep CPU_arch` → `Tag_CPU_arch: v5TEJ`.
    the current FastCarPlay `app` lives on the board — e.g. `/root` or `/opt/fastcarplay`):
    ```sh
    sudo cp out/app-f1c200s        <SD_ROOTFS>/<APP_DIR>/app-aa
-   sudo cp settings_cedrus_aa.txt <SD_ROOTFS>/<APP_DIR>/
+   sudo cp settings_drm.txt <SD_ROOTFS>/<APP_DIR>/
    ```
    Keep it as a **separate** `app-aa` binary + settings so the working Carlinkit
    setup is untouched and you can fall back instantly.
@@ -50,7 +50,7 @@ At the board's root shell (`#`), stop any autostarted Carlinkit instance first
 
 ```sh
 cd <APP_DIR>
-./app-aa settings_cedrus_aa.txt
+./app-aa settings_drm.txt
 ```
 
 Plug the phone in, unlock it, and **accept the "allow Android Auto / this

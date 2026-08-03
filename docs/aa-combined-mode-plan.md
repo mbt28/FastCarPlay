@@ -160,7 +160,7 @@ Notes:
 
 **Back-compat:** keep `aa-usb` / `aa-wireless` as accepted `protocol` values that map to
 `protocol=aa` + `aa-transport=wired`/`wireless`, so existing presets and `usersettings.txt` keep
-working. `settings_cedrus_aa.txt` etc. need no edits.
+working. `settings_drm.txt` etc. need no edits.
 
 ## 6. Coexistence & power (F1C200s reality)
 

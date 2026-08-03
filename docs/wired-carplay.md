@@ -136,7 +136,7 @@ covers all three privileges.
 ## Running
 
 ```ini
-# settings_cp_wired_pi.txt
+# settings_desktop.txt
 protocol      = carplay-wired
 # video-path defaults to auto: a desktop session -> SDL window + software
 # decode; otherwise DRM plane + hardware decode when the chip has a block for
@@ -146,7 +146,7 @@ mfi-i2c-addr  = 0x10
 ```
 
 ```bash
-./out/app settings_cp_wired_pi.txt        # as your user (after setup), no sudo
+./out/app settings_desktop.txt        # as your user (after setup), no sudo
 ```
 
 Plug in the **unlocked** iPhone. On the first connection tap **Trust** (a valid
