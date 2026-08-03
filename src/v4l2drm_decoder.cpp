@@ -179,6 +179,11 @@ void V4l2DrmDecoder::runner()
 
     if (!setup(_codecId))
     {
+        // Nothing will ever render on this backend -- say so, so the caller can
+        // rebuild on software instead of showing a black screen.
+        log_w("[V4L2-DRM] hardware decode unavailable for %s, falling back to software",
+              avcodec_get_name(_codecId));
+        _failed.store(true);
         teardown();
         return;
     }
@@ -195,6 +200,11 @@ void V4l2DrmDecoder::runner()
 
 void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
 {
+    // ~1s of frames: long enough to ride out a corrupt packet or a start before
+    // the first keyframe, short enough that a real mismatch is caught quickly.
+    constexpr int MAX_CONSECUTIVE_FAILURES = 30;
+    int failures = 0;
+
     while (_data->wait(_active))
     {
         std::unique_ptr<Message> segment = _data->pop();
@@ -223,8 +233,21 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
             if (send_ret != 0)
             {
                 log_w("[V4L2-DRM] can't decode packet > %s", avErrorText(send_ret).c_str());
+                // A stream the hardware cannot actually handle fails on every
+                // packet: the kernel can accept the format and still have no
+                // block for this profile. Give up rather than stay blank -- but
+                // only on a solid run of failures, so a corrupt packet or a
+                // pre-keyframe start does not cost us the hardware path.
+                if (++failures >= MAX_CONSECUTIVE_FAILURES)
+                {
+                    log_e("[V4L2-DRM] %d consecutive decode failures, falling back to software",
+                          failures);
+                    _failed.store(true);
+                    return;
+                }
                 continue;
             }
+            failures = 0;
             while (avcodec_receive_frame(_ctx, frame) == 0 && _active)
             {
                 if (frame->format == AV_PIX_FMT_DRM_PRIME)

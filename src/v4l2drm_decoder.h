@@ -30,6 +30,7 @@ public:
     void start(AtomicQueue<Message> *data, AVCodecID codecId) override;
     void stop() override;
     void flush() override;
+    bool failed() const override { return _failed.load(); }
 
 private:
     void runner();
@@ -39,6 +40,7 @@ private:
 
     std::thread _thread;
     std::atomic<bool> _active;
+    std::atomic<bool> _failed{false}; // set when this backend gives up (-> software)
     AtomicQueue<Message> *_data;
     AVCodecID _codecId;
 

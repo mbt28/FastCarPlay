@@ -25,6 +25,13 @@ public:
     virtual void stop() = 0;
     virtual void flush() = 0;
 
+    // True once this backend has given up -- it could not open, or it is being
+    // fed packets it cannot decode. A hardware decoder can only find this out
+    // once frames actually flow (the kernel may accept the format and still not
+    // have a block for this stream), so the caller watches this and rebuilds on
+    // software rather than leaving a black screen. Software decode never sets it.
+    virtual bool failed() const { return false; }
+
     VideoBuffer buffer;
 };
 

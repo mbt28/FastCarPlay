@@ -58,6 +58,8 @@ private:
     // wheel or arrow keys). Returns true when the UI consumed it.
     bool feedUiEvent(class LvglOsd &osd, const SDL_Event &e);
 #endif
+    // Set once a hardware decoder has given up, so we stop choosing it.
+    bool _hwDisabled = false;
     std::unique_ptr<class IDecoder> makeDecoder(AVCodecID codecId);
     void syncDecoderCodec(std::unique_ptr<class IDecoder> &decoder, class IConnection &protocol,
                           AVCodecID &started);
