@@ -224,6 +224,21 @@ void Application::syncDecoderCodec(std::unique_ptr<IDecoder> &decoder, IConnecti
                                    AVCodecID &started)
 {
     const AVCodecID want = protocol.videoCodec();
+
+    // A hardware backend that gave up (could not open, or cannot decode this
+    // stream) is retired for the rest of the session: rebuild on software so a
+    // mismatch costs a rebuild, not a black screen.
+    if (decoder->failed() && !_hwDisabled)
+    {
+        log_w("Hardware decode failed -- switching to software for this session");
+        _hwDisabled = true;
+        decoder->stop();
+        decoder = makeDecoder(want);
+        decoder->start(&protocol.videoStream, want);
+        started = want;
+        return;
+    }
+
     if (want == started)
         return;
     log_i("Video codec is now %s -- reopening the decoder", avcodec_get_name(want));
@@ -684,12 +699,13 @@ std::unique_ptr<IDecoder> Application::makeDecoder(AVCodecID codecId)
     // dma-buf to (see video_path.h), and only for a codec this chip has a block
     // for -- otherwise fall through to software, which always works.
 #ifdef USE_CEDRUS
-    if (video_path::hwAvailable(codecId))
+    if (!_hwDisabled && video_path::hwAvailable(codecId))
         return std::make_unique<V4l2DrmDecoder>();
 #endif
 #ifdef USE_CEDAR
     // libcedarc is H.264-only and needs the DRM/DEFE presentation path.
-    if (codecId == AV_CODEC_ID_H264 && video_path::detect().mode == video_path::Mode::Drm)
+    if (!_hwDisabled && codecId == AV_CODEC_ID_H264 &&
+        video_path::detect().mode == video_path::Mode::Drm)
         return std::make_unique<CedarDecoder>();
 #endif
     (void)codecId;
