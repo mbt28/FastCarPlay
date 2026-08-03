@@ -64,8 +64,6 @@ android-dpi = 135
 # Mainline blob-free cedrus HW H.264 decode + DEFE display (same as the
 # Carlinkit cedrus profile). The AA video channel is plain H.264, so this
 # path is reused unchanged.
-cedrus-decode = true
-renderer = drm
 
 # USB read pipeline tuning for the sunxi MUSB host controller. If you see
 # "malformed"/desync or video lagging, raise async-usb-calls first.

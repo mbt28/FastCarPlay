@@ -122,8 +122,6 @@ android-resolution = 1
 # renderer = drm  -> UI (home screen, toasts, debug) on the ARGB overlay plane
 #                    above the video -- same screens as the SDL interface.
 # renderer = none -> no UI at all (headless); serial-console navigation only.
-cedrus-decode = true
-renderer = drm
 
 # Rendeing buffer size, increse for smoothness but can introduce lag. Minimum size is 3
 #rendering-buffer = 5

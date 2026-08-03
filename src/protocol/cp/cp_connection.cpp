@@ -13,6 +13,7 @@
 #include "protocol/message.h"
 #include "protocol/protocol_const.h"
 #include "settings.h"
+#include "video_path.h"
 
 #include "cp_carplay_msg.h"
 #include "cp_crypto.h"
@@ -120,9 +121,9 @@ std::string ifaceMac(const std::string &iface)
 CpConnection::CpConnection()
 {
     _method = "carplay-wireless";
-    // videoCodec() is read (to start the decoder) before start() runs, so fix the
-    // default here: HEVC unless we'll be advertising H.264 only (F1C200s cedrus).
-    _codec.store(Settings::carplayHevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
+    // videoCodec() is read (to start the decoder) before start() runs, so seed it
+    // from what this board can actually decode.
+    _codec.store(video_path::preferredCodec());
 }
 
 CpConnection::~CpConnection() { stop(); }
@@ -396,7 +397,7 @@ void CpConnection::start()
     // Advertise HEVC only where the decoder can do it; the F1C200s cedrus is
     // H.264-only, so carplay-hevc=false makes the phone stream H.264.
     cp_av::Config avcfg;
-    avcfg.hevc = Settings::carplayHevc;
+    avcfg.hevc = video_path::preferredCodec() == AV_CODEC_ID_HEVC;
     _server.setAvConfig(avcfg);
     _server.setAvSinks(sinks);
     _server.setInputSource(this); // touch/buttons the AV session forwards to the phone

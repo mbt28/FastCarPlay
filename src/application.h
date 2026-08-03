@@ -58,7 +58,9 @@ private:
     // wheel or arrow keys). Returns true when the UI consumed it.
     bool feedUiEvent(class LvglOsd &osd, const SDL_Event &e);
 #endif
-    std::unique_ptr<class IDecoder> makeDecoder();
+    std::unique_ptr<class IDecoder> makeDecoder(AVCodecID codecId);
+    void syncDecoderCodec(std::unique_ptr<class IDecoder> &decoder, class IConnection &protocol,
+                          AVCodecID &started);
     std::unique_ptr<class IConnection> makeConnection();
 
     SDL_Window *_window;

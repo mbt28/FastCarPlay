@@ -41,7 +41,6 @@ source-fps = 30
 
 # Headless DRM: video on the DEFE plane, UI on the ARGB overlay above it.
 window-mode = 2
-renderer = drm
 log-level = 3
 
 # 3. Device -----------------------------------------------------------------
@@ -51,7 +50,6 @@ android-dpi = 135
 
 # 4. Application ------------------------------------------------------------
 
-cedrus-decode = true
 
 # USB read pipeline tuning for the sunxi MUSB host controller.
 async-usb-calls = 64

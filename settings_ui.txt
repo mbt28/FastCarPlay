@@ -39,7 +39,6 @@ lvgl-screen = picker
 
 # Windowed SDL for desktop/Pi work. On the F1C200s the UI is drawn on the DRM
 # overlay plane instead (renderer = drm, window-mode = 2).
-renderer = sdl
 window-mode = 0
 
 # Panel size. The UI lays itself out from these, so change them to preview

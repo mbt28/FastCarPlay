@@ -1,14 +1,13 @@
 # Wireless CarPlay on the F1C200s (cedrus HW H.264 -> DRM/DEFE, GT911 touch,
 # audio via libavcodec -> ALSA). Build with USE_CEDRUS=1 USE_CP_WIRELESS=1.
 #
-# IMPORTANT: the F1C200s cedrus decodes H.264 only (no HEVC), so carplay-hevc
-# MUST be false -- the phone then streams H.264 that the HW can decode.
+# The F1C200s cedrus decodes H.264 only (no HEVC); the app detects that from the
+# kernel and asks the phone for H.264 automatically -- no setting needed.
 #
 # NOTE ON THE AP: Apple requires a **5GHz** Wi-Fi AP for wireless CarPlay. The
 # on-board ESP32 is 2.4GHz-only, so the AP must come from a 5GHz-capable radio
 # (e.g. a USB dongle) for the phone to join. This config is otherwise ready.
 protocol     = carplay-wireless
-carplay-hevc = false
 
 mfi-i2c-bus  = /dev/i2c-1
 mfi-i2c-addr = 16
@@ -21,8 +20,6 @@ wifi-ap-ip      = 192.168.4.1
 bluetooth-name  = FastCarPlay
 
 # cedrus HW H.264 decode presenting to the DRM/DEFE video plane.
-renderer      = drm
-cedrus-decode = true
 window-mode   = 2
 width         = 480
 height        = 272

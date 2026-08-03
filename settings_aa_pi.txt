@@ -19,7 +19,6 @@ aa-accessory-timeout = 8000
 aa-max-unacked = 4
 
 # Show the projected screen in an SDL window on the Pi's display.
-renderer = sdl
 window-mode = 0
 width = 800
 height = 480
@@ -27,8 +26,6 @@ source-fps = 30
 
 # Software H.264 decode (no Allwinner cedrus on the Pi).
 hw-decode = false
-cedrus-decode = false
-cedar-decode = false
 
 # Real audio out through SDL on the Pi (F1C200s uses dummy).
 # audio-driver =

@@ -12,6 +12,7 @@
 #include "common/logger.h"
 #include "common/functions.h"
 #include "settings.h"
+#include "video_path.h"
 
 extern "C"
 {
@@ -225,7 +226,7 @@ bool CedarDecoder::setup()
         log_e("[Cedar] InitializeVideoDecoder failed");
         return false;
     }
-    if (Settings::renderer.value == "drm")
+    if (video_path::detect().mode == video_path::Mode::Drm)
     {
         use_drm = drm_display::open("Cedar");
         if (!use_drm)

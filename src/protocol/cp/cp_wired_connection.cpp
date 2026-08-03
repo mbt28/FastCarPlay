@@ -21,6 +21,7 @@
 #include "protocol/message.h"
 #include "protocol/protocol_const.h"
 #include "settings.h"
+#include "video_path.h"
 
 #include "cp_carplay_msg.h"
 #include "cp_crypto.h"
@@ -164,7 +165,7 @@ void rebindNcm(const std::string &busPort)
 CpWiredConnection::CpWiredConnection()
 {
     _method = "carplay-wired";
-    _codec.store(Settings::carplayHevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
+    _codec.store(video_path::preferredCodec());
 }
 
 CpWiredConnection::~CpWiredConnection() { stop(); }
@@ -610,7 +611,7 @@ void CpWiredConnection::start()
         _videoFocused.store(false);
     };
     cp_av::Config avcfg;
-    avcfg.hevc = Settings::carplayHevc;
+    avcfg.hevc = video_path::preferredCodec() == AV_CODEC_ID_HEVC;
     _server.setAvConfig(avcfg);
     _server.setAvSinks(sinks);
     _server.setInputSource(this);

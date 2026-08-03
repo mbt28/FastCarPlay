@@ -138,8 +138,9 @@ covers all three privileges.
 ```ini
 # settings_cp_wired_pi.txt
 protocol      = carplay-wired
-renderer      = sdl          # or drm / none
-carplay-hevc  = true         # false on the F1C200s (cedrus is H.264 only)
+# video-path defaults to auto: a desktop session -> SDL window + software
+# decode; otherwise DRM plane + hardware decode when the chip has a block for
+# the codec. The CarPlay codec offer (HEVC vs H.264) follows from that.
 mfi-i2c-bus   = /dev/i2c-1
 mfi-i2c-addr  = 0x10
 ```
@@ -205,9 +206,9 @@ file, so no manual copy is needed with `cp_usbmux`.
 
 ## F1C200s notes
 
-- Set **`carplay-hevc = false`** — the F1C's cedrus decodes H.264 only, so the
-  phone must stream H.264.
-- Build with `USE_CP_WIRED=1` (and the target's `USE_CEDRUS` + `renderer=drm`).
+- Nothing to set for video: the app reads the cedrus' V4L2 capabilities, sees
+  H.264-only (no HEVC), and asks the phone for H.264 automatically.
+- Build with `USE_CP_WIRED=1` (and the target's `USE_CEDRUS`).
 - The F1C has a USB **host** port; the same config‑6 → usbmux → carkit → NCM
   flow applies. libimobiledevice + libplist must be in the target rootfs
   (buildroot packages).
