@@ -6,7 +6,7 @@
 // planes:
 //   - the video plane (primary, NV12 + ALLWINNER_TILED routed through the
 //     DEFE front-end: HW de-tile + BT.601 CSC + scale) fed by CedarDecoder /
-//     CedrusDecoder from their decode threads, and
+//     V4l2DrmDecoder from their decode threads, and
 //   - an ARGB8888 overlay plane above it for the UI (home screen, toasts,
 //     debug), drawn through an SDL *software* renderer into an offscreen
 //     surface and copied to double-buffered dumb framebuffers. Per-pixel

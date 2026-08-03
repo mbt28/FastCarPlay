@@ -22,7 +22,7 @@
 #include "ui/ui_bridge.h" // native vars/actions the screens are wired to
 #endif
 #ifdef USE_CEDRUS
-#include "cedrus_decoder.h" // mainline cedrus (ffmpeg v4l2-request) HW decoder (F1C200s)
+#include "v4l2drm_decoder.h" // mainline cedrus (ffmpeg v4l2-request) HW decoder (F1C200s)
 #endif
 #if defined(USE_CEDAR) || defined(USE_CEDRUS)
 #include "drm_display.h" // shared DRM session: video plane + UI overlay plane
@@ -209,6 +209,22 @@ void Application::start(const char *title)
     log_v("Starting");
     loop();
     log_v("Stopped");
+}
+
+// The decoder has to be started before the phone has told us anything, so it
+// opens with the codec the backend *expects* (CarPlay's carplay-hevc, H.264
+// elsewhere). The real codec only arrives with the stream config, and a phone
+// may pick H.264 even when HEVC is offered -- so re-open the decoder when the
+// backend reports a different one rather than decoding with the wrong codec.
+// IDecoder::start() stops any running decode first, so this is a safe restart.
+static void syncDecoderCodec(IDecoder &decoder, IConnection &protocol, AVCodecID &started)
+{
+    const AVCodecID want = protocol.videoCodec();
+    if (want == started)
+        return;
+    log_i("Video codec is now %s -- reopening the decoder", avcodec_get_name(want));
+    decoder.start(&protocol.videoStream, want);
+    started = want;
 }
 
 #ifdef USE_LVGL
@@ -660,7 +676,7 @@ std::unique_ptr<IDecoder> Application::makeDecoder()
     // builds; otherwise (and by default) the software avcodec Decoder is used.
 #ifdef USE_CEDRUS
     if (Settings::cedrus)
-        return std::make_unique<CedrusDecoder>();
+        return std::make_unique<V4l2DrmDecoder>();
 #endif
 #ifdef USE_CEDAR
     if (Settings::cedar)
@@ -708,6 +724,7 @@ void Application::loopHeadless()
     PcmAudio audioMain("main"), audioAux("aux");
 
     decoder->start(&protocol.videoStream, protocol.videoCodec());
+    AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
@@ -729,6 +746,7 @@ void Application::loopHeadless()
     uint32_t frameId = 0;
     while (_active && !g_quit)
     {
+        syncDecoderCodec(*decoder, protocol, startedCodec);
         auto state = protocol.state();
         if (state != lastState)
         {
@@ -794,6 +812,7 @@ void Application::loopDrm()
     PcmAudio audioMain("main"), audioAux("aux");
 
     decoder->start(&protocol.videoStream, protocol.videoCodec());
+    AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
@@ -827,6 +846,7 @@ void Application::loopDrm()
 
     while (_active && !g_quit)
     {
+        syncDecoderCodec(*decoder, protocol, startedCodec);
         Uint32 now = SDL_GetTicks();
         auto state = protocol.state();
         uint32_t frames = drm_display::videoFrames();
@@ -1004,6 +1024,7 @@ void Application::loop()
         _keyListener = new PipeListener(Settings::keyPipe.value.c_str());
 
     decoder->start(&protocol.videoStream, protocol.videoCodec());
+    AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
     protocol.start();
@@ -1030,6 +1051,7 @@ void Application::loop()
 #endif
     while (_active && !g_quit)
     {
+        syncDecoderCodec(*decoder, protocol, startedCodec);
         bool newFrame = false;
 
         if (_state.showToast > 0)
