@@ -1,0 +1,47 @@
+# FastCarPlay -- head unit (the app owns the screen via DRM/KMS).
+#
+# For the F1C200s and any other board that boots without a desktop: video goes
+# on a DRM plane, the LVGL UI on an overlay plane above it. Nothing here selects
+# a decoder or a renderer -- video-path defaults to "auto", which asks the kernel
+# what this chip can decode and picks hardware + DRM when it can, software
+# otherwise (see video_path.h). The CarPlay codec offer follows from that too.
+#
+# The backend below is only the FIRST-BOOT default: pick another from the UI
+# (Settings > Source), which saves it to usersettings.txt and restarts.
+#
+# Only values that differ from the built-in defaults are listed. See settings.txt
+# for the full annotated list of options.
+
+protocol   = aa-usb
+lvgl-ui    = true
+icon-theme = material
+
+# Panel: 480x272, fullscreen, and the phone asked for 30fps to match it.
+width       = 480
+height      = 272
+window-mode = 2
+source-fps  = 30
+android-dpi = 135
+
+audio-driver = alsa
+
+# The ARM926 has no AES instructions, so ChaCha20-Poly1305 is far cheaper for
+# the AA/CarPlay session ciphers than the AES-GCM a phone would otherwise pick.
+force-chacha20 = true
+
+# USB tuning for the F1C200s MUSB controller (deeper queues, bigger transfers,
+# and a longer wait for a phone to re-enumerate in accessory mode).
+async-usb-calls      = 64
+usb-buffer           = 256
+usb-buffer-size      = 4096
+aa-accessory-timeout = 8000
+
+# Wi-Fi AP for the wireless backends (aa-wireless / carplay-wireless). Ignored
+# by the wired ones. 2.4GHz: it is what the ESP32 does, and an iPhone accepts it
+# for wireless CarPlay (5GHz is not required, contrary to the usual claim).
+wifi-ssid       = FastCarPlay-AP
+wifi-passphrase = drive1234
+wifi-channel    = 6
+wifi-ap-ip      = 192.168.4.1
+
+log-level = 3

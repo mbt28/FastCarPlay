@@ -168,7 +168,7 @@ action rather than three keeps the contract small and extends for free.
 
 ### Persistence
 
-**The UI must never write `settings_cedrus_aa.txt`.** That file ships from this repo via the
+**The UI must never write `settings_drm.txt`.** That file ships from this repo via the
 buildroot package (which auto-tracks `f1c200s-cedrus`), so the next image build would clobber user
 choices — and it is heavily commented documentation. Instead write only changed keys to
 **`$HOME/.fastcarplay/usersettings.txt`** (`/root/.fastcarplay/...` on the device), loaded *after*

@@ -52,7 +52,7 @@ future bring-up; they just must never be on the hot path by default.
 ## 3. App fix ships automatically — no action needed
 
 The FastCarPlay buildroot package auto-tracks the **`f1c200s-cedrus`** branch tip and
-`settings_cedrus_aa.txt` ships from that repo, so the control-write retry commit (`8ac0582`) and
+`settings_drm.txt` ships from that repo, so the control-write retry commit (`8ac0582`) and
 its `usb-write-*` settings come in on the next image build. Nothing to do here — listed only so
 you know the app side is already covered. This kernel task is **only items 1 and 2 above.**
 

@@ -99,7 +99,7 @@ stop)
 	echo "Usage: $0 {start|stop}" ;;
 esac
 ```
-Also ship the wireless preset (`/etc/fastcarplay/settings_cedrus_wireless.txt`, `protocol =
+Also ship the wireless preset (`/etc/fastcarplay/settings_drm.txt`, `protocol =
 aa-wireless`) — it already exists in the image. Decide whether to ship the `/etc/carplay-wireless`
 flag by default (image boots into wireless AA) or leave it opt-in (`touch /etc/carplay-wireless`).
 

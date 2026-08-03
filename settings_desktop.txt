@@ -1,0 +1,31 @@
+# FastCarPlay -- desktop / development (the app runs in a window).
+#
+# For a dev box or a Pi running a desktop session. video-path defaults to "auto":
+# it sees the compositor (WAYLAND_DISPLAY / DISPLAY), leaves KMS alone and draws
+# into an SDL window with software decode. Nothing to configure for video.
+#
+# Switch backend from the UI (Settings > Source) if the LVGL UI is enabled, or
+# just change protocol below. Wired CarPlay additionally needs the one-time host
+# setup -- see docs/wired-carplay.md and scripts/setup-wired-carplay.sh.
+#
+# Only values that differ from the built-in defaults are listed. See settings.txt
+# for the full annotated list of options.
+
+protocol = carplay-wired
+
+# A window the size of a typical head-unit panel, so the UI is laid out as it
+# will be on the device.
+width       = 800
+height      = 480
+window-mode = 0
+
+audio-driver = alsa
+
+# Wi-Fi AP for the wireless backends (aa-wireless / carplay-wireless); ignored by
+# the wired ones. Needs hostapd + dnsmasq already running on this interface.
+wifi-ssid       = FastCarPlay-AP
+wifi-passphrase = drive1234
+wifi-channel    = 6
+wifi-ap-ip      = 192.168.4.1
+
+log-level = 4

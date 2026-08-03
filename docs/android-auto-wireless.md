@@ -58,7 +58,7 @@ aa-wireless` is unavailable and the app falls back with a log warning.
 
 ## 3. Settings
 
-Start from `settings_cedrus_aa.txt` and change the protocol + add the wireless
+Start from `settings_drm.txt` and change the protocol + add the wireless
 block:
 
 ```
@@ -93,7 +93,7 @@ dbus-daemon --system            # if not already up
 ## 5. First run
 
 ```sh
-./app-aa settings_cedrus_wireless.txt
+./app-aa settings_drm.txt
 ```
 
 On the phone, go to Android Auto's wireless setup (or just pair to the new
