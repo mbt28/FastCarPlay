@@ -1,5 +1,5 @@
-#ifndef SRC_CEDRUS_DECODER
-#define SRC_CEDRUS_DECODER
+#ifndef SRC_V4L2DRM_DECODER
+#define SRC_V4L2DRM_DECODER
 
 // Mainline-cedrus H.264 decoder (blob-free).  Decodes through ffmpeg's V4L2
 // Request API hwaccel, which drives the in-kernel sunxi-cedrus stateless decoder
@@ -21,11 +21,11 @@ extern "C"
 #include "struct/atomic_queue.h"
 #include "protocol/message.h"
 
-class CedrusDecoder : public IDecoder
+class V4l2DrmDecoder : public IDecoder
 {
 public:
-    CedrusDecoder();
-    ~CedrusDecoder();
+    V4l2DrmDecoder();
+    ~V4l2DrmDecoder();
 
     void start(AtomicQueue<Message> *data, AVCodecID codecId) override;
     void stop() override;
@@ -47,4 +47,4 @@ private:
     AVBufferRef *_hwdev;
 };
 
-#endif /* SRC_CEDRUS_DECODER */
+#endif /* SRC_V4L2DRM_DECODER */

@@ -2,14 +2,18 @@
 
 #if defined(USE_CEDAR) || defined(USE_CEDRUS)
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
 #include <map>
 #include <mutex>
+#include <string>
+#include <vector>
 
 extern "C"
 {
+#include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
@@ -197,11 +201,25 @@ void destroy_dumb(DumbFb &b)
     }
 }
 
-bool session_open(const char *tag)
+void session_close();
+
+// Try one /dev/dri/card* node. On success `fd` stays open with the connector,
+// crtc and planes selected; on failure the caller resets with session_close()
+// and moves to the next candidate.
+bool session_try_card(const char *path, const char *tag)
 {
-    fd = ::open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-    if (fd < 0) { fprintf(stderr, "[%s] open /dev/dri/card0: %s\n", tag, strerror(errno)); return false; }
-    drmSetMaster(fd);
+    fd = ::open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) { fprintf(stderr, "[%s] open %s: %s\n", tag, path, strerror(errno)); return false; }
+    // Becoming DRM master is what allows modesetting and plane commits. It fails
+    // when something else already owns KMS (a desktop compositor), or when we are
+    // not on an active VT -- not an error, just "this display is not ours", so
+    // the caller can fall back to SDL/headless. Some drivers report an error even
+    // though the fd is already master, hence the drmIsMaster() confirmation.
+    if (drmSetMaster(fd) != 0 && !drmIsMaster(fd))
+    {
+        fprintf(stderr, "[%s] %s: not DRM master (%s)\n", tag, path, strerror(errno));
+        return false;
+    }
     drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
     // The tiled plane only routes through the DEFE front-end via the atomic
     // API (sun4i decides in atomic_check); legacy SetPlane lands on the DEBE.
@@ -278,6 +296,35 @@ bool session_open(const char *tag)
     if (!uplane)
         fprintf(stderr, "[Drm] no ARGB overlay plane: UI overlay disabled\n");
     return true;
+}
+
+bool session_open(const char *tag)
+{
+    // card0 is not always the display node -- a board can enumerate a
+    // render-only or secondary GPU first -- so try each card in order and keep
+    // the first that gives us master plus a connected output.
+    std::vector<std::string> cards;
+    if (DIR *d = opendir("/dev/dri"))
+    {
+        for (struct dirent *e; (e = readdir(d));)
+            if (strncmp(e->d_name, "card", 4) == 0)
+                cards.push_back(std::string("/dev/dri/") + e->d_name);
+        closedir(d);
+    }
+    if (cards.empty())
+    {
+        fprintf(stderr, "[%s] no /dev/dri/card* nodes\n", tag);
+        return false;
+    }
+    std::sort(cards.begin(), cards.end());
+
+    for (const std::string &card : cards)
+    {
+        if (session_try_card(card.c_str(), tag))
+            return true;
+        session_close(); // release the fd + any partial state before the next
+    }
+    return false;
 }
 
 void flush_video_fbs()

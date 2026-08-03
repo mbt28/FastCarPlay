@@ -1,4 +1,4 @@
-#include "cedrus_decoder.h"
+#include "v4l2drm_decoder.h"
 
 #ifdef USE_CEDRUS
 
@@ -57,7 +57,7 @@ void drm_show(AVFrame *frame)
     if (!logged)
     {
         logged = true;
-        fprintf(stderr, "[Cedrus] frame %dx%d fmt=%.4s objs=%d planes=%d "
+        fprintf(stderr, "[V4L2-DRM] frame %dx%d fmt=%.4s objs=%d planes=%d "
                 "pitch0=%u pitch1=%u off1=%u mod=0x%llx\n",
                 frame->width, frame->height, (const char *)&layer->format,
                 d->nb_objects, layer->nb_planes, pitches[0], pitches[1], offsets[1],
@@ -79,17 +79,17 @@ enum AVPixelFormat get_drm_format(AVCodecContext *, const enum AVPixelFormat *fm
 }
 } // namespace
 
-CedrusDecoder::CedrusDecoder()
+V4l2DrmDecoder::V4l2DrmDecoder()
     : _active(false), _data(nullptr), _ctx(nullptr), _parser(nullptr), _hwdev(nullptr)
 {
 }
 
-CedrusDecoder::~CedrusDecoder()
+V4l2DrmDecoder::~V4l2DrmDecoder()
 {
     stop();
 }
 
-void CedrusDecoder::start(AtomicQueue<Message> *data, AVCodecID codecId)
+void V4l2DrmDecoder::start(AtomicQueue<Message> *data, AVCodecID codecId)
 {
     if (_active)
         stop();
@@ -97,10 +97,10 @@ void CedrusDecoder::start(AtomicQueue<Message> *data, AVCodecID codecId)
     _data = data;
     _codecId = codecId;
     _active = true;
-    _thread = std::thread(&CedrusDecoder::runner, this);
+    _thread = std::thread(&V4l2DrmDecoder::runner, this);
 }
 
-void CedrusDecoder::stop()
+void V4l2DrmDecoder::stop()
 {
     if (!_active)
         return;
@@ -111,21 +111,21 @@ void CedrusDecoder::stop()
         _thread.join();
 }
 
-void CedrusDecoder::flush()
+void V4l2DrmDecoder::flush()
 {
     if (_ctx)
         avcodec_flush_buffers(_ctx);
 }
 
-bool CedrusDecoder::setup(AVCodecID codecId)
+bool V4l2DrmDecoder::setup(AVCodecID codecId)
 {
-    if (!drm_display::open("Cedrus"))
+    if (!drm_display::open("V4L2-DRM"))
         return false;
 
     const AVCodec *codec = avcodec_find_decoder(codecId);
     if (!codec)
     {
-        log_e("[Cedrus] no decoder for codec %s", avcodec_get_name(codecId));
+        log_e("[V4L2-DRM] no decoder for codec %s", avcodec_get_name(codecId));
         return false;
     }
 
@@ -137,7 +137,7 @@ bool CedrusDecoder::setup(AVCodecID codecId)
     // so the in-kernel cedrus decoder is used and frames come back as dma-bufs.
     if (av_hwdevice_ctx_create(&_hwdev, AV_HWDEVICE_TYPE_DRM, nullptr, nullptr, 0) < 0)
     {
-        log_e("[Cedrus] can't create DRM hwdevice (v4l2-request)");
+        log_e("[V4L2-DRM] can't create DRM hwdevice (v4l2-request)");
         return false;
     }
     _ctx->hw_device_ctx = av_buffer_ref(_hwdev);
@@ -150,22 +150,22 @@ bool CedrusDecoder::setup(AVCodecID codecId)
     int ret = avcodec_open2(_ctx, codec, nullptr);
     if (ret < 0)
     {
-        log_e("[Cedrus] avcodec_open2 failed: %s", avErrorText(ret).c_str());
+        log_e("[V4L2-DRM] avcodec_open2 failed: %s", avErrorText(ret).c_str());
         return false;
     }
 
     _parser = av_parser_init(codecId);
     if (!_parser)
     {
-        log_e("[Cedrus] can't init parser for %s", avcodec_get_name(codecId));
+        log_e("[V4L2-DRM] can't init parser for %s", avcodec_get_name(codecId));
         return false;
     }
 
-    log_i("[Cedrus] ffmpeg v4l2-request hwaccel ready (%s -> cedrus -> DEFE)", codec->name);
+    log_i("[V4L2-DRM] ffmpeg v4l2-request hwaccel ready (%s -> cedrus -> DEFE)", codec->name);
     return true;
 }
 
-void CedrusDecoder::teardown()
+void V4l2DrmDecoder::teardown()
 {
     if (_parser) { av_parser_close(_parser); _parser = nullptr; }
     if (_ctx) avcodec_free_context(&_ctx);
@@ -173,7 +173,7 @@ void CedrusDecoder::teardown()
     drm_display::close();
 }
 
-void CedrusDecoder::runner()
+void V4l2DrmDecoder::runner()
 {
     setThreadName("cedrus-decoder");
 
@@ -193,7 +193,7 @@ void CedrusDecoder::runner()
     teardown();
 }
 
-void CedrusDecoder::loop(AVPacket *packet, AVFrame *frame)
+void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
 {
     while (_data->wait(_active))
     {
@@ -222,7 +222,7 @@ void CedrusDecoder::loop(AVPacket *packet, AVFrame *frame)
             int send_ret = avcodec_send_packet(_ctx, packet);
             if (send_ret != 0)
             {
-                log_w("[Cedrus] can't decode packet > %s", avErrorText(send_ret).c_str());
+                log_w("[V4L2-DRM] can't decode packet > %s", avErrorText(send_ret).c_str());
                 continue;
             }
             while (avcodec_receive_frame(_ctx, frame) == 0 && _active)
