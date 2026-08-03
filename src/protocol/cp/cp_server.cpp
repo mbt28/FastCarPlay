@@ -1,5 +1,6 @@
 #include "cp_server.h"
 
+#include <cerrno>
 #include <cstring>
 #include <unistd.h>
 #include <poll.h>
@@ -25,7 +26,16 @@ bool Server::start(uint16_t port, cp_auth_setup::MfiSigner *signer)
     // AF_INET6 socket with IPV6_V6ONLY off accepts both (IPv4 as v4-mapped).
     _listenFd = socket(AF_INET6, SOCK_STREAM, 0);
     if (_listenFd < 0)
+    {
+        // Most likely a kernel built without IPv6 (EAFNOSUPPORT). Worth saying
+        // plainly: CarPlay cannot work without it -- the handoff hands the phone
+        // an fe80:: link-local to connect back to -- and the caller would
+        // otherwise report this as "already running?".
+        log_e("cp-server: cannot create an IPv6 socket (%s). CarPlay needs IPv6; "
+              "check CONFIG_IPV6 in the kernel (/proc/net/if_inet6 should exist)",
+              strerror(errno));
         return false;
+    }
     int yes = 1;
     setsockopt(_listenFd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     int no = 0;
@@ -38,7 +48,7 @@ bool Server::start(uint16_t port, cp_auth_setup::MfiSigner *signer)
     if (bind(_listenFd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
         listen(_listenFd, 1) != 0)
     {
-        log_e("cp-server: bind/listen :%d failed", port);
+        log_e("cp-server: bind/listen :%d failed (%s)", port, strerror(errno));
         close(_listenFd);
         _listenFd = -1;
         return false;
