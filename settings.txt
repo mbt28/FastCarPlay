@@ -115,7 +115,6 @@
 # Prefer HW decoding.
 # If you have input lag that means that your hardware decoder can't work in streaming mode
 # This is happening or Raspberry Pi Zero 2W. Disable this to use SW decoding for that case.
-#hw-decode = true
 
 # Use the Allwinner Cedar hardware decoder (libcedarc) instead of ffmpeg.
 # Only effective on builds compiled with USE_CEDAR (e.g. Allwinner F1C200s);

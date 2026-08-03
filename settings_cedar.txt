@@ -101,7 +101,6 @@ android-resolution = 1
 # Prefer HW decoding.
 # If you have input lag that means that your hardware decoder can't work in streaming mode
 # This is happening or Raspberry Pi Zero 2W. Disable this to use SW decoding for that case.
-#hw-decode = true
 
 # Allwinner F1C200s: use the Cedar hardware decoder without SDL video.
 # renderer = drm  -> video on the DRM/DEFE plane (HW de-tile + CSC, lowest CPU)

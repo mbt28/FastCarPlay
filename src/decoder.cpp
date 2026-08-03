@@ -45,58 +45,30 @@ void Decoder::flush()
         avcodec_flush_buffers(_context);
 }
 
-// Initialize and select the best decoder (try HW first, then SW)
+// Open the software decoder for this codec.
+//
+// This backend is deliberately software-only. Hardware decode is decided once,
+// centrally, by video_path (which asks the kernel what the chip can actually
+// decode) and served by V4l2DrmDecoder, which does the part that makes it worth
+// having: a hwdevice context plus a get_format that keeps frames in driver
+// buffers (DRM_PRIME) all the way to a DRM plane.
+//
+// This used to iterate every registered codec and open the first one flagged
+// AV_CODEC_CAP_HARDWARE. That selected by capability flag rather than by what
+// the board contains -- on a Pi it would try hevc_cuvid (registered because
+// ffmpeg is built with NVIDIA support) on a machine with no NVIDIA GPU, and on
+// a board exposing a V4L2 M2M node it could succeed and then quietly decode
+// through system memory, bypassing the video_path decision entirely. Since it
+// set up no hwdevice or get_format, it never actually accelerated anything.
 AVCodecContext *Decoder::load_codec(AVCodecID codec_id)
 {
-    void *iter = nullptr;
     const AVCodec *codec = nullptr;
     AVCodecContext *result = nullptr;
 
-    // Try hardware-accelerated decoders by iterating registered codecs
-    // NOTE: simply opening a codec with AV_CODEC_CAP_HARDWARE is not sufficient
-    // on platforms such as V4L2M2M. A proper hwdevice context and get_format
-    // callback must be setup so that AVFrames reference driver buffers instead
-    // of being converted to system memory.  This implementation currently
-    // only picks a hardware-capable codec but still operates in software mode.
-    // Fixing this will eliminate an extra copy and allow true GPU‑accelerated
-    // decoding on the Pi.
-    while ((codec = av_codec_iterate(&iter)) && Settings::hwDecode)
-    {
-        if (!av_codec_is_decoder(codec) || codec->id != codec_id)
-            continue;
-        if (!(codec->capabilities & AV_CODEC_CAP_HARDWARE))
-            continue;
-
-        result = avcodec_alloc_context3(codec);
-        if (!result)
-        {
-            log_w("Can't load HW codec %s > out of memory", codec->name);
-            break;
-        }
-
-        if (Settings::codecLowDelay)
-            result->flags |= AV_CODEC_FLAG_LOW_DELAY;
-        if (Settings::codecFast)
-            result->flags2 |= AV_CODEC_FLAG2_FAST;
-
-        int ret = avcodec_open2(result, codec, nullptr);
-        if (ret == 0)
-        {
-            log_i("HW decoder %s", codec->name);
-            if (result->codec->capabilities & AV_CODEC_CAP_DELAY)
-                log_w("Codec %s has AV_CODEC_CAP_DELAY and can introduce lags, consider use SW decoding", codec->name);
-            return result;
-        }
-
-        log_w("Can't load HW decoder %s > %s ", codec->name, avErrorText(ret).c_str());
-        avcodec_free_context(&result);
-    }
-
-    // Fallback to software decoder
     codec = avcodec_find_decoder(codec_id);
     if (!codec)
     {
-        log_w("[Video] HW decoder not found for codec id %d", codec_id);
+        log_w("[Video] no decoder for codec id %d", codec_id);
         return nullptr;
     }
 
@@ -106,6 +78,14 @@ AVCodecContext *Decoder::load_codec(AVCodecID codec_id)
         log_w("Failed to allocate context for codec id %d", codec_id);
         return nullptr;
     }
+
+    // Projection is latency-sensitive, so these matter here: they used to be set
+    // only on the hardware attempt above, which meant the software decoder --
+    // the path actually taken almost everywhere -- ignored both settings.
+    if (Settings::codecLowDelay)
+        result->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    if (Settings::codecFast)
+        result->flags2 |= AV_CODEC_FLAG2_FAST;
 
     int ret = avcodec_open2(result, codec, nullptr);
     if (ret < 0)

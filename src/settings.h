@@ -86,7 +86,6 @@ public:
     // Application configuration section
     static inline Setting<int> fontSize{"font-size", 40};
     static inline Setting<bool> vsync{"vsync", false};
-    static inline Setting<bool> hwDecode{"hw-decode", true};
     // How video is decoded and shown. "auto" (default) probes the board: a
     // desktop session -> an SDL window with software decode; otherwise, if we
     // can become DRM master, video goes on a DRM plane (hardware decode when
