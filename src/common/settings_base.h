@@ -62,7 +62,15 @@ public:
             }
             else if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>)
             {
-                value = static_cast<T>(std::stoll(str));
+                // Accept hex for the settings that are naturally written that
+                // way (i2c addresses, USB ids). Base 10 otherwise -- not base
+                // 0, which would read a leading zero as octal.
+                const bool hex = str.size() > 2 && str[0] == '0' &&
+                                 (str[1] == 'x' || str[1] == 'X');
+                size_t used = 0;
+                value = static_cast<T>(std::stoll(str, &used, hex ? 16 : 10));
+                if (used != str.size())
+                    throw std::runtime_error("trailing junk after the number");
             }
             else if constexpr (std::is_floating_point_v<T>)
             {
