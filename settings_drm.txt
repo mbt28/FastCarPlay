@@ -36,6 +36,9 @@ usb-buffer           = 256
 usb-buffer-size      = 4096
 aa-accessory-timeout = 8000
 
+mfi-i2c-bus   = /dev/i2c-0
+mfi-i2c-addr  = 0x10
+
 # Wi-Fi AP for the wireless backends (aa-wireless / carplay-wireless). Ignored
 # by the wired ones. 2.4GHz: it is what the ESP32 does, and an iPhone accepts it
 # for wireless CarPlay (5GHz is not required, contrary to the usual claim).
