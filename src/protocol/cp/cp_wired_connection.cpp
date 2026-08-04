@@ -10,7 +10,9 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <netinet/in.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -143,6 +145,28 @@ std::string ifaceLinkLocal(const std::string &iface)
     }
     freeifaddrs(ifa);
     return out;
+}
+
+// Bring the NCM interface up. A desktop has a network manager to do this; a head
+// unit does not, so the link stays DOWN, never gets its IPv6 link-local, and the
+// CarPlay handoff has no address to hand the phone.
+void bringUp(const std::string &iface)
+{
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return;
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, iface.c_str(), IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0 && !(ifr.ifr_flags & IFF_UP))
+    {
+        ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
+        if (ioctl(fd, SIOCSIFFLAGS, &ifr) != 0)
+            log_w("carplay-wired: could not bring %s up (%s)", iface.c_str(), strerror(errno));
+        else
+            log_i("carplay-wired: brought %s up", iface.c_str());
+    }
+    ::close(fd);
 }
 
 void writeSys(const std::string &path, const std::string &val)
@@ -391,6 +415,7 @@ bool CpWiredConnection::runWiredSession()
     // knock cdc_ncm off, so rebind once if it doesn't appear.
     const std::string iface = "usb0";
     std::string fe80;
+    bringUp(iface);
     for (int i = 0; i < 40 && _active.load(); i++)
     {
         fe80 = ifaceLinkLocal(iface);
