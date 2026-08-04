@@ -393,7 +393,7 @@ public:
 private:
     void readerLoop()
     {
-        std::vector<uint8_t> buf(65536);
+        std::vector<uint8_t> buf(16384); // usbfs caps a single bulk transfer at MAX_USBFS_BUFFER_SIZE (16K) on some HCDs (MUSB)
         Bytes rx;
         while (_run)
         {
