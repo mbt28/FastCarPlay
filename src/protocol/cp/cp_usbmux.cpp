@@ -188,8 +188,26 @@ std::string readPairRecord(const std::string &udid)
 
 void savePairRecord(const std::string &udid, const std::string &data)
 {
-    std::ofstream f(std::string(LOCKDOWN_STORE) + "/" + udid + ".plist", std::ios::binary);
+    // Create the store first: on a fresh image /var/lib/lockdown does not
+    // exist, and an ofstream to a missing directory fails *silently*. The
+    // pairing then reports success -- the phone really did grant Trust -- while
+    // we keep no record, so every later carkit open fails as "not paired" with
+    // nothing to show for it.
+    ::mkdir(LOCKDOWN_STORE, 0755);
+
+    const std::string path = std::string(LOCKDOWN_STORE) + "/" + udid + ".plist";
+    std::ofstream f(path, std::ios::binary);
+    if (!f)
+    {
+        log_e("cp-usbmux: cannot write the pair record %s: %s", path.c_str(), strerror(errno));
+        return;
+    }
     f.write(data.data(), (std::streamsize)data.size());
+    f.close();
+    if (!f)
+        log_e("cp-usbmux: failed to write the pair record %s", path.c_str());
+    else
+        log_i("cp-usbmux: stored the pair record for %s", udid.c_str());
 }
 } // namespace
 
