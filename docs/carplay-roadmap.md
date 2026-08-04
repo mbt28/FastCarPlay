@@ -81,7 +81,7 @@ control session. **Milestone (desktop, real iPhone):** CarPlay UI renders + driv
 plays, zero-copy video confirmed.
 
 ### P4 — Wireless CarPlay (BLE + mDNS + Wi-Fi + TCP)
-BLE trigger (extend `aa_bluetooth`) + minimal mDNS responder + reuse `aa_wifi` AP + `TcpTransport`.
+BLE trigger (extend `aa_bluetooth`) + minimal mDNS responder + reuse the shared `wifi_ap` AP + `TcpTransport`.
 **Milestone (desktop):** iPhone joins via Bonjour and runs CarPlay wirelessly.
 
 ### P5 — F1C200s efficiency bring-up + perf tuning

@@ -5,7 +5,7 @@
 
 #include "protocol/aa/aa_connection.h"
 #include "protocol/aa/aa_bluetooth.h"
-#include "protocol/aa/aa_wifi.h"
+#include "protocol/wifi_ap.h"
 
 // Wireless Android Auto backend: brings up the Wi-Fi AP and the Bluetooth
 // bootstrap, then runs the normal GAL session over TCP (AaTcpTransport). The
@@ -21,7 +21,7 @@ public:
     void stop() override;
 
 private:
-    AaWifi _wifi;
+    WifiAp _wifi;
     AaBluetooth _bluetooth;
 };
 
