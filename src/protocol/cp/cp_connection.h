@@ -26,6 +26,7 @@ extern "C"
 }
 
 #include "protocol/iconnection.h"
+#include "protocol/wifi_ap.h"
 
 #include "cp_auth_setup.h"
 #include "cp_av.h"
@@ -77,6 +78,7 @@ private:
     bool _haveChip = false;
     std::unique_ptr<cp_auth_setup::MfiSigner> _signer;
 
+    WifiAp _wifi;
     cp_server::Server _server;
     cp_mdns::MdnsResponder _mdns;
     cp_bt::CpBluetooth _bt;

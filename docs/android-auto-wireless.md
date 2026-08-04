@@ -102,7 +102,7 @@ Bluetooth device "FastCarPlay"), accept pairing. Watch the serial console for:
 ```
 [AaBluetooth] bt: adapter 'FastCarPlay' powered, pairable + discoverable
 [AaBluetooth] bt: registered profile 4de17a00-... (server)
-[AaWifi]      wifi: AP 'FastCarPlay' up on 192.168.53.1 (<bssid>, ch 6)
+[WifiAp]      wifi: AP 'FastCarPlay' up on 192.168.53.1 (<bssid>, ch 6)
 [AaBluetooth] bt: NewConnection ... (fd N)          <- phone connected RFCOMM
 [aa_aaw]      aaw: RFCOMM handshake starting
 [aa_aaw]      aaw: info request, sending Wi-Fi credentials

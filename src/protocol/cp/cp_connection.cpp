@@ -369,7 +369,16 @@ void CpConnection::start()
         log_w("CarPlay: MFi chip absent on %s -- auth will fail",
               Settings::mfiI2cBus.value.c_str());
 
+    // Bring up our own AP first. The credentials we hand the phone below have
+    // to describe an AP that actually exists with that SSID, so we start it
+    // rather than trusting an externally managed hostapd to match wifi-ssid.
+    if (!_wifi.start())
+        log_e("CarPlay: Wi-Fi AP failed to start -- the phone will have no "
+              "network to join after the Bluetooth handoff");
+
     // Wireless CarPlay runs over the AP interface's fe80 link-local + its MAC.
+    // Read only after the AP is up: the link-local is derived from the MAC when
+    // the interface comes up, so an earlier read finds nothing.
     const std::string iface = Settings::wifiIface.value;
     std::string fe80 = wlanLinkLocal(iface);
     std::string mac = ifaceMac(iface);
@@ -467,6 +476,7 @@ void CpConnection::stop()
     _bt.stop();
     _server.stop();
     _mdns.stop();
+    _wifi.stop(); // last: the phone reaches the server over this AP
     _started = false;
     _state.store(PROTOCOL_STATUS_NO_DEVICE);
 }
