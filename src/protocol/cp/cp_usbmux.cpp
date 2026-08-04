@@ -195,19 +195,45 @@ void savePairRecord(const std::string &udid, const std::string &data)
     // nothing to show for it.
     ::mkdir(LOCKDOWN_STORE, 0755);
 
+    // Raw POSIX rather than ofstream so the write can be fsync'd: pairing is a
+    // once-per-phone interactive step (the user has to tap Trust), and this
+    // board does lock up. Left in the page cache, the record is lost on the
+    // next unclean reboot and the user is silently asked to pair again.
     const std::string path = std::string(LOCKDOWN_STORE) + "/" + udid + ".plist";
-    std::ofstream f(path, std::ios::binary);
-    if (!f)
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0)
     {
         log_e("cp-usbmux: cannot write the pair record %s: %s", path.c_str(), strerror(errno));
         return;
     }
-    f.write(data.data(), (std::streamsize)data.size());
-    f.close();
-    if (!f)
-        log_e("cp-usbmux: failed to write the pair record %s", path.c_str());
-    else
-        log_i("cp-usbmux: stored the pair record for %s", udid.c_str());
+
+    size_t off = 0;
+    while (off < data.size())
+    {
+        ssize_t n = ::write(fd, data.data() + off, data.size() - off);
+        if (n <= 0)
+        {
+            if (errno == EINTR)
+                continue;
+            log_e("cp-usbmux: writing the pair record %s failed: %s", path.c_str(), strerror(errno));
+            ::close(fd);
+            return;
+        }
+        off += (size_t)n;
+    }
+    if (::fsync(fd) < 0)
+        log_w("cp-usbmux: could not flush the pair record: %s", strerror(errno));
+    ::close(fd);
+
+    // Also flush the directory entry, otherwise the file itself is durable but
+    // the name pointing at it need not be.
+    int dfd = ::open(LOCKDOWN_STORE, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dfd >= 0)
+    {
+        ::fsync(dfd);
+        ::close(dfd);
+    }
+    log_i("cp-usbmux: stored the pair record for %s", udid.c_str());
 }
 } // namespace
 
