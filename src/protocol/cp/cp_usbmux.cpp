@@ -624,6 +624,9 @@ public:
         return true;
     }
 
+    // Stop accepting and wake every client thread, but do NOT join them yet: a
+    // client can still be parked in MuxConn::recv(), which only returns once the
+    // host marks its connections closed. Joining here would deadlock.
     void stop()
     {
         _run = false;
@@ -635,10 +638,43 @@ public:
         }
         if (_accept.joinable())
             _accept.join();
+
+        std::lock_guard<std::mutex> lk(_clientsMutex);
+        for (auto &cl : _clients)
+        {
+            int fd = cl.fd->load();
+            if (fd >= 0)
+                shutdown(fd, SHUT_RDWR); // unblocks the client's recv()
+        }
         unlink(_sockPath.c_str());
     }
 
+    // Join the client threads. Call this *after* the host has closed, so the
+    // threads are all unblocked -- and *before* the host or this server is
+    // destroyed, because the threads dereference both.
+    void joinClients()
+    {
+        std::vector<Client> clients;
+        {
+            std::lock_guard<std::mutex> lk(_clientsMutex);
+            clients.swap(_clients);
+        }
+        for (auto &cl : clients)
+            if (cl.th.joinable())
+                cl.th.join();
+    }
+
 private:
+    // A client connection and the thread serving it. The fd is shared so the
+    // thread can hand it back (as -1) when it closes it, under _clientsMutex,
+    // so stop() can never shutdown() an fd number that has been recycled.
+    struct Client
+    {
+        std::thread th;
+        std::shared_ptr<std::atomic<int>> fd;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
+
     void acceptLoop()
     {
         while (_run)
@@ -646,7 +682,33 @@ private:
             int c = accept(_srv, nullptr, nullptr);
             if (c < 0)
                 break;
-            std::thread([this, c] { client(c); }).detach();
+            reapClients();
+            auto fd = std::make_shared<std::atomic<int>>(c);
+            auto done = std::make_shared<std::atomic<bool>>(false);
+            std::thread th([this, c, fd, done] {
+                client(c, fd);
+                done->store(true);
+            });
+            std::lock_guard<std::mutex> lk(_clientsMutex);
+            _clients.push_back({std::move(th), fd, done});
+        }
+    }
+
+    // Join the threads that have already finished, so a long session does not
+    // accumulate unjoined threads (each holds its stack until joined).
+    void reapClients()
+    {
+        std::lock_guard<std::mutex> lk(_clientsMutex);
+        for (auto it = _clients.begin(); it != _clients.end();)
+        {
+            if (it->done->load())
+            {
+                if (it->th.joinable())
+                    it->th.join();
+                it = _clients.erase(it);
+            }
+            else
+                ++it;
         }
     }
 
@@ -728,7 +790,7 @@ private:
         return e;
     }
 
-    void client(int c)
+    void client(int c, const std::shared_ptr<std::atomic<int>> &fdRef)
     {
         for (;;)
         {
@@ -810,7 +872,14 @@ private:
             if (req)
                 plist_free(req);
         }
-        ::close(c);
+        // Retire the fd under the same lock stop() uses, so it cannot shutdown()
+        // this number after the kernel has recycled it for someone else.
+        {
+            std::lock_guard<std::mutex> lk(_clientsMutex);
+            int fd = fdRef->exchange(-1);
+            if (fd >= 0)
+                ::close(fd);
+        }
     }
 
     void relay(int c, std::shared_ptr<MuxConn> conn)
@@ -844,6 +913,8 @@ private:
     int _srv = -1;
     std::atomic<bool> _run{false};
     std::thread _accept;
+    std::vector<Client> _clients;
+    std::mutex _clientsMutex;
 };
 
 // ── Usbmux orchestrator ────────────────────────────────────────────────────
@@ -971,10 +1042,23 @@ void Usbmux::stop()
 {
     if (!_running.exchange(false) && !_server && !_host)
         return;
+    // Order matters. Client threads hold raw pointers to both the server and the
+    // host (MuxConn::send/close reach the host to frame a packet), so both must
+    // outlive every client thread -- destroying them first crashes in
+    // pthread_mutex_lock on a freed mutex.
+    //
+    //   1. stop accepting, and shutdown() the client sockets to wake anyone
+    //      blocked in recv()
+    //   2. close the host: joins the reader and marks every MuxConn closed,
+    //      which releases clients parked in MuxConn::recv()
+    //   3. only now can the clients all finish, so join them
+    //   4. and only now is it safe to destroy either object
     if (_server)
         _server->stop();
     if (_host)
         _host->close();
+    if (_server)
+        _server->joinClients();
     _server.reset();
     _host.reset();
 }
