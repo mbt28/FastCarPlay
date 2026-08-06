@@ -418,13 +418,17 @@ public:
             std::lock_guard<std::mutex> lk(_connMutex);
             _conns[sport] = conn;
         }
+        log_d("cp-usbmux: connect sport=%u -> dport=%u, sending SYN", sport, dport);
         conn->tcp(TH_SYN, nullptr, 0);
         if (!conn->waitConnected(5000))
         {
+            log_w("cp-usbmux: connect to port %u timed out (no SYN-ACK for sport %u)", dport,
+                  sport);
             std::lock_guard<std::mutex> lk(_connMutex);
             _conns.erase(sport);
             return nullptr;
         }
+        log_d("cp-usbmux: connect sport=%u established", sport);
         return conn;
     }
 
@@ -477,9 +481,14 @@ private:
                         if (it != _conns.end())
                             conn = it->second;
                     }
+                    log_d("cp-usbmux: rx tcp sport=%u dport=%u flags=0x%02x len=%u -> %s",
+                          get16be(pkt + 16), dp, flags, (unsigned)(len - 36),
+                          conn ? "dispatched" : "NO MATCHING CONN");
                     if (conn)
                         conn->onPacket(flags, seq, ack, win, pkt + 36, len - 36);
                 }
+                else
+                    log_d("cp-usbmux: rx proto=%u len=%u", proto, len);
                 off += len;
             }
             if (off > 0)
