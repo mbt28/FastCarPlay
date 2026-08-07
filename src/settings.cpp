@@ -73,11 +73,17 @@ bool Settings::loadUser()
 {
     const std::string path = userPath();
     std::ifstream file(path);
+    // Remember what we did for print(): this runs before the log level is set
+    // from the settings, so logging it here would go nowhere.
+    _userPathTried = path;
     if (!file.is_open())
+    {
+        _userApplied = false;
         return false; // no overrides yet: not an error
+    }
 
     file.close();
-    log_v("Applying user settings > %s", path.c_str());
+    _userApplied = true;
     return load(path);
 }
 
@@ -185,8 +191,20 @@ bool Settings::setUser(const std::string &key, const std::string &value)
     return true;
 }
 
+std::string Settings::_userPathTried;
+bool Settings::_userApplied = false;
+
 void Settings::print()
 {
+    // Say which override file won. These are applied after the preset given on
+    // the command line, and the path follows $HOME -- so running under sudo
+    // applies /root/... instead of the invoking user's, silently overriding the
+    // preset that was passed. Info level: it changes what the run actually does.
+    if (_userApplied)
+        log_i("Applied user settings > %s", _userPathTried.c_str());
+    else if (!_userPathTried.empty())
+        log_i("No user settings at %s (using the preset as-is)", _userPathTried.c_str());
+
     for (ISetting *setting : _settings())
     {
         log_d("%s = %s", setting->name.c_str(), setting->asString().c_str());
