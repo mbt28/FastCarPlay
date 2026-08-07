@@ -399,20 +399,54 @@ public:
     }
 
     // Frame + send a mux packet: [proto][16+len][magic][tx][rx][payload].
-    void muxSend(uint32_t proto, const uint8_t *payload, size_t len)
+    // Returns false if the packet did not reach the device intact.
+    bool muxSend(uint32_t proto, const uint8_t *payload, size_t len)
     {
         std::lock_guard<std::mutex> lk(_wlock);
         if (_fd < 0)
-            return;
+            return false;
         Bytes pkt;
         put32be(pkt, proto);
         put32be(pkt, (uint32_t)(16 + len));
         put32be(pkt, MUX_MAGIC);
-        put16be(pkt, (uint16_t)_muxTx++);
+        // Peek: the sequence number must only be consumed by a packet the device
+        // actually receives. Advancing it on a failed write puts our numbering
+        // ahead of the device's, which it reports as "detected duplicate packet.
+        // Expected N received M".
+        const uint16_t seq = (uint16_t)_muxTx;
+        put16be(pkt, seq);
         put16be(pkt, (uint16_t)_muxRx);
         if (payload && len)
             pkt.insert(pkt.end(), payload, payload + len);
-        usbBulk(_fd, EP_OUT, pkt.data(), (unsigned)pkt.size(), 2000);
+
+        // A bounded retry, because this matters on MUSB: a transient
+        // three-strikes makes the host return -ESHUTDOWN on a perfectly healthy
+        // device, and the immediately following transfer succeeds. Without this
+        // a single such error silently drops a mux packet -- and since the mux
+        // has no retransmission, the connection stalls for good.
+        const int attempts = 3;
+        for (int i = 0; i < attempts; i++)
+        {
+            int n = usbBulk(_fd, EP_OUT, pkt.data(), (unsigned)pkt.size(), 2000);
+            if (n == (int)pkt.size())
+            {
+                _muxTx++; // consumed only now that the device has it
+                return true;
+            }
+            if (n >= 0)
+            {
+                // Short write: the device has half a packet and its framing is
+                // now desynchronised. Resending would compound it, so give up
+                // and let the caller tear the connection down.
+                log_e("cp-usbmux: short write, %d of %u bytes (proto %u)", n,
+                      (unsigned)pkt.size(), proto);
+                return false;
+            }
+            log_w("cp-usbmux: write failed (proto %u, %u bytes): %s -- attempt %d/%d", proto,
+                  (unsigned)pkt.size(), strerror(errno), i + 1, attempts);
+        }
+        log_e("cp-usbmux: giving up on a %u-byte packet (proto %u)", (unsigned)pkt.size(), proto);
+        return false;
     }
 
     // Open a mux TCP connection to a device port (lockdown 62078, carkit port…).
@@ -564,7 +598,15 @@ void MuxConn::tcp(uint8_t flags, const uint8_t *payload, size_t len)
     put16be(th, 0);
     if (payload && len)
         th.insert(th.end(), payload, payload + len);
-    _host->muxSend(P_TCP, th.data(), th.size());
+    // Same rule as the mux sequence: TCP sequence space is only consumed by a
+    // segment the device actually received. Advancing it after a failed write
+    // would make every later segment look out of order to the phone.
+    if (!_host->muxSend(P_TCP, th.data(), th.size()))
+    {
+        log_w("cp-usbmux: sport=%u could not send %u bytes (flags 0x%02x)", _sport,
+              (unsigned)len, flags);
+        return;
+    }
     _txSeq += (uint32_t)len; // payload consumes sequence space
 }
 
