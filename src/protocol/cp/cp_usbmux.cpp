@@ -258,11 +258,7 @@ public:
         while (i < len)
         {
             size_t chunk = std::min<size_t>(MAX_PAYLOAD, len - i);
-            tcp(TH_ACK, data + i, chunk);
-            {
-                std::lock_guard<std::mutex> lk(_m);
-                _txSeq += (uint32_t)chunk;
-            }
+            tcp(TH_ACK, data + i, chunk); // advances _txSeq itself, atomically
             i += chunk;
         }
     }
@@ -520,17 +516,21 @@ private:
 // without holding _m across muxSend or nesting locks.
 void MuxConn::tcp(uint8_t flags, const uint8_t *payload, size_t len)
 {
-    uint32_t seq, ack;
-    {
-        std::lock_guard<std::mutex> lk(_m);
-        seq = _txSeq;
-        ack = _txAck;
-    }
+    // Sample the sequence numbers, build and transmit under ONE lock, and
+    // account for the payload before releasing it. Two threads emit packets for
+    // the same connection -- the relay thread sends data, the reader thread
+    // sends ACKs from onPacket() -- so sampling _txSeq and then releasing the
+    // lock before transmitting let both build packets carrying the same
+    // sequence number. On an SSL stream that is silent corruption: the lockdown
+    // handshake starts and then stalls.
+    //
+    // No caller may hold _m: onPacket() closes its scope before calling here.
+    std::lock_guard<std::mutex> lk(_m);
     Bytes th;
     put16be(th, _sport);
     put16be(th, _dport);
-    put32be(th, seq);
-    put32be(th, ack);
+    put32be(th, _txSeq);
+    put32be(th, _txAck);
     th.push_back(0x50); // data offset
     th.push_back(flags);
     put16be(th, (uint16_t)(TX_WIN >> 8));
@@ -539,6 +539,7 @@ void MuxConn::tcp(uint8_t flags, const uint8_t *payload, size_t len)
     if (payload && len)
         th.insert(th.end(), payload, payload + len);
     _host->muxSend(P_TCP, th.data(), th.size());
+    _txSeq += (uint32_t)len; // payload consumes sequence space
 }
 
 void MuxConn::onPacket(uint8_t flags, uint32_t seq, uint32_t, uint16_t, const uint8_t *payload, size_t len)
