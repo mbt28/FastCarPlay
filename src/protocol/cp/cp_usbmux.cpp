@@ -3,6 +3,7 @@
 #ifdef USE_CP_WIRED
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -408,11 +409,17 @@ public:
     // Open a mux TCP connection to a device port (lockdown 62078, carkit port…).
     std::shared_ptr<MuxConn> connect(uint16_t dport)
     {
+        // Never reuse a source port. _nextSport is process-wide and only ever
+        // increments: the retry loop rebuilds the MuxHost every few seconds, and
+        // a per-host counter restarted every connection at port 1. The phone
+        // still holds state for the previous connection on that port and answers
+        // the new SYN with RST, which surfaces as "Mux error (-8)". Skip 0,
+        // which is not a valid port.
         uint16_t sport;
+        do
         {
-            std::lock_guard<std::mutex> lk(_sportLock);
-            sport = _nextSport++;
-        }
+            sport = _nextSport.fetch_add(1, std::memory_order_relaxed);
+        } while (sport == 0);
         auto conn = std::make_shared<MuxConn>(this, sport, dport);
         {
             std::lock_guard<std::mutex> lk(_connMutex);
@@ -504,8 +511,8 @@ private:
     uint32_t _muxTx = 0, _muxRx = 0;
     std::map<uint16_t, std::shared_ptr<MuxConn>> _conns;
     std::mutex _connMutex;
-    uint16_t _nextSport = 1;
-    std::mutex _sportLock;
+    // Process-wide: see connect(). Survives MuxHost teardown/rebuild.
+    static std::atomic<uint16_t> _nextSport;
 };
 
 // Snapshots seq/ack under _m (released before the USB write), so it can be
@@ -574,6 +581,8 @@ void MuxConn::onPacket(uint8_t flags, uint32_t seq, uint32_t, uint16_t, const ui
         markClosed();
     }
 }
+
+std::atomic<uint16_t> MuxHost::_nextSport{1};
 
 // ── usbmuxd-compatible UNIX socket (plist protocol) ────────────────────────
 namespace
