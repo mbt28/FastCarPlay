@@ -286,6 +286,9 @@ public:
     }
 
     bool closed() const { return _closed; }
+    // Abort the connection on the device. Used when the host is torn down with
+    // connections still live -- markClosed() alone leaves the device's half open.
+    void reset() { tcp(TH_RST | TH_ACK, nullptr, 0); }
     void close()
     {
         if (!_closed)
@@ -372,9 +375,18 @@ public:
         if (_reader.joinable())
             _reader.join();
         {
+            // Tell the phone each connection is gone before dropping it. Marking
+            // it closed only updates our side; the device keeps its half open,
+            // and the wired retry loop rebuilds the host every few seconds. The
+            // leak accumulates until the device stops answering SYN altogether
+            // -- which looks like the mux dying mid-session, several minutes in.
+            // Do this while _fd is still open, and after the reader has joined.
             std::lock_guard<std::mutex> lk(_connMutex);
             for (auto &kv : _conns)
+            {
+                kv.second->reset();
                 kv.second->markClosed();
+            }
             _conns.clear();
         }
         if (_fd >= 0)
