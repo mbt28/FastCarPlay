@@ -224,6 +224,10 @@ public:
     // Path: $HOME/.fastcarplay/usersettings.txt (/root/... on the device).
     static std::string userPath();
     static bool loadUser();
+
+    // Which user-settings file loadUser() found, reported by print().
+    static std::string _userPathTried;
+    static bool _userApplied;
     // Applies the value now and persists it, leaving other overrides intact.
     static bool setUser(const std::string &key, const std::string &value);
 
