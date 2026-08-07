@@ -258,6 +258,7 @@ public:
         while (i < len)
         {
             size_t chunk = std::min<size_t>(MAX_PAYLOAD, len - i);
+            log_d("cp-usbmux: tx sport=%u %u bytes", _sport, (unsigned)chunk);
             tcp(TH_ACK, data + i, chunk); // advances _txSeq itself, atomically
             i += chunk;
         }
@@ -491,7 +492,16 @@ private:
                         conn->onPacket(flags, seq, ack, win, pkt + 36, len - 36);
                 }
                 else
-                    log_d("cp-usbmux: rx proto=%u len=%u", proto, len);
+                {
+                    // proto 1 is the device's mux control channel: it carries
+                    // plain-text diagnostics ("Invalid connection", port refused
+                    // and so on). We act on none of it, but it is the phone
+                    // telling us why something failed, so surface it.
+                    std::string txt;
+                    for (uint32_t i = 16; i < len && txt.size() < 96; i++)
+                        txt.push_back(isprint(pkt[i]) ? (char)pkt[i] : '.');
+                    log_d("cp-usbmux: rx proto=%u len=%u [%s]", proto, len, txt.c_str());
+                }
                 off += len;
             }
             if (off > 0)
