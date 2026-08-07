@@ -408,8 +408,8 @@ public:
         put32be(pkt, proto);
         put32be(pkt, (uint32_t)(16 + len));
         put32be(pkt, MUX_MAGIC);
-        put16be(pkt, (uint16_t)_muxTx++);
-        put16be(pkt, (uint16_t)_muxRx);
+        put16be(pkt, (uint16_t)_muxTx.fetch_add(1, std::memory_order_relaxed));
+        put16be(pkt, (uint16_t)_muxRx.load(std::memory_order_relaxed));
         if (payload && len)
             pkt.insert(pkt.end(), payload, payload + len);
         usbBulk(_fd, EP_OUT, pkt.data(), (unsigned)pkt.size(), 2000);
@@ -482,7 +482,7 @@ private:
                     break;
                 const uint8_t *pkt = &rx[off];
                 if (len >= 16)
-                    _muxRx = get16be(pkt + 12);
+                    _muxRx.store(get16be(pkt + 12), std::memory_order_relaxed);
                 if (proto == P_TCP && len >= 36)
                 {
                     uint16_t dp = get16be(pkt + 18); // TCP dport (= our sport)
@@ -526,7 +526,13 @@ private:
     std::atomic<bool> _run{false};
     std::thread _reader;
     std::mutex _wlock;
-    uint32_t _muxTx = 0, _muxRx = 0;
+    // Mux-level sequence numbers. Process-wide, like _nextSport: the device
+    // does NOT reset its counters when we release and re-claim the interface
+    // (its rx_seq keeps climbing across our teardowns), so restarting ours at 0
+    // replays numbers it has already seen. It answers that on the control
+    // channel with "detected duplicate ...".
+    static std::atomic<uint32_t> _muxTx;
+    static std::atomic<uint32_t> _muxRx;
     std::map<uint16_t, std::shared_ptr<MuxConn>> _conns;
     std::mutex _connMutex;
     // Process-wide: see connect(). Survives MuxHost teardown/rebuild.
@@ -606,6 +612,8 @@ void MuxConn::onPacket(uint8_t flags, uint32_t seq, uint32_t, uint16_t, const ui
 }
 
 std::atomic<uint16_t> MuxHost::_nextSport{1};
+std::atomic<uint32_t> MuxHost::_muxTx{0};
+std::atomic<uint32_t> MuxHost::_muxRx{0};
 
 // ── usbmuxd-compatible UNIX socket (plist protocol) ────────────────────────
 namespace
