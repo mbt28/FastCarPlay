@@ -8,5 +8,9 @@ src/autogen
 .*/
 .DS*
 .*settings.txt
+
+# Hand-off prompts for other repos' sessions (kernel/buildroot work). Working
+# notes, not project documentation -- kept locally, out of the published repo.
+docs/*prompt*.md
 # EEZ Studio editor window state (per-user, not part of the design)
 ui.eez-project-ui-state
