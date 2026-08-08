@@ -194,7 +194,10 @@ file, so no manual copy is needed with `cp_usbmux`.
   `echo <bus>-<port>:6.2 | sudo tee /sys/bus/usb/drivers/ipheth/bind` and
   `…:6.3 → cdc_ncm/bind`. `ip -6 addr show usb0` should show an `fe80::` address.
 - **`carkit open failed (paired? unlocked?)`** — re‑pair (above); keep the phone
-  unlocked.
+  unlocked. On the F1C200s, if it repeats every attempt while `usb0` is up and
+  the phone is paired and unlocked, check the boot arg: without
+  `musb_hdrc.use_dma=0` the mux link loses packets silently and lockdown can
+  never finish (see the F1C200s notes below).
 - **`MFi sign failed` / auth fails** — the auth chip is unpowered or on a
   different bus/addr. Check `pinctrl get 4` (GPIO4 high) and
   `i2cdetect -y 1` (chip answers at `0x10`).
@@ -206,6 +209,14 @@ file, so no manual copy is needed with `cp_usbmux`.
 
 ## F1C200s notes
 
+- **The board must boot with `musb_hdrc.use_dma=0`.** With the sunxi MUSB
+  dedicated-DMA path enabled the host controller *silently drops bulk-OUT
+  packets* — the write reports full success and the bytes never reach the phone.
+  usbmux has no link-level retransmission, so one lost packet desyncs the link
+  for good and lockdown never completes (`carkit open failed`, repeatedly). PIO
+  is also the faster mode on this part (~10 MiB/s vs ~3.3), so this costs
+  nothing. Measurements and the kernel-side analysis live in the board's kernel
+  repo (`docs/musb-dma-fix-plan.md`, `docs/musb-suniv-hardware-facts.md`).
 - Nothing to set for video: the app reads the cedrus' V4L2 capabilities, sees
   H.264-only (no HEVC), and asks the phone for H.264 automatically.
 - Build with `USE_CP_WIRED=1` (and the target's `USE_CEDRUS`).

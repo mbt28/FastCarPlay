@@ -712,32 +712,80 @@ std::unique_ptr<IDecoder> Application::makeDecoder(AVCodecID codecId)
     return std::make_unique<Decoder>();
 }
 
+DisplayGeometry Application::resolveGeometry() const
+{
+    DisplayGeometry g;
+
+#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+    if (video_path::detect().mode == video_path::Mode::Drm && drm_display::width() > 0)
+    {
+        g.width = drm_display::width();
+        g.height = drm_display::height();
+        g.widthMm = drm_display::widthMm();
+        g.heightMm = drm_display::heightMm();
+        g.source = "DRM panel";
+        return g;
+    }
+#endif
+
+    // The real window, not the size we asked for: window-mode picks the seed
+    // (fullscreen/headless use the desktop mode, windowed uses width/height)
+    // but a window manager may hand back something else entirely.
+    if (_window != nullptr)
+    {
+        SDL_GetWindowSize(_window, &g.width, &g.height);
+        if (g.valid())
+        {
+            g.source = "SDL window";
+            return g;
+        }
+    }
+
+    // Headless, or a DRM/SDL display that never came up. Nothing to ask.
+    g.width = Settings::width;
+    g.height = Settings::height;
+    g.source = "settings (no display)";
+    return g;
+}
+
 std::unique_ptr<IConnection> Application::makeConnection()
 {
+    std::unique_ptr<IConnection> connection;
 #ifdef USE_AA_WIRELESS
     if (Settings::aaWireless())
-        return std::make_unique<AaWirelessConnection>();
+        connection = std::make_unique<AaWirelessConnection>();
 #else
     if (Settings::aaWireless())
         log_w("protocol = aa-wireless needs a USE_AA_WIRELESS build, using carlinkit");
 #endif
 #ifdef USE_CP_WIRELESS
-    if (Settings::carplayWireless())
-        return std::make_unique<CpConnection>();
+    if (!connection && Settings::carplayWireless())
+        connection = std::make_unique<CpConnection>();
 #else
     if (Settings::carplayWireless())
         log_w("protocol = carplay-wireless needs a USE_CP_WIRELESS build, using carlinkit");
 #endif
 #ifdef USE_CP_WIRED
-    if (Settings::carplayWired())
-        return std::make_unique<CpWiredConnection>();
+    if (!connection && Settings::carplayWired())
+        connection = std::make_unique<CpWiredConnection>();
 #else
     if (Settings::carplayWired())
         log_w("protocol = carplay-wired needs a USE_CP_WIRED build, using carlinkit");
 #endif
-    if (Settings::aaUsb())
-        return std::make_unique<AaConnection>();
-    return std::make_unique<Connection>();
+    if (!connection && Settings::aaUsb())
+        connection = std::make_unique<AaConnection>();
+    if (!connection)
+        connection = std::make_unique<Connection>();
+
+    // Every loop has its display up by the time it builds the connection, so
+    // this is where the phone's stream size is decided. Logged because a wrong
+    // size is otherwise invisible -- it just looks like a soft picture.
+    if (!_geometry.valid())
+        _geometry = resolveGeometry();
+    log_i("Display %dx%d (%s)%s", _geometry.width, _geometry.height, _geometry.source,
+          _geometry.widthMm > 0 ? "" : " -- no physical size reported");
+    connection->setDisplay(_geometry);
+    return connection;
 }
 
 // No-renderer path: no SDL window/renderer/fonts are created. The decoder
@@ -818,7 +866,10 @@ void Application::loopDrm()
         return;
     }
 
-    Interface interface(uiRenderer);
+    // The panel is up now, so its size is known before anything that needs it.
+    _geometry = resolveGeometry();
+
+    Interface interface(uiRenderer, _geometry);
     interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
     drm_display::uiPresent();
 
@@ -1013,7 +1064,8 @@ void Application::loopDrm()
 void Application::loop()
 {
     // Prepare home screen
-    Interface interface(_renderer);
+    _geometry = resolveGeometry();
+    Interface interface(_renderer, _geometry);
     interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
 
 #ifdef USE_LVGL

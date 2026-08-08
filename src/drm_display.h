@@ -26,9 +26,13 @@ namespace drm_display
 bool open(const char *tag);
 void close();
 
-// Panel size discovered at open().
+// Panel size discovered at open(). The millimetre pair is what the connector
+// reports (EDID / DT panel description) and is 0 when it reports nothing --
+// callers must treat 0 as "unknown" rather than as a zero-sized panel.
 int width();
 int height();
+int widthMm();
+int heightMm();
 
 // Import the given dma-buf planes as a framebuffer and flip it fullscreen on
 // the video plane (srcW/srcH crop the buffer before the DEFE scales it to the

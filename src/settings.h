@@ -26,8 +26,13 @@ public:
     // set both to pin a specific phone.
     static inline Setting<int> aaVendorid{"aa-vendor-id", 0};
     static inline Setting<int> aaProductid{"aa-product-id", 0};
-    // Native AA video stream: 1=800x480, 2=1280x720, 3=1920x1080 / 30 or 60 fps.
-    static inline Setting<int> aaResolution{"aa-resolution", 1};
+    // Android Auto video stream: 1=800x480, 2=1280x720, 3=1920x1080 / 30 or 60
+    // fps. Unlike CarPlay -- which takes literal pixel dimensions, so it is
+    // asked for the display's exact size -- the AA protocol only carries an
+    // enum of standard modes, so this stays an explicit setting. Used by both
+    // the native backend and the Carlinkit dongle; `android-resolution` is the
+    // old Carlinkit-only name for it.
+    static inline Setting<int> aaResolution{"aa-resolution", 1, "android-resolution"};
     static inline Setting<int> aaFps{"aa-video-fps", 30};
     // Wireless Android Auto (protocol = aa-wireless): the head unit runs a
     // Wi-Fi AP and advertises the AA profile over Bluetooth; the phone joins
@@ -80,7 +85,8 @@ public:
     static inline Setting<bool> bluetoothAudio{"bluetooth-audio", false};
     static inline Setting<int> micType{"mic-type", 1};
     static inline Setting<int> dpi{"android-dpi", 120};
-    static inline Setting<int> androidMode{"android-resolution", 1};
+    // android-resolution now aliases aa-resolution above -- one Android Auto
+    // resolution for both the native backend and the Carlinkit dongle.
     static inline Setting<int> mediaDelay{"android-media-delay", 300};
 
     // Application configuration section

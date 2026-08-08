@@ -50,6 +50,17 @@ struct Config
     bool hevc = true; // iOS 26 negotiates HEVC for wireless CarPlay
 };
 
+// Build the advertised screen from the display we actually have. CarPlay takes
+// literal pixel dimensions (unlike Android Auto, which is limited to an enum of
+// standard modes), so the phone can be asked for the panel's exact size and the
+// display engine never has to rescale a frame.
+//
+// widthMm/heightMm may be 0 when the display reports no physical size; the
+// physical pair drives CarPlay's UI scaling, so rather than pass 0 (or keep a
+// hardcoded size from a different panel) they are derived from the pixel size
+// at the same pixel density as the defaults above.
+Config configForDisplay(int width, int height, int widthMm, int heightMm, int fps, bool hevc);
+
 // A source of outbound event-channel commands (touch/button HID reports, etc.)
 // the accessory sends to the phone. The AV session pulls from it on the event
 // channel's own thread and POSTs each body, so the event cipher stays

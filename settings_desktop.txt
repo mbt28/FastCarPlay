@@ -17,6 +17,7 @@ protocol = carplay-wired
 # will be on the device.
 width       = 800
 height      = 480
+source-fps  = 60
 window-mode = 0
 
 audio-driver = alsa

@@ -5,8 +5,9 @@
 #include "settings.h"
 #include "protocol/protocol_const.h"
 
-Interface::Interface(SDL_Renderer *renderer)
+Interface::Interface(SDL_Renderer *renderer, const DisplayGeometry &geometry)
     : Renderer(renderer),
+      _geometry(geometry),
       _state(0),
       _debug(false),
       _toast(false),
@@ -29,7 +30,7 @@ bool Interface::render(AVFrame *frame)
     if (_render == nullptr || frame->width != _textureWidth || frame->height != _textureHeight)
     {
         clear();
-        if (!prepare(frame, Settings::width, Settings::height))
+        if (!prepare(frame, _geometry.width, _geometry.height))
             return false;
     }
 

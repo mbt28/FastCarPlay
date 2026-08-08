@@ -24,8 +24,8 @@ public:
     ~LvglOsd();
 
     // Creates the LVGL display/input at the given size and builds the
-    // generated screens. Size comes from the caller (Settings::width/height
-    // or the panel), never a compile-time constant.
+    // generated screens. Size comes from the caller (the DRM panel, or the SDL
+    // window), never a compile-time constant.
     bool begin(SDL_Renderer *renderer, int width, int height);
     void end();
     bool active() const { return _disp != nullptr; }

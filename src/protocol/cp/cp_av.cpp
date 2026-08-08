@@ -21,6 +21,27 @@
 
 namespace cp_av
 {
+Config configForDisplay(int width, int height, int widthMm, int heightMm, int fps, bool hevc)
+{
+    Config cfg;
+    if (width > 0 && height > 0)
+    {
+        cfg.screenWidth = width;
+        cfg.screenHeight = height;
+    }
+    // Pixels per millimetre of the default 800x480 / 154x90 mm screen, used to
+    // synthesise a physical size when the display reports none. Keeps CarPlay's
+    // UI at the same apparent size it has always had rather than scaling it by
+    // whatever a stale hardcoded panel size implied.
+    const double pxPerMm = (double)Config{}.screenWidth / (double)Config{}.screenWidthMm;
+    cfg.screenWidthMm = widthMm > 0 ? widthMm : (int)(cfg.screenWidth / pxPerMm + 0.5);
+    cfg.screenHeightMm = heightMm > 0 ? heightMm : (int)(cfg.screenHeight / pxPerMm + 0.5);
+    if (fps > 0)
+        cfg.fps = fps;
+    cfg.hevc = hevc;
+    return cfg;
+}
+
 namespace
 {
 const char *PLIST_CT = "application/x-apple-binary-plist";

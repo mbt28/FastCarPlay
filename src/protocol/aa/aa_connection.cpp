@@ -9,6 +9,7 @@
 
 #include "protocol/aa/aa_usb_transport.h"
 #include "protocol/aa/aa_proto.h"
+#include "protocol/aa_resolution.h"
 #include "protocol/message.h"
 #include "protocol/protocol_const.h"
 #include "common/functions.h"
@@ -48,21 +49,7 @@ static uint32_t readU32le(const uint8_t *p)
 // Pixel dimensions of the advertised video/touch space (aa-resolution 1/2/3).
 static void aaVideoSize(int &width, int &height)
 {
-    switch (Settings::aaResolution)
-    {
-    case 3:
-        width = 1920;
-        height = 1080;
-        break;
-    case 2:
-        width = 1280;
-        height = 720;
-        break;
-    default:
-        width = 800;
-        height = 480;
-        break;
-    }
+    aa_resolution(Settings::aaResolution, width, height);
 }
 
 AaConnection::AaConnection(std::unique_ptr<AaTransport> transport)
