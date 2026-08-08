@@ -25,7 +25,7 @@ RES := $(shell find $(RES_DIR) -type f ! -name '*.h' ! -name '.*' -name '*.*')
 RES_SRC := $(patsubst $(RES_DIR)/%,$(GEN_DIR)/%.cpp,$(RES))
 
 # Targets
-TARGET_NAME := app
+TARGET_NAME := fastcarplay
 
 # Build types
 .PHONY: all debug release clean build
