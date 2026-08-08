@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "protocol/aa_resolution.h"
+
 #include <pb_encode.h>
 #include <pb_decode.h>
 
@@ -92,26 +94,6 @@ static void setString(char *dst, size_t cap, const char *src, bool &has)
     has = true;
 }
 
-// Video/touch dimensions for the advertised resolution setting (1/2/3).
-static void videoDimensions(int &width, int &height)
-{
-    switch (Settings::aaResolution)
-    {
-    case 3:
-        width = 1920;
-        height = 1080;
-        break;
-    case 2:
-        width = 1280;
-        height = 720;
-        break;
-    default:
-        width = 800;
-        height = 480;
-        break;
-    }
-}
-
 Bytes serviceDiscoveryResponse()
 {
     NS_CTRL(ServiceDiscoveryResponse) sdr = {};
@@ -131,12 +113,10 @@ Bytes serviceDiscoveryResponse()
             NS_SENSORMSG(SensorType_SENSOR_NIGHT_MODE);
     }
 
-    // Video sink (channel 3)
+    // Video sink (channel 3). Note there is nowhere to put a pixel size here:
+    // the config carries codec_resolution, an enum of standard modes, and the
+    // phone streams whichever one we name.
     {
-        int width, height;
-        videoDimensions(width, height);
-        (void)width;
-        (void)height;
         auto &ch = sdr.channels[index++];
         ch.id = AA_CH_VIDEO;
         ch.has_media_sink_service = true;
@@ -220,7 +200,7 @@ Bytes serviceDiscoveryResponse()
     // plus the keycodes the Carlinkit keymap can deliver.
     {
         int width, height;
-        videoDimensions(width, height);
+        aa_resolution(Settings::aaResolution, width, height);
         auto &ch = sdr.channels[index++];
         ch.id = AA_CH_INPUT;
         ch.has_input_source_service = true;

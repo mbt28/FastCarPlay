@@ -1,13 +1,14 @@
 #ifndef SRC_INTERFACE
 #define SRC_INTERFACE
 
+#include "display_geometry.h"
 #include "renderer.h"
 #include <string>
 
 class Interface : public Renderer
 {
 public:
-    Interface(SDL_Renderer *renderer);
+    Interface(SDL_Renderer *renderer, const DisplayGeometry &geometry);
     ~Interface();
     bool render(AVFrame *frame);
     bool drawHome(bool force, int state, std::string name);
@@ -20,6 +21,7 @@ private:
     void drawDebug();
     void drawToast();
 
+    DisplayGeometry _geometry;
     int _state;
     bool _debug;
     bool _toast;

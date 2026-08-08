@@ -9,6 +9,7 @@
 
 #include "libavcodec/avcodec.h"
 
+#include "protocol/aa_resolution.h"
 #include "protocol/message.h"
 #include "common/logger.h"
 #include "protocol/protocol_const.h"
@@ -576,32 +577,27 @@ void Connection::sendInit()
     if (Settings::micType == 3)
         mic = 21;
 
+    // CarPlay takes the display's exact size; Android Auto is limited to the
+    // standard modes aa-resolution selects, so its frame is the display's
+    // aspect fitted inside that box.
+    // Guarded: a zero here would divide into the scale below and reach the
+    // dongle as a nonsense frame size rather than as an error.
+    const int screenW = _display.valid() ? _display.width : Settings::width;
+    const int screenH = _display.valid() ? _display.height : Settings::height;
+
     int width;
     int height;
-    switch (Settings::androidMode)
-    {
-    default:
-        width = 800;
-        height = 480;
-        break;
-    case 2:
-        width = 1280;
-        height = 720;
-        break;
-    case 3:
-        width = 1920;
-        height = 1080;
-        break;
-    }
+    aa_resolution(Settings::aaResolution, width, height);
 
-    if (Settings::width < Settings::height)
+    if (screenW < screenH)
         std::swap(width, height);
 
-    float scale = std::min((float)width / Settings::width, (float)height / Settings::height);
-    width = Settings::width * scale;
-    height = Settings::height * scale;
+    float scale = std::min((float)width / screenW, (float)height / screenH);
+    width = screenW * scale;
+    height = screenH * scale;
 
-    log_i("Requesting carplay %dx%d@%d, android auto %dx%d", Settings::width.value, Settings::height.value, Settings::sourceFps.value, width, height);
+    log_i("Requesting carplay %dx%d@%d, android auto %dx%d", screenW, screenH,
+          Settings::sourceFps.value, width, height);
 
     if (Settings::encryption)
     {
@@ -614,7 +610,7 @@ void Connection::sendInit()
     if (Settings::dpi > 0)
         send(Message::File("/tmp/screen_dpi", Settings::dpi));
     send(Message::File("/etc/android_work_mode", 1));
-    send(Message::Init(Settings::width, Settings::height, Settings::sourceFps));
+    send(Message::Init(screenW, screenH, Settings::sourceFps));
     send(Message::String(
         CMD_JSON_CONTROL,
         "{\"syncTime\":%d,\"mediaDelay\":%d,\"drivePosition\":%d,"

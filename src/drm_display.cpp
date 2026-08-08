@@ -33,6 +33,9 @@ int refcount = 0;
 
 int fd = -1;
 uint32_t conn = 0, crtc = 0, cw = 0, ch = 0;
+// Physical panel size as the connector reports it (EDID, or a panel description
+// in DT). 0 when it does not -- callers must treat that as "unknown", not 0 mm.
+uint32_t cwmm = 0, chmm = 0;
 uint32_t mode_blob = 0;
 drmModeModeInfo mode;
 bool modeset_done = false;
@@ -246,6 +249,8 @@ bool session_try_card(const char *path, const char *tag)
     cw = (cr && cr->mode.hdisplay) ? cr->mode.hdisplay : mode.hdisplay;
     ch = (cr && cr->mode.vdisplay) ? cr->mode.vdisplay : mode.vdisplay;
     if (cr) drmModeFreeCrtc(cr);
+    cwmm = c->mmWidth;
+    chmm = c->mmHeight;
 
     int crtc_idx = 0;
     for (int i = 0; i < res->count_crtcs; i++)
@@ -347,6 +352,7 @@ void session_close()
     if (mode_blob) { drmModeDestroyPropertyBlob(fd, mode_blob); mode_blob = 0; }
     if (fd >= 0) { ::close(fd); fd = -1; }
     conn = crtc = cw = ch = 0;
+    cwmm = chmm = 0;
     vplane = uplane = 0;
     vframes = 0;
     modeset_done = false;
@@ -371,6 +377,8 @@ void close()
 
 int width()  { return (int)cw; }
 int height() { return (int)ch; }
+int widthMm()  { return (int)cwmm; }
+int heightMm() { return (int)chmm; }
 
 bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
                int nplanes, const int *dmabufFds, const uint32_t *pitches,

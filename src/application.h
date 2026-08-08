@@ -17,6 +17,7 @@
 #ifdef USE_CP_WIRED
 #include "protocol/cp/cp_wired_connection.h"
 #endif
+#include "display_geometry.h"
 #include "pipe_listener.h"
 #include "renderer.h"
 
@@ -64,6 +65,10 @@ private:
     void syncDecoderCodec(std::unique_ptr<class IDecoder> &decoder, class IConnection &protocol,
                           AVCodecID &started);
     std::unique_ptr<class IConnection> makeConnection();
+    // Ask the display how big it is. Called by each render loop once its
+    // display exists, so the phone is asked for the size we actually show.
+    DisplayGeometry resolveGeometry() const;
+    DisplayGeometry _geometry;
 
     SDL_Window *_window;
     SDL_Renderer *_renderer;

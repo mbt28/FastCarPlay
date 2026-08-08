@@ -12,18 +12,20 @@
 # Only values that differ from the built-in defaults are listed. See settings.txt
 # for the full annotated list of options.
 
-protocol   = aa-usb
+protocol   = carplay-wired
 lvgl-ui    = true
 icon-theme = material
 
-# Panel: 480x272, fullscreen, and the phone asked for 30fps to match it.
-width       = 480
-height      = 272
+# No panel size here: in DRM mode the app asks the kernel (connector/CRTC) and
+# requests exactly that from the phone, so nothing has to be kept in sync with
+# the panel. window-mode only applies if DRM is unavailable and we fall back to
+# an SDL window. source-fps is what we ask the phone for and is independent of
+# the panel's refresh rate -- 30fps content on a 60Hz panel is intentional.
 window-mode = 2
-source-fps  = 30
+source-fps  = 60
 android-dpi = 135
 
-audio-driver = alsa
+audio-driver = dummy
 
 # The ARM926 has no AES instructions, so ChaCha20-Poly1305 is far cheaper for
 # the AA/CarPlay session ciphers than the AES-GCM a phone would otherwise pick.

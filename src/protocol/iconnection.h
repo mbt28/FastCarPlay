@@ -10,6 +10,7 @@ extern "C"
 #include <memory>
 #include <string>
 
+#include "display_geometry.h"
 #include "struct/atomic_queue.h"
 #include "protocol/message.h"
 #include "protocol/protocol_const.h"
@@ -59,6 +60,12 @@ public:
     // Ask the phone to project again. No-op for backends that never release.
     virtual void requestVideoFocus() {}
 
+    // The display the phone will be streaming to. Set once by the render loop
+    // before start(), which is where a backend samples it: the size travels to
+    // the phone during session setup, so it must not change under a live
+    // session (an SDL window resize is logged, not renegotiated).
+    void setDisplay(const DisplayGeometry &geometry) { _display = geometry; }
+
     bool inline send(std::unique_ptr<Message> message) { return writeQueue.pushDiscard(std::move(message)); }
     uint32_t transfered() const { return _transfered.load(std::memory_order_acquire); }
 
@@ -76,6 +83,7 @@ protected:
     std::string _method;
     std::string _phoneName;
     std::atomic<uint32_t> _transfered;
+    DisplayGeometry _display;
 };
 
 #endif /* SRC_PROTOCOL_ICONNECTION */

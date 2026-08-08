@@ -14,7 +14,8 @@
 
 # Native wired Android Auto settings (only used when protocol = aa-usb).
 # aa-vendor-id/aa-product-id = 0 auto-scans for an AOAP-capable phone; set
-# both to pin one device. Resolution 1 = 800x480, 2 = 1280x720, 3 = 1920x1080.
+# both to pin one device. Resolution 1 = 800x480, 2 = 1280x720, 3 = 1920x1080 --
+# also used by the Carlinkit backend, where it was called android-resolution.
 #aa-vendor-id = 0
 #aa-product-id = 0
 #aa-resolution = 1
@@ -22,11 +23,18 @@
 #aa-accessory-timeout = 5000
 #aa-max-unacked = 4
 
-# Requested image resolution
+# SDL window size. NOT the resolution requested from the phone: that is the
+# display's own size, which the app discovers rather than being told.
+#   renderer = drm   the panel, read from the kernel (DRM connector/CRTC) --
+#                    these two are ignored entirely
+#   renderer = sdl   the real window size; these seed it in windowed mode,
+#                    while fullscreen/headless window-mode use the desktop mode
+#   renderer = none  no display exists, so these are the only size available
 #width = 1024
 #height = 576
 
-# Requested image refresh rate
+# Requested image refresh rate. Independent of the panel's refresh rate: asking
+# for 30fps on a 60Hz panel is a normal, and often the smoothest, combination.
 #source-fps = 60
 
 # Application window mode
@@ -87,10 +95,13 @@
 # Requested image DPI (Android auto scale)
 #android-dpi = 120
 
-# Android auto resolution mode.
+# Android auto resolution mode. RENAMED to aa-resolution (see above) -- the old
+# name still works and now drives both the native backend and the Carlinkit
+# dongle, so set it in one place only.
 # Android is always streaming one of fixed resolutions
-# If you are using default android auto make sure that your widh and height
-# set up according to resolution. Or you can enable any resolution by developer menu.
+# Unlike CarPlay, the AA protocol carries an enum of standard modes rather than
+# a pixel size, so this cannot follow the display: pick the mode nearest your
+# screen. Or you can enable any resolution by developer menu.
 # For developer menu go to Android Auto app info -> Additional settings in the app
 # Scrol down and tap fast 5 times on version. Now you can use top right three dots menu
 # to go to "Developer settings". Tap "Video Resolution" and select "Allow to car and phone to negotiate"

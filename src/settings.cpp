@@ -48,7 +48,7 @@ bool Settings::load(const std::string &filename)
         bool found = false;
         for (ISetting *setting : _settings())
         {
-            if (setting->name == key)
+            if (setting->matches(key))
             {
                 setting->parse(value);
                 found = true;

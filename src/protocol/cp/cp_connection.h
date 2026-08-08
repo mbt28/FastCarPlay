@@ -80,6 +80,9 @@ private:
 
     WifiAp _wifi;
     cp_server::Server _server;
+    // The screen advertised to the phone in /info. Touch coordinates must be in
+    // this same pixel space, so both readers take it from here.
+    cp_av::Config _avcfg;
     cp_mdns::MdnsResponder _mdns;
     cp_bt::CpBluetooth _bt;
 

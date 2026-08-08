@@ -228,10 +228,10 @@ void CpConnection::clearInput()
 
 void CpConnection::handleInput(const Message &m)
 {
-    // The screen we advertise in /info is 800x480 (cp_av::Config default); touch
-    // coordinates must be in that pixel space.
-    const int W = cp_av::Config{}.screenWidth;
-    const int H = cp_av::Config{}.screenHeight;
+    // Touch coordinates must be in the same pixel space we advertised in /info,
+    // so read the config we actually sent -- not a fresh default one.
+    const int W = _avcfg.screenWidth;
+    const int H = _avcfg.screenHeight;
     auto clampPx = [](int v, int max) { return v < 0 ? 0 : (v > max ? max : v); };
 
     switch (m.type())
@@ -403,11 +403,16 @@ void CpConnection::start()
         log_i("CarPlay: dock car icon -- backgrounding to FastCarPlay (resume to return)");
         _videoFocused.store(false);
     };
-    // Advertise HEVC only where the decoder can do it; the F1C200s cedrus is
-    // H.264-only, so carplay-hevc=false makes the phone stream H.264.
-    cp_av::Config avcfg;
-    avcfg.hevc = video_path::preferredCodec() == AV_CODEC_ID_HEVC;
-    _server.setAvConfig(avcfg);
+    // Ask for exactly the screen we have. Advertise HEVC only where the decoder
+    // can do it; the F1C200s cedrus is H.264-only, so the phone streams H.264.
+    _avcfg = cp_av::configForDisplay(_display.width, _display.height,
+                                     _display.widthMm, _display.heightMm,
+                                     Settings::sourceFps,
+                                     video_path::preferredCodec() == AV_CODEC_ID_HEVC);
+    log_i("Requesting carplay %dx%d@%d (%dx%d mm, %s)", _avcfg.screenWidth, _avcfg.screenHeight,
+          _avcfg.fps, _avcfg.screenWidthMm, _avcfg.screenHeightMm,
+          _avcfg.hevc ? "HEVC" : "H.264");
+    _server.setAvConfig(_avcfg);
     _server.setAvSinks(sinks);
     _server.setInputSource(this); // touch/buttons the AV session forwards to the phone
     _server.setLifecycle([this] { onSessionConnect(); }, [this] { onSessionDisconnect(); });

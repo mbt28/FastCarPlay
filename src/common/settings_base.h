@@ -13,7 +13,13 @@ class ISetting
 {
 public:
     std::string name;
-    ISetting(std::string name_) : name(std::move(name_)) {}
+    // An older key that still parses into this same setting, so renaming a
+    // setting does not silently reset it for anyone whose settings file (or
+    // saved usersettings.txt) predates the rename.
+    std::string alias;
+    ISetting(std::string name_, std::string alias_ = "")
+        : name(std::move(name_)), alias(std::move(alias_)) {}
+    bool matches(const std::string &key) const { return key == name || (!alias.empty() && key == alias); }
     virtual void parse(std::string &str) = 0;
     virtual std::string asString() const = 0;
 };
@@ -31,8 +37,8 @@ class Setting : public ISetting
 {
 public:
     T value;
-    Setting(std::string name_, T default_)
-        : ISetting(std::move(name_)), value(default_)
+    Setting(std::string name_, T default_, std::string alias_ = "")
+        : ISetting(std::move(name_), std::move(alias_)), value(default_)
     {
         _settings().push_back(this);
     }

@@ -85,6 +85,9 @@ private:
     std::vector<uint8_t> _mfiCert;
 
     cp_server::Server _server;
+    // The screen advertised to the phone in /info. Touch coordinates must be in
+    // this same pixel space, so both readers take it from here.
+    cp_av::Config _avcfg;
     cp_usbmux::Usbmux _mux;
     std::string _pk;       // accessory public key (hex) for CarPlayStartSession
     std::string _deviceId; // accessory device id (MAC-format) for the handoff
