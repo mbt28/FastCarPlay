@@ -17,6 +17,7 @@
 #ifdef USE_CP_WIRED
 #include "protocol/cp/cp_wired_connection.h"
 #endif
+#include "common/status_file.h"
 #include "display_geometry.h"
 #include "pipe_listener.h"
 #include "renderer.h"
@@ -69,6 +70,10 @@ private:
     // display exists, so the phone is asked for the size we actually show.
     DisplayGeometry resolveGeometry() const;
     DisplayGeometry _geometry;
+    // Publishes live state for the out-of-process settings/update service.
+    // Cheap to call every frame; it writes only on change or heartbeat.
+    void publishStatus(class IConnection &protocol);
+    StatusFile _statusFile;
 
     SDL_Window *_window;
     SDL_Renderer *_renderer;

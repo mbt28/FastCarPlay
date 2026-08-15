@@ -9,6 +9,8 @@
 #include "common/logger.h"
 
 #include "application.h"
+#include "autogen/version.h"
+#include "protocol/wifi_ap.h"
 #include "settings.h"
 
 #ifdef USE_LVGL
@@ -22,6 +24,28 @@ static char **savedArgv = nullptr;
 void start()
 {
     set_log_level(Settings::loglevel);
+
+    // The access point belongs to the system, so its real configuration wins
+    // over anything a preset says. Seeding the mirrors here -- before print()
+    // and before any backend starts -- means the UI, the logs and what we hand
+    // the phone all come from the same place hostapd was started from.
+    {
+        const wifi_ap::Params ap = wifi_ap::read();
+        if (!ap.ssid.empty())
+        {
+            Settings::wifiIface.value = ap.iface;
+            Settings::wifiSsid.value = ap.ssid;
+            Settings::wifiPass.value = ap.passphrase;
+            if (ap.channel > 0)
+                Settings::wifiChannel.value = ap.channel;
+            if (!ap.ip.empty())
+                Settings::apIp.value = ap.ip;
+            log_i("wifi: system AP '%s' on %s (%s, ch %d)%s", ap.ssid.c_str(),
+                  ap.iface.c_str(), ap.ip.empty() ? "no address" : ap.ip.c_str(),
+                  ap.channel, ap.valid() ? "" : " -- not up");
+        }
+    }
+
     Settings::print();
 
     Application app;
@@ -61,10 +85,20 @@ static void restartSelf()
 int main(int argc, char **argv)
 {
     savedArgv = argv;
+
+    // Answer "what is actually running?" without starting anything. After a
+    // partly-applied update this is not the same as what /etc claims, which is
+    // exactly when the question gets asked.
+    if (argc == 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-v"))
+    {
+        std::cout << title << "\nversion " << FCP_VERSION << "\nbuild " << FCP_BUILD << std::endl;
+        return 0;
+    }
+
     std::cout << title << std::endl;
     if (argc > 2)
     {
-        std::cerr << "  Usage: " << argv[0] << " [settings_file]" << std::endl;
+        std::cerr << "  Usage: " << argv[0] << " [settings_file | --version]" << std::endl;
         return 0;
     }
     try
