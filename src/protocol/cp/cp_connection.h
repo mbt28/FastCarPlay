@@ -78,7 +78,6 @@ private:
     bool _haveChip = false;
     std::unique_ptr<cp_auth_setup::MfiSigner> _signer;
 
-    WifiAp _wifi;
     cp_server::Server _server;
     // The screen advertised to the phone in /info. Touch coordinates must be in
     // this same pixel space, so both readers take it from here.

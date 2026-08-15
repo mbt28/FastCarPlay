@@ -38,6 +38,15 @@ public:
     // Wi-Fi AP and advertises the AA profile over Bluetooth; the phone joins
     // the AP and connects to the TCP server. Needs hostapd + dnsmasq + BlueZ.
     static inline Setting<std::string> wifiIface{"wifi-interface", "wlan0"};
+    // The access point is run by the system (init + hostapd), not by us, so it
+    // stays up when the app does not -- which is what makes it usable for
+    // debugging and deployment. These four are MIRRORS of that configuration:
+    // they are overwritten at start-up from the effective hostapd.conf, and the
+    // Wireless UI writes changes back into that file. Setting them in a preset
+    // has no effect on the radio.
+    static inline Setting<std::string> hostapdConf{"hostapd-conf", "/etc/hostapd.conf"};
+    static inline Setting<std::string> apRestartCmd{
+        "ap-restart-command", "/etc/init.d/S44ap stop; /etc/init.d/S44ap start"};
     static inline Setting<std::string> wifiSsid{"wifi-ssid", "FastCarPlay"};
     static inline Setting<std::string> wifiPass{"wifi-passphrase", "carplay1234"};
     static inline Setting<int> wifiChannel{"wifi-channel", 6}; // 2.4GHz (ESP32)

@@ -1,39 +1,51 @@
 #ifndef SRC_PROTOCOL_WIFI_AP
 #define SRC_PROTOCOL_WIFI_AP
 
-#if defined(USE_AA_WIRELESS) || defined(USE_CP_WIRELESS)
-
 #include <string>
 
-// Brings up the head unit's Wi-Fi access point (hostapd + dnsmasq) that the
-// phone joins for wireless Android Auto or wireless CarPlay. 2.4 GHz to suit
-// the ESP32 SoftAP. Config comes from Settings (wifi-ssid / -passphrase /
-// -channel / -interface / wifi-ap-ip). Requires hostapd + dnsmasq on the
-// system and root privileges.
+// The head unit's Wi-Fi access point, as configured by the SYSTEM -- we read it,
+// we do not run it.
 //
-// Both wireless backends hand the phone these same credentials over their
-// Bluetooth bootstrap, so the AP has to be the one *we* configured -- relying
-// on an externally managed hostapd lets its SSID drift out of sync with
-// wifi-ssid, and the phone then fails to find the network it was told to join.
-class WifiAp
+// The AP is started by init (hostapd + dnsmasq from /etc/hostapd.conf) and stays
+// up whether or not this app is running, which is what makes it usable for
+// debugging and deployment. We used to start our own hostapd instead, killing
+// whatever was already running; that took the board off the network the moment a
+// wireless protocol was selected, and swapped the SSID and subnet out from under
+// anyone connected to it.
+//
+// The reason the app owned it before was drift: both wireless backends hand the
+// phone these credentials over their Bluetooth bootstrap, so telling the phone
+// Settings::wifiSsid while something else configured the radio meant the phone
+// looked for a network that did not exist. That is solved here by reading the
+// EFFECTIVE config rather than by owning the process -- what we tell the phone
+// comes out of the same file hostapd was started from, so the two cannot
+// disagree.
+namespace wifi_ap
 {
-public:
-    ~WifiAp();
+struct Params
+{
+    std::string iface;      // interface hostapd is bound to
+    std::string ssid;       // what to tell the phone to join
+    std::string passphrase; // WPA2 PSK
+    int channel = 0;
+    std::string ip;    // our IPv4 on that interface (the phone's endpoint)
+    std::string bssid; // the interface MAC
 
-    bool start();
-    void stop();
-
-    // AP address the phone connects to, and the AP's BSSID (the wlan MAC).
-    const std::string &ip() const { return _ip; }
-    const std::string &bssid() const { return _bssid; }
-
-private:
-    bool writeConfigs();
-
-    std::string _ip;
-    std::string _bssid;
-    bool _running = false;
+    // The AP looks usable: we found a network name and the interface is up with
+    // an address. Not proof that hostapd is beaconing, but it catches "the AP
+    // was never started", which is the case worth reporting.
+    bool valid() const { return !ssid.empty() && !ip.empty(); }
 };
 
-#endif /* USE_AA_WIRELESS || USE_CP_WIRELESS */
+// Read the effective AP configuration. Cheap; call it when you need it rather
+// than caching, so a change made through the UI is picked up.
+Params read();
+
+// Change the advertised network. Rewrites ssid/passphrase in the hostapd config
+// (atomically) and restarts the AP so the change takes effect. Returns false and
+// leaves the config untouched if the values are outside what WPA2 accepts or the
+// file cannot be written.
+bool configure(const std::string &ssid, const std::string &passphrase);
+} // namespace wifi_ap
+
 #endif /* SRC_PROTOCOL_WIFI_AP */

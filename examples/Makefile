@@ -38,6 +38,12 @@ settings_user_test: settings_user_test.cpp
 	  ../src/settings.cpp ../src/common/logger.cpp \
 	  -o $(OUT_DIR)/settings_user_test $(LDFLAGS)
 
+# Reading + rewriting the system hostapd.conf (the AP the app no longer owns).
+wifi_ap_test: wifi_ap_test.cpp
+	$(CXX) $(CXXFLAGS) -I../src wifi_ap_test.cpp \
+	  ../src/protocol/wifi_ap.cpp ../src/settings.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/wifi_ap_test $(LDFLAGS)
+
 # CarPlay crypto substrate: known-answer + round-trip tests (no chip/phone).
 cp_crypto_test: cp_crypto_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_crypto_test.cpp \
