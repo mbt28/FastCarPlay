@@ -369,22 +369,23 @@ void CpConnection::start()
         log_w("CarPlay: MFi chip absent on %s -- auth will fail",
               Settings::mfiI2cBus.value.c_str());
 
-    // Bring up our own AP first. The credentials we hand the phone below have
-    // to describe an AP that actually exists with that SSID, so we start it
-    // rather than trusting an externally managed hostapd to match wifi-ssid.
-    if (!_wifi.start())
-        log_e("CarPlay: Wi-Fi AP failed to start -- the phone will have no "
-              "network to join after the Bluetooth handoff");
+    // The AP is the system's and is already up. Read what it actually
+    // advertises -- the credentials we hand the phone below have to describe a
+    // network that exists, and reading the effective config is what guarantees
+    // that without us having to own hostapd.
+    const wifi_ap::Params ap = wifi_ap::read();
+    if (!ap.valid())
+        log_e("CarPlay: no system Wi-Fi AP (ssid '%s', ip '%s') -- the phone "
+              "will have no network to join after the Bluetooth handoff",
+              ap.ssid.c_str(), ap.ip.c_str());
 
     // Wireless CarPlay runs over the AP interface's fe80 link-local + its MAC.
-    // Read only after the AP is up: the link-local is derived from the MAC when
-    // the interface comes up, so an earlier read finds nothing.
-    const std::string iface = Settings::wifiIface.value;
+    const std::string iface = ap.iface;
     std::string fe80 = wlanLinkLocal(iface);
     std::string mac = ifaceMac(iface);
     if (fe80.empty())
         log_w("CarPlay: %s has no IPv6 link-local (is the AP up?) -- falling back to %s",
-              iface.c_str(), Settings::apIp.value.c_str());
+              iface.c_str(), ap.ip.c_str());
 
     // Stable device id from the pairing id, shared by mDNS + the handoff.
     Bytes pidBytes(id.pairingId.begin(), id.pairingId.end());
@@ -440,10 +441,10 @@ void CpConnection::start()
     cfg.signer = _haveChip ? _signer.get() : nullptr;
     cfg.identity.messagesSent = cp_carplay::defaultMessagesSent();
     cfg.identity.messagesReceived = cp_carplay::defaultMessagesReceived();
-    cfg.wifi.ssid = Settings::wifiSsid.value;
-    cfg.wifi.passphrase = Settings::wifiPass.value;
-    cfg.wifi.channel = (uint8_t)Settings::wifiChannel.value;
-    cfg.wifi.ipAddress = fe80.empty() ? Settings::apIp.value : fe80;
+    cfg.wifi.ssid = ap.ssid;
+    cfg.wifi.passphrase = ap.passphrase;
+    cfg.wifi.channel = (uint8_t)ap.channel;
+    cfg.wifi.ipAddress = fe80.empty() ? ap.ip : fe80;
     cfg.wifi.security = cp_carplay::WifiSecurity::WpaWpa2;
     cfg.wifi.port = 7000;
     cfg.wifi.deviceIdentifier = mac.empty() ? id.pairingId : mac;
@@ -463,7 +464,7 @@ void CpConnection::start()
     _state.store(PROTOCOL_STATUS_LINKING);
     log_i("CarPlay wireless ready: %s, AP %s ch%d on %s (fe80=%s), pair the iPhone then pick it in "
           "Settings > General > CarPlay",
-          _mfiInfo.c_str(), Settings::wifiSsid.value.c_str(), Settings::wifiChannel.value,
+          _mfiInfo.c_str(), ap.ssid.c_str(), ap.channel,
           iface.c_str(), fe80.empty() ? "none" : fe80.c_str());
 }
 
@@ -481,7 +482,7 @@ void CpConnection::stop()
     _bt.stop();
     _server.stop();
     _mdns.stop();
-    _wifi.stop(); // last: the phone reaches the server over this AP
+    // The AP is the system's: leave it running, it is the debug/deploy channel.
     _started = false;
     _state.store(PROTOCOL_STATUS_NO_DEVICE);
 }

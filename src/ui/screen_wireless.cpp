@@ -6,6 +6,7 @@
 #include <string>
 
 #include "common/logger.h"
+#include "protocol/wifi_ap.h"
 #include "settings.h"
 #include "ui_bridge.h"
 #include "ui_screens.h"
@@ -109,10 +110,38 @@ void onKeyboard(lv_event_t *e)
         return; // keep the editor open rather than saving something unusable
     }
 
-    if (Settings::setUser(field.key, text))
-        ui_bridge::setRestartNeeded(); // the AP and BT name are set up at start-up
+    if (g_editing == ROW_SSID || g_editing == ROW_PASSPHRASE)
+    {
+        // The AP belongs to the system, so these are written into its config
+        // rather than into usersettings.txt, and the AP is restarted. Nothing
+        // to stage for a restart of the app: the backends read the effective
+        // config when a session starts. Changing either one drops whoever is
+        // currently connected to the AP, which is inherent to renaming it.
+        const std::string ssid = (g_editing == ROW_SSID) ? text : Settings::wifiSsid.value;
+        const std::string pass = (g_editing == ROW_PASSPHRASE) ? text : Settings::wifiPass.value;
+        if (wifi_ap::configure(ssid, pass))
+        {
+            // Re-read so the rows show what hostapd is actually advertising.
+            const wifi_ap::Params ap = wifi_ap::read();
+            if (!ap.ssid.empty())
+            {
+                Settings::wifiSsid.value = ap.ssid;
+                Settings::wifiPass.value = ap.passphrase;
+            }
+        }
+        else
+        {
+            log_e("Could not update the access point");
+        }
+    }
+    else if (Settings::setUser(field.key, text))
+    {
+        ui_bridge::setRestartNeeded(); // the BT name is set up at start-up
+    }
     else
+    {
         log_e("Could not save %s", field.key);
+    }
 
     closeEditor();
 }

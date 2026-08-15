@@ -7,11 +7,13 @@
 #include "protocol/aa/aa_bluetooth.h"
 #include "protocol/wifi_ap.h"
 
-// Wireless Android Auto backend: brings up the Wi-Fi AP and the Bluetooth
-// bootstrap, then runs the normal GAL session over TCP (AaTcpTransport). The
-// Bluetooth handshake hands the phone the AP credentials + this TCP endpoint;
-// the phone joins the AP and connects, and from there it's the same session as
-// wired. All the AA protocol logic is inherited from AaConnection.
+// Wireless Android Auto backend: runs the Bluetooth bootstrap, then the normal
+// GAL session over TCP (AaTcpTransport). The Bluetooth handshake hands the phone
+// the AP credentials + this TCP endpoint; the phone joins the AP and connects,
+// and from there it's the same session as wired. All the AA protocol logic is
+// inherited from AaConnection.
+//
+// The Wi-Fi AP itself belongs to the system and is simply read (wifi_ap::read).
 class AaWirelessConnection : public AaConnection
 {
 public:
@@ -21,7 +23,6 @@ public:
     void stop() override;
 
 private:
-    WifiAp _wifi;
     AaBluetooth _bluetooth;
 };
 

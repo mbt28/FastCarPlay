@@ -16,19 +16,24 @@ AaWirelessConnection::AaWirelessConnection()
 
 void AaWirelessConnection::start()
 {
-    // 1) Head unit Wi-Fi AP the phone will join.
-    if (!_wifi.start())
-        log_e("wireless: Wi-Fi AP failed to start");
+    // 1) The Wi-Fi AP the phone will join is the system's, already running.
+    //    Read what it is actually advertising rather than what a preset says,
+    //    so the credentials we hand the phone always describe a real network.
+    const wifi_ap::Params ap = wifi_ap::read();
+    if (!ap.valid())
+        log_e("wireless: no system Wi-Fi AP (ssid '%s', ip '%s') -- the phone "
+              "will have no network to join after the Bluetooth handoff",
+              ap.ssid.c_str(), ap.ip.c_str());
 
     // 2) Bluetooth bootstrap: advertise the AA profile and, on connect, hand
     //    the phone the AP credentials + this TCP endpoint.
     aa_aaw::Params params;
-    params.ip = _wifi.ip();
+    params.ip = ap.ip;
     params.port = AA_TCP_PORT;
-    params.ssid = Settings::wifiSsid.value;
-    params.passphrase = Settings::wifiPass.value;
-    params.bssid = _wifi.bssid();
-    params.channel = Settings::wifiChannel;
+    params.ssid = ap.ssid;
+    params.passphrase = ap.passphrase;
+    params.bssid = ap.bssid;
+    params.channel = ap.channel;
     if (!_bluetooth.start(params))
         log_e("wireless: Bluetooth bootstrap failed to start");
 
@@ -40,7 +45,7 @@ void AaWirelessConnection::stop()
 {
     AaConnection::stop();
     _bluetooth.stop();
-    _wifi.stop();
+    // The AP is the system's: leave it running, it is the debug/deploy channel.
 }
 
 #endif /* USE_AA_WIRELESS */

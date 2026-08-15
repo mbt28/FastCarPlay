@@ -1,152 +1,224 @@
 #include "wifi_ap.h"
 
-#if defined(USE_AA_WIRELESS) || defined(USE_CP_WIRELESS)
-
-#include <cstdio>
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <fstream>
-#include <string>
+#include <sstream>
 #include <unistd.h>
+
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include "common/logger.h"
 #include "settings.h"
 
-#define HOSTAPD_CONF "/tmp/fcp-hostapd.conf"
-#define DNSMASQ_CONF "/tmp/fcp-dnsmasq.conf"
-
-static int run(const std::string &cmd)
+namespace wifi_ap
 {
-    log_d("wifi: %s", cmd.c_str());
-    return system(cmd.c_str());
+namespace
+{
+// WPA2 limits; hostapd refuses to start outside them, and a rejected config
+// would leave the board with no AP at all.
+constexpr int SSID_MIN = 1, SSID_MAX = 32;
+constexpr int PASS_MIN = 8, PASS_MAX = 63;
+
+std::string trim(std::string s)
+{
+    const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), notSpace));
+    s.erase(std::find_if(s.rbegin(), s.rend(), notSpace).base(), s.end());
+    return s;
 }
 
-// Kill every instance of a program by name. busybox (the F1C200s userland) has
-// no pkill/pgrep, so match via pidof + kill instead of a cmdline pattern.
-static void killByName(const char *name)
+// key=value, ignoring comments. hostapd.conf has no quoting or continuations,
+// so this is the whole format.
+bool configValue(const std::string &line, const char *key, std::string &out)
 {
-    run(std::string("kill $(pidof ") + name + ") 2>/dev/null");
-}
-
-// AP subnet from the AP IP (assumes /24, gateway = the AP IP).
-static std::string subnet24(const std::string &ip)
-{
-    size_t dot = ip.find_last_of('.');
-    return dot == std::string::npos ? ip : ip.substr(0, dot);
-}
-
-WifiAp::~WifiAp()
-{
-    stop();
-}
-
-bool WifiAp::writeConfigs()
-{
-    const std::string iface = Settings::wifiIface.value;
-
-    std::ofstream hostapd(HOSTAPD_CONF);
-    if (!hostapd)
+    if (line.empty() || line[0] == '#')
         return false;
-    hostapd << "interface=" << iface << "\n"
-            << "driver=nl80211\n"
-            << "ssid=" << Settings::wifiSsid.value << "\n"
-            << "hw_mode=g\n"                    // 2.4 GHz
-            << "channel=" << Settings::wifiChannel << "\n"
-            << "ieee80211n=1\n"
-            << "wmm_enabled=1\n"                // QoS: Android Auto expects it
-            << "auth_algs=1\n"
-            << "wpa=2\n"
-            << "wpa_key_mgmt=WPA-PSK\n"
-            << "rsn_pairwise=CCMP\n"
-            << "wpa_passphrase=" << Settings::wifiPass.value << "\n";
-    hostapd.close();
-
-    const std::string net = subnet24(_ip);
-    std::ofstream dnsmasq(DNSMASQ_CONF);
-    if (!dnsmasq)
+    const std::size_t eq = line.find('=');
+    if (eq == std::string::npos)
         return false;
-    dnsmasq << "interface=" << iface << "\n"
-            << "bind-interfaces\n"
-            << "dhcp-range=" << net << ".10," << net << ".100,255.255.255.0,12h\n"
-            << "dhcp-option=3," << _ip << "\n" // gateway = the head unit
-            << "no-resolv\n";
-    dnsmasq.close();
+    if (trim(line.substr(0, eq)) != key)
+        return false;
+    out = trim(line.substr(eq + 1));
     return true;
 }
 
-bool WifiAp::start()
+std::string ifaceIpv4(const std::string &iface)
 {
-    if (_running)
+    struct ifaddrs *ifas = nullptr;
+    std::string out;
+    if (getifaddrs(&ifas) != 0)
+        return out;
+    for (struct ifaddrs *a = ifas; a != nullptr; a = a->ifa_next)
+    {
+        if (a->ifa_addr == nullptr || a->ifa_addr->sa_family != AF_INET || iface != a->ifa_name)
+            continue;
+        char buf[INET_ADDRSTRLEN];
+        auto *s4 = (struct sockaddr_in *)a->ifa_addr;
+        if (inet_ntop(AF_INET, &s4->sin_addr, buf, sizeof(buf)) != nullptr)
+            out = buf;
+        break;
+    }
+    freeifaddrs(ifas);
+    return out;
+}
+
+std::string ifaceMac(const std::string &iface)
+{
+    std::ifstream in("/sys/class/net/" + iface + "/address");
+    std::string mac;
+    std::getline(in, mac);
+    return mac;
+}
+} // namespace
+
+Params read()
+{
+    Params p;
+    p.iface = Settings::wifiIface.value; // fallback if the file omits it
+
+    const std::string path = Settings::hostapdConf.value;
+    std::ifstream in(path);
+    if (!in.is_open())
+    {
+        log_w("wifi: cannot read %s -- no system AP configured?", path.c_str());
+        return p;
+    }
+
+    std::string line, value;
+    while (std::getline(in, line))
+    {
+        if (configValue(line, "interface", value))
+            p.iface = value;
+        else if (configValue(line, "ssid", value))
+            p.ssid = value;
+        else if (configValue(line, "wpa_passphrase", value))
+            p.passphrase = value;
+        else if (configValue(line, "channel", value))
+            p.channel = std::atoi(value.c_str());
+    }
+
+    p.ip = ifaceIpv4(p.iface);
+    p.bssid = ifaceMac(p.iface);
+    return p;
+}
+
+bool configure(const std::string &ssid, const std::string &passphrase)
+{
+    if ((int)ssid.size() < SSID_MIN || (int)ssid.size() > SSID_MAX)
+    {
+        log_e("wifi: SSID must be %d-%d characters", SSID_MIN, SSID_MAX);
+        return false;
+    }
+    if ((int)passphrase.size() < PASS_MIN || (int)passphrase.size() > PASS_MAX)
+    {
+        log_e("wifi: passphrase must be %d-%d characters", PASS_MIN, PASS_MAX);
+        return false;
+    }
+    // A newline would inject an arbitrary hostapd directive.
+    if (ssid.find_first_of("\r\n") != std::string::npos ||
+        passphrase.find_first_of("\r\n") != std::string::npos)
+    {
+        log_e("wifi: SSID/passphrase cannot contain newlines");
+        return false;
+    }
+
+    const std::string path = Settings::hostapdConf.value;
+    std::ifstream in(path);
+    if (!in.is_open())
+    {
+        log_e("wifi: cannot read %s", path.c_str());
+        return false;
+    }
+
+    // Rewrite in place, preserving every other directive and the comments: this
+    // file is hand-maintained on the image and carries the driver settings the
+    // AP depends on.
+    std::ostringstream out;
+    std::string line, value;
+    bool wroteSsid = false, wrotePass = false;
+    while (std::getline(in, line))
+    {
+        if (configValue(line, "ssid", value))
+        {
+            out << "ssid=" << ssid << "\n";
+            wroteSsid = true;
+        }
+        else if (configValue(line, "wpa_passphrase", value))
+        {
+            out << "wpa_passphrase=" << passphrase << "\n";
+            wrotePass = true;
+        }
+        else
+        {
+            out << line << "\n";
+        }
+    }
+    in.close();
+    if (!wroteSsid)
+        out << "ssid=" << ssid << "\n";
+    if (!wrotePass)
+        out << "wpa_passphrase=" << passphrase << "\n";
+
+    const std::string body = out.str();
+    const std::string tmp = path + ".tmp";
+    // 0600 + tmp/rename/fsync: it holds the passphrase, and a torn write would
+    // leave the board with an AP that will not start.
+    const int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0)
+    {
+        log_e("wifi: cannot write %s > %s", tmp.c_str(), strerror(errno));
+        return false;
+    }
+    const char *p = body.data();
+    std::size_t left = body.size();
+    while (left > 0)
+    {
+        const ssize_t n = write(fd, p, left);
+        if (n <= 0)
+        {
+            if (n < 0 && errno == EINTR)
+                continue;
+            log_e("wifi: write failed %s > %s", tmp.c_str(), strerror(errno));
+            close(fd);
+            unlink(tmp.c_str());
+            return false;
+        }
+        p += n;
+        left -= (std::size_t)n;
+    }
+    if (fsync(fd) != 0)
+    {
+        log_e("wifi: cannot flush %s > %s", tmp.c_str(), strerror(errno));
+        close(fd);
+        unlink(tmp.c_str());
+        return false;
+    }
+    close(fd);
+    if (rename(tmp.c_str(), path.c_str()) != 0)
+    {
+        log_e("wifi: cannot replace %s > %s", path.c_str(), strerror(errno));
+        unlink(tmp.c_str());
+        return false;
+    }
+
+    // Restart through the init script rather than `ap off; ap on`: `ap off`
+    // unloads the ESP transport module when the STA flag is absent (the normal
+    // case), which takes the interface away entirely instead of just the AP.
+    const std::string restart = Settings::apRestartCmd.value;
+    if (restart.empty())
+    {
+        log_i("wifi: AP config updated to '%s' (restart it to apply)", ssid.c_str());
         return true;
-
-    _ip = Settings::apIp.value;
-    const std::string iface = Settings::wifiIface.value;
-
-    if (!writeConfigs())
-    {
-        log_e("wifi: can't write hostapd/dnsmasq config");
-        return false;
     }
-
-    // Clear any rfkill soft-block, then take the interface from anything that
-    // manages it. Kill leftovers from a previous run FIRST — a stale hostapd
-    // keeps the new one from grabbing wlan0 ("hostapd failed to start") — then
-    // give the driver a moment to release the interface.
-    run("rfkill unblock wifi 2>/dev/null");
-    killByName("hostapd");
-    killByName("dnsmasq");
-    killByName("wpa_supplicant");
-    usleep(300 * 1000);
-    // NOTE: deliberately no "ip link set <iface> down" here. On the esp-hosted
-    // driver that runs ndo_stop, which deinitialises the interface on the ESP32
-    // side ("esp_stop: Deinitializing interface wlan0"), and nothing brings the
-    // firmware back: bringing the link up and switching mode afterwards leaves
-    // cfg80211 and hostapd both reporting an ENABLED AP that never beacons, so
-    // the phone silently fails to associate. Verified on the F1C200s.
-    //
-    // It is not needed either -- hostapd switches the interface to AP itself on
-    // start, and back to managed when it exits cleanly. Reset the type only to
-    // recover from an ungracefully-killed hostapd that left it in AP mode; that
-    // fails harmlessly (interface busy) when there is nothing to recover.
-    run("iw dev " + iface + " set type managed 2>/dev/null");
-    // IPv4 only: a plain "addr flush" would also drop the IPv6 link-local, and
-    // since we never take the link down there is no down/up transition left to
-    // regenerate it. Wireless CarPlay hands the phone that fe80 address as the
-    // endpoint to connect back to, so losing it breaks the handoff.
-    run("ip -4 addr flush dev " + iface + " 2>/dev/null");
-    run("ip link set " + iface + " up");
-    run("ip addr add " + _ip + "/24 dev " + iface);
-
-    if (run("hostapd -B " + std::string(HOSTAPD_CONF)) != 0)
-    {
-        log_e("wifi: hostapd failed to start (is it installed?)");
-        return false;
-    }
-    if (run("dnsmasq -C " + std::string(DNSMASQ_CONF)) != 0)
-        log_w("wifi: dnsmasq failed to start (phone may not get an IP)");
-
-    // The BSSID is the wlan MAC, read once the interface is up rather than on
-    // entry: on the esp-hosted driver wlan0 only appears after the transport
-    // comes up, and an early read would silently leave the BSSID empty.
-    {
-        std::ifstream mac("/sys/class/net/" + iface + "/address");
-        std::getline(mac, _bssid);
-    }
-
-    _running = true;
-    log_i("wifi: AP '%s' up on %s (%s, ch %d)", Settings::wifiSsid.value.c_str(),
-          _ip.c_str(), _bssid.c_str(), Settings::wifiChannel.value);
+    log_i("wifi: AP -> '%s', restarting via %s", ssid.c_str(), restart.c_str());
+    if (system(restart.c_str()) != 0)
+        log_w("wifi: AP restart command failed -- the new SSID applies at next boot");
     return true;
 }
-
-void WifiAp::stop()
-{
-    if (!_running)
-        return;
-    killByName("hostapd");
-    killByName("dnsmasq");
-    run("ip addr flush dev " + Settings::wifiIface.value + " 2>/dev/null");
-    _running = false;
-    log_v("wifi: AP stopped");
-}
-
-#endif /* USE_AA_WIRELESS || USE_CP_WIRELESS */
+} // namespace wifi_ap
