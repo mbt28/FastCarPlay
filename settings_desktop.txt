@@ -12,6 +12,8 @@
 # for the full annotated list of options.
 
 protocol = carplay-wired
+lvgl-ui    = true
+icon-theme = material
 
 # A window the size of a typical head-unit panel, so the UI is laid out as it
 # will be on the device.
