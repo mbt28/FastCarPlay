@@ -77,6 +77,35 @@ int main()
     check(Settings::loadUser(), "loadUser() returns true");
     check(Settings::protocol.value == "aa-wireless", "override applied over preset");
 
+    // A value that cannot be parsed used to be reported as saved and written to
+    // the file anyway, so it failed to parse again at every subsequent boot and
+    // the setting silently never took effect.
+    printf("\nunparseable values are rejected (never reach the file):\n");
+    Settings::aaFps.value = 30;
+    check(!Settings::setUser("aa-video-fps", "sixty"), "setUser() returns false");
+    check(Settings::aaFps.value == 30, "live value left untouched");
+    check(slurp(path).find("sixty") == std::string::npos, "value absent from the file");
+    check(!Settings::setUser("cursor", "yes"), "bad bool rejected");
+    check(!Settings::setUser("aa-video-fps", "60fps"), "trailing junk rejected");
+    check(!Settings::setUser("aspect-correction", "1.0x"), "bad float rejected");
+    check(Settings::setUser("aspect-correction", "1.25"), "good float accepted");
+
+    printf("\nthe saved file still parses after a rejected write:\n");
+    Settings::aaFps.value = 30;
+    check(Settings::loadUser(), "loadUser() returns true");
+    check(Settings::aaFps.value == 30, "aa-video-fps unchanged by the rejected write");
+
+    // load() has always accepted an alias; setUser() used to compare against
+    // name only, so a key readable from a preset was not writable from the UI.
+    printf("\naliases are writable, and fold onto the canonical name:\n");
+    Settings::aaResolution.value = 1;
+    check(Settings::setUser("android-resolution", "2"), "setUser(alias) accepted");
+    check(Settings::aaResolution.value == 2, "applied to the live setting");
+    const std::string aliased = slurp(path);
+    check(aliased.find("aa-resolution = 2") != std::string::npos, "stored canonically");
+    check(aliased.find("android-resolution") == std::string::npos,
+          "alias spelling not left behind as a duplicate");
+
     printf("\n%s\n", failures == 0 ? "PASS" : "FAIL");
     return failures == 0 ? 0 : 1;
 }

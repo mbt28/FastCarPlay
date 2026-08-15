@@ -9,7 +9,9 @@
 #include <utility>
 #include <vector>
 
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "common/logger.h"
 
@@ -89,11 +91,16 @@ bool Settings::loadUser()
 
 bool Settings::setUser(const std::string &key, const std::string &value)
 {
-    // Apply to the live setting first: a bad key must not reach the file.
+    // Apply to the live setting first: neither a bad key nor a bad value may
+    // reach the file. Persisting something unparseable would be worse than
+    // rejecting it -- it fails again at every subsequent boot, and the user
+    // gets no hint why the setting they saved never took effect.
     ISetting *target = nullptr;
     for (ISetting *setting : _settings())
     {
-        if (setting->name == key)
+        // matches(), not name ==, so a key that loads from a settings file can
+        // also be saved from the UI. They used to disagree.
+        if (setting->matches(key))
         {
             target = setting;
             break;
@@ -105,8 +112,15 @@ bool Settings::setUser(const std::string &key, const std::string &value)
         return false;
     }
 
-    std::string parsed = value;
-    target->parse(parsed);
+    std::string error;
+    if (!target->tryParse(value, &error))
+    {
+        log_e("Rejected %s = %s > %s", key.c_str(), value.c_str(), error.c_str());
+        return false;
+    }
+    // Store under the canonical name, so an alias write does not leave a stale
+    // duplicate of the same setting under both spellings.
+    const std::string canonical = target->name;
 
     // Merge into the existing overrides, preserving every other key.
     const std::string path = userPath();
@@ -135,17 +149,23 @@ bool Settings::setUser(const std::string &key, const std::string &value)
             if (k.empty())
                 continue;
 
-            if (k == key)
+            // Fold every spelling of this setting (name or alias) into one
+            // canonical entry, so saving under an alias cannot leave two lines
+            // that disagree about the same setting.
+            if (target->matches(k))
             {
-                v = value;
+                if (replaced)
+                    continue;
+                entries.emplace_back(canonical, value);
                 replaced = true;
+                continue;
             }
             entries.emplace_back(k, v);
         }
         in.close();
     }
     if (!replaced)
-        entries.emplace_back(key, value);
+        entries.emplace_back(canonical, value);
 
     const std::size_t slash = path.find_last_of('/');
     if (slash != std::string::npos)
@@ -159,32 +179,69 @@ bool Settings::setUser(const std::string &key, const std::string &value)
         }
     }
 
-    // Write via a temp file + rename so a power cut mid-write can never leave
-    // a truncated settings file on the head unit.
+    // Write via a temp file + fsync + rename so a power cut mid-write can never
+    // leave a truncated settings file on the head unit. The head unit loses
+    // power at ignition-off, so this is the normal case, not the rare one:
+    // without the fsync the rename can land while the contents are still in
+    // page cache, and the file comes back empty. 0600 -- it may hold a Wi-Fi
+    // passphrase.
+    std::string body =
+        "# FastCarPlay user settings -- written by the on-device UI.\n"
+        "# Applied after the shipped preset; safe across image updates.\n";
+    for (const auto &entry : entries)
+        body += entry.first + " = " + entry.second + "\n";
+
     const std::string tmp = path + ".tmp";
     {
-        std::ofstream out(tmp, std::ios::trunc);
-        if (!out.is_open())
+        const int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0)
         {
-            log_e("Cannot write > %s", tmp.c_str());
+            log_e("Cannot write %s > %s", tmp.c_str(), strerror(errno));
             return false;
         }
-        out << "# FastCarPlay user settings -- written by the on-device UI.\n"
-            << "# Applied after the shipped preset; safe across image updates.\n";
-        for (const auto &entry : entries)
-            out << entry.first << " = " << entry.second << "\n";
-        out.flush();
-        if (!out.good())
+        const char *p = body.data();
+        std::size_t left = body.size();
+        while (left > 0)
         {
-            log_e("Write failed > %s", tmp.c_str());
+            const ssize_t n = write(fd, p, left);
+            if (n <= 0)
+            {
+                if (n < 0 && errno == EINTR)
+                    continue;
+                log_e("Write failed %s > %s", tmp.c_str(), strerror(errno));
+                close(fd);
+                unlink(tmp.c_str());
+                return false;
+            }
+            p += n;
+            left -= static_cast<std::size_t>(n);
+        }
+        if (fsync(fd) != 0)
+        {
+            log_e("Cannot flush %s > %s", tmp.c_str(), strerror(errno));
+            close(fd);
+            unlink(tmp.c_str());
             return false;
         }
+        close(fd);
     }
 
     if (rename(tmp.c_str(), path.c_str()) != 0)
     {
         log_e("Cannot replace %s > %s", path.c_str(), strerror(errno));
+        unlink(tmp.c_str());
         return false;
+    }
+
+    // Durability of the rename itself lives in the directory, not the file.
+    if (slash != std::string::npos)
+    {
+        const int dirfd = open(path.substr(0, slash).c_str(), O_RDONLY | O_DIRECTORY);
+        if (dirfd >= 0)
+        {
+            fsync(dirfd);
+            close(dirfd);
+        }
     }
 
     log_i("Saved %s = %s > %s", key.c_str(), value.c_str(), path.c_str());

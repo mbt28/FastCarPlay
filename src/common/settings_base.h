@@ -20,7 +20,22 @@ public:
     ISetting(std::string name_, std::string alias_ = "")
         : name(std::move(name_)), alias(std::move(alias_)) {}
     bool matches(const std::string &key) const { return key == name || (!alias.empty() && key == alias); }
-    virtual void parse(std::string &str) = 0;
+
+    // Parse, and say why it failed. Anything that persists a value must use
+    // this form: the old lenient parse() kept the previous value on a bad
+    // input but could not report it, so a caller would happily write the bad
+    // string to disk and then fail to parse it on every subsequent boot.
+    virtual bool tryParse(std::string in, std::string *error) = 0;
+
+    // Lenient form, for loading a settings file: one bad line must not stop
+    // start-up, so it complains and moves on.
+    void parse(const std::string &str)
+    {
+        std::string error;
+        if (!tryParse(str, &error))
+            std::cerr << "[Settings] " << error << std::endl;
+    }
+
     virtual std::string asString() const = 0;
 };
 
@@ -51,8 +66,8 @@ public:
         return *this;
     }
 
-    // parse a string into T
-    void parse(std::string &str) override
+    // parse a string into T, leaving the current value untouched on failure
+    bool tryParse(std::string str, std::string *error) override
     {
         try
         {
@@ -64,7 +79,7 @@ public:
                 else if (str == "0" || str == "false")
                     value = false;
                 else
-                    throw std::runtime_error("Can't convert to boolean.");
+                    throw std::runtime_error("expected true/false or 1/0");
             }
             else if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>)
             {
@@ -80,17 +95,22 @@ public:
             }
             else if constexpr (std::is_floating_point_v<T>)
             {
-                value = static_cast<T>(std::stold(str));
+                size_t used = 0;
+                value = static_cast<T>(std::stold(str, &used));
+                if (used != str.size())
+                    throw std::runtime_error("trailing junk after the number");
             }
             else if constexpr (std::is_same_v<T, std::string>)
             {
                 value = str;
             }
+            return true;
         }
         catch (const std::exception &e)
         {
-            std::cerr << "[Settings] failed to parse \"" << str
-                      << "\" for key \"" << name << "\": " << e.what() << std::endl;
+            if (error)
+                *error = "cannot parse \"" + str + "\" for " + name + ": " + e.what();
+            return false;
         }
     }
 
