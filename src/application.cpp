@@ -712,6 +712,25 @@ std::unique_ptr<IDecoder> Application::makeDecoder(AVCodecID codecId)
     return std::make_unique<Decoder>();
 }
 
+void Application::publishStatus(IConnection &protocol)
+{
+    // The two cheap fields gate the expensive ones: status() builds a string on
+    // every call in some backends, and this runs once per rendered frame.
+    const int state = protocol.state();
+    const bool focused = protocol.videoFocused();
+    if (!_statusFile.due(state, focused))
+        return;
+
+    StatusFile::Fields f;
+    f.state = state;
+    f.videoFocused = focused;
+    f.status = protocol.status();
+    f.phoneName = protocol.phoneName();
+    f.protocol = Settings::protocol.value;
+    f.transfered = protocol.transfered();
+    _statusFile.update(f);
+}
+
 DisplayGeometry Application::resolveGeometry() const
 {
     DisplayGeometry g;
@@ -836,6 +855,7 @@ void Application::loopHeadless()
         // Drain the buffer so a buffering (software) decoder can't stall; the
         // Cedar decoder presents to fb directly and leaves this empty.
         decoder->buffer.consume(&frame, &frameId);
+        publishStatus(protocol);
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
@@ -925,6 +945,7 @@ void Application::loopDrm()
     while (_active && !g_quit)
     {
         syncDecoderCodec(decoder, protocol, startedCodec);
+        publishStatus(protocol);
         Uint32 now = SDL_GetTicks();
         auto state = protocol.state();
         uint32_t frames = drm_display::videoFrames();
@@ -1131,6 +1152,7 @@ void Application::loop()
     while (_active && !g_quit)
     {
         syncDecoderCodec(decoder, protocol, startedCodec);
+        publishStatus(protocol);
         bool newFrame = false;
 
         if (_state.showToast > 0)
