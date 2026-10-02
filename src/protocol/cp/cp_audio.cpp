@@ -62,12 +62,23 @@ bool Decoder::init(Codec codec, int rate, int channels, bool upmixToStereo)
         return true; // no libavcodec context; passthrough + byte-swap
 
     const AVCodecID id = codec == Codec::AacLc ? AV_CODEC_ID_AAC : AV_CODEC_ID_OPUS;
-    const AVCodec *dec = avcodec_find_decoder(id);
+    // Prefer integer-only decoders: the F1C200s' ARM926 has no FPU, so the
+    // default float AAC decoder runs on soft-float emulation and burns most of
+    // the core (measured 2026-10-03: main thread 61% during AAC-LC playback).
+    // aac_fixed outputs S16P directly, which the conversion below handles.
+    const AVCodec *dec = nullptr;
+    if (codec == Codec::AacLc)
+        dec = avcodec_find_decoder_by_name("aac_fixed");
+    else
+        dec = avcodec_find_decoder_by_name("libopus"); // fixed-point libopus if built in
+    if (!dec)
+        dec = avcodec_find_decoder(id);
     if (!dec)
     {
         log_e("[cp-audio] no %s decoder in libavcodec", codec == Codec::AacLc ? "AAC" : "OPUS");
         return false;
     }
+    log_i("[cp-audio] %s decoder: %s", codec == Codec::AacLc ? "AAC" : "OPUS", dec->name);
     _ctx = avcodec_alloc_context3(dec);
     if (!_ctx)
         return false;
@@ -124,6 +135,10 @@ void Decoder::appendFrame(std::vector<int16_t> &out)
             case AV_SAMPLE_FMT_FLT:  s = f2s16(((const float *)_frame->data[0])[i * ch + c]); break;
             case AV_SAMPLE_FMT_S16P: s = ((const int16_t *)_frame->data[c])[i]; break;
             case AV_SAMPLE_FMT_S16:  s = ((const int16_t *)_frame->data[0])[i * ch + c]; break;
+            // aac_fixed (and the fixed-point opus/mp3 decoders) emit full-scale
+            // 32-bit integers: take the top 16 bits.
+            case AV_SAMPLE_FMT_S32P: s = (int16_t)(((const int32_t *)_frame->data[c])[i] >> 16); break;
+            case AV_SAMPLE_FMT_S32:  s = (int16_t)(((const int32_t *)_frame->data[0])[i * ch + c] >> 16); break;
             default:
                 // Fallback for other planar/packed layouts.
                 if (planar)
