@@ -7,6 +7,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -52,6 +53,10 @@ void capture(const char *tag, const Bytes &b)
 {
     const char *dir = getenv("FCP_CP_CAPTURE");
     if (!dir || b.empty())
+        return;
+    // The screen stream is ~100 KB/s; writing it to the SD card starves CMA
+    // (dirty pages pinned -> cedrus allocation failures). Opt in explicitly.
+    if (strcmp(tag, "screen") == 0 && !getenv("FCP_CP_CAPTURE_SCREEN"))
         return;
     char path[512];
     snprintf(path, sizeof(path), "%s/stream-%s.bin", dir, tag);
@@ -163,6 +168,17 @@ uint16_t AvSession::openListener(Listener &l, const char *tag, std::function<voi
             int c = ::accept(lfd, nullptr, nullptr);
             if (c < 0)
                 continue;
+            // Same dead-peer keepalive as the control channel (cp_server.cpp):
+            // the event/screen/iAP readers break on recv() <= 0, which only
+            // happens for a vanished phone once the kernel gives up probing.
+            int one = 1;
+            ::setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+#ifdef TCP_KEEPIDLE
+            int keepIdle = 5, keepIntvl = 2, keepCnt = 3;
+            ::setsockopt(c, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(keepIdle));
+            ::setsockopt(c, IPPROTO_TCP, TCP_KEEPINTVL, &keepIntvl, sizeof(keepIntvl));
+            ::setsockopt(c, IPPROTO_TCP, TCP_KEEPCNT, &keepCnt, sizeof(keepCnt));
+#endif
             log_i("[cp-av] %s connected", name.c_str());
             onClient(c);
             ::close(c);
@@ -896,6 +912,26 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
         {
             const int type = (int)s.intOr("type");
             const int64_t streamId = s.intOr("streamConnectionID");
+            {
+                // Log every scalar the phone put in the stream dict: the keys
+                // that describe its own ports / input format are what an
+                // uplink (microphone) implementation has to honour.
+                std::string keys;
+                for (const auto &kv : s.dict)
+                {
+                    char v[64] = "";
+                    switch (kv.second.type)
+                    {
+                    case cp_plist::Value::Type::Int:    snprintf(v, sizeof(v), "=%lld", (long long)kv.second.i); break;
+                    case cp_plist::Value::Type::Bool:   snprintf(v, sizeof(v), "=%s", kv.second.b ? "true" : "false"); break;
+                    case cp_plist::Value::Type::Str: snprintf(v, sizeof(v), "=\"%.40s\"", kv.second.s.c_str()); break;
+                    case cp_plist::Value::Type::Data:   snprintf(v, sizeof(v), "=<%zuB>", kv.second.data.size()); break;
+                    default: break;
+                    }
+                    keys += (keys.empty() ? "" : " ") + kv.first + v;
+                }
+                log_i("[cp-av] SETUP stream dict: %s", keys.c_str());
+            }
             auto l = std::make_unique<Listener>();
             uint16_t port = 0;
             cp_plist::Value entry = cp_plist::Value::map();

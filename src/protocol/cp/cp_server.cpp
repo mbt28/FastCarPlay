@@ -45,8 +45,18 @@ bool Server::start(uint16_t port, cp_auth_setup::MfiSigner *signer)
     addr.sin6_family = AF_INET6;
     addr.sin6_addr = in6addr_any;
     addr.sin6_port = htons(port);
-    if (bind(_listenFd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
-        listen(_listenFd, 1) != 0)
+    // A restart right after the previous instance exits can still find :7000
+    // held by its dying listener (the app then reported "device error" and
+    // never recovered). Retry for a few seconds before giving up.
+    int rc = -1;
+    for (int attempt = 0; attempt < 20; attempt++)
+    {
+        rc = bind(_listenFd, (struct sockaddr *)&addr, sizeof(addr));
+        if (rc == 0 || errno != EADDRINUSE)
+            break;
+        usleep(250 * 1000);
+    }
+    if (rc != 0 || listen(_listenFd, 1) != 0)
     {
         log_e("cp-server: bind/listen :%d failed (%s)", port, strerror(errno));
         close(_listenFd);
@@ -75,6 +85,18 @@ void Server::acceptLoop()
             continue;
         int one = 1;
         setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+        // Dead-peer detection. A phone that walks out of Wi-Fi range (or has
+        // Wi-Fi switched off) never sends FIN, and without keepalive this
+        // connection stays ESTABLISHED forever: the app keeps reporting
+        // CONNECTED with the last video frame on screen (seen 2026-10-03 on
+        // the F1C200s head unit). 5 s idle + 3 probes 2 s apart -> ~11 s.
+        setsockopt(client, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+#ifdef TCP_KEEPIDLE
+        int keepIdle = 5, keepIntvl = 2, keepCnt = 3;
+        setsockopt(client, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(keepIdle));
+        setsockopt(client, IPPROTO_TCP, TCP_KEEPINTVL, &keepIntvl, sizeof(keepIntvl));
+        setsockopt(client, IPPROTO_TCP, TCP_KEEPCNT, &keepCnt, sizeof(keepCnt));
+#endif
         char host[INET6_ADDRSTRLEN] = "?";
         struct sockaddr_in6 peer{};
         if (from.ss_family == AF_INET6)
