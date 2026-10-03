@@ -201,25 +201,28 @@ void CpWiredConnection::onVideoCodec(bool hevc)
     log_i("CarPlay screen codec: %s", hevc ? "HEVC/h265" : "h264");
 }
 
-void CpWiredConnection::onVideo(const Bytes &annexB)
+void CpWiredConnection::onVideo(const uint8_t *annexB, size_t len)
 {
-    if (annexB.empty())
+    if (!annexB || len == 0)
         return;
-    auto msg = Message::Payload(CMD_VIDEO_DATA, (int32_t)annexB.size(), AV_INPUT_BUFFER_PADDING_SIZE);
+    auto msg = Message::Payload(CMD_VIDEO_DATA, (int32_t)len, AV_INPUT_BUFFER_PADDING_SIZE);
     uint8_t *p = msg->data();
     if (!p)
         return;
-    std::memcpy(p, annexB.data(), annexB.size());
-    videoStream.pushDiscard(std::move(msg));
-    _transfered.fetch_add((uint32_t)annexB.size(), std::memory_order_release);
+    std::memcpy(p, annexB, len);
+    // Overflow drops the OLDEST queued frame; a keyframe request brings the
+    // picture back immediately instead of waiting out a broken GOP.
+    if (!videoStream.pushDropOldest(std::move(msg)))
+        enqueueCommand(forceKeyFrameCommand());
+    _transfered.fetch_add((uint32_t)len, std::memory_order_release);
     _frames.fetch_add(1, std::memory_order_relaxed);
     if (_state.load() != PROTOCOL_STATUS_CONNECTED)
         _state.store(PROTOCOL_STATUS_CONNECTED);
 }
 
-void CpWiredConnection::onAudio(int type, int rate, int channels, const Bytes &pcm)
+void CpWiredConnection::onAudio(int type, int rate, int channels, const uint8_t *pcm, size_t bytes)
 {
-    if (pcm.empty())
+    if (!pcm || bytes == 0)
         return;
     auto fmtType = [](int r, int ch) -> uint32_t {
         if (r == 8000 && ch == 1) return 3;
@@ -230,7 +233,7 @@ void CpWiredConnection::onAudio(int type, int rate, int channels, const Bytes &p
         return 0;
     }(rate, channels);
 
-    auto m = Message::Payload(CMD_AUDIO_DATA, (int32_t)(12 + pcm.size()));
+    auto m = Message::Payload(CMD_AUDIO_DATA, (int32_t)(12 + bytes));
     uint8_t *p = m->data();
     if (!p)
         return;
@@ -239,9 +242,9 @@ void CpWiredConnection::onAudio(int type, int rate, int channels, const Bytes &p
     p[2] = (uint8_t)((fmtType >> 16) & 0xff);
     p[3] = (uint8_t)((fmtType >> 24) & 0xff);
     std::memset(p + 4, 0, 8);
-    std::memcpy(p + 12, pcm.data(), pcm.size());
+    std::memcpy(p + 12, pcm, bytes);
     m->setOffset(12);
-    (type == 102 ? audioStreamMain : audioStreamAux).pushDiscard(std::move(m));
+    (type == 102 ? audioStreamMain : audioStreamAux).pushDropOldest(std::move(m));
 }
 
 void CpWiredConnection::onSessionConnect()
@@ -630,8 +633,8 @@ void CpWiredConnection::start()
 
     cp_av::Sinks sinks;
     sinks.onVideoCodec = [this](bool hevc) { onVideoCodec(hevc); };
-    sinks.onVideo = [this](const Bytes &b) { onVideo(b); };
-    sinks.onAudio = [this](int t, int r, int c, const Bytes &p) { onAudio(t, r, c, p); };
+    sinks.onVideo = [this](const uint8_t *b, size_t n) { onVideo(b, n); };
+    sinks.onAudio = [this](int t, int r, int c, const uint8_t *p, size_t n) { onAudio(t, r, c, p, n); };
     // The CarPlay dock's car icon (requestUI) hands the screen back to us.
     sinks.onRequestNativeUI = [this] {
         log_i("CarPlay: dock car icon -- backgrounding to FastCarPlay (resume to return)");

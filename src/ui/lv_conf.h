@@ -173,17 +173,21 @@
      * - gradients use RGB888
      * - bitmaps with transparency may use ARGB8888
      */
+    /* We render only two output formats: RGB565 (the F1C200s DRM overlay
+     * plane) and ARGB8888 (the SDL desktop window). RGB888 stays on for
+     * gradients, A8 for anti-aliased glyph masks, XRGB8888 as the overlay
+     * fallback. The rest are dead code on both paths -- ~100 KB of .text. */
     #define LV_DRAW_SW_SUPPORT_RGB565       1
-    #define LV_DRAW_SW_SUPPORT_RGB565_SWAPPED       1
-    #define LV_DRAW_SW_SUPPORT_RGB565A8     1
+    #define LV_DRAW_SW_SUPPORT_RGB565_SWAPPED       0
+    #define LV_DRAW_SW_SUPPORT_RGB565A8     0
     #define LV_DRAW_SW_SUPPORT_RGB888       1
     #define LV_DRAW_SW_SUPPORT_XRGB8888     1
     #define LV_DRAW_SW_SUPPORT_ARGB8888     1
-    #define LV_DRAW_SW_SUPPORT_ARGB8888_PREMULTIPLIED 1
-    #define LV_DRAW_SW_SUPPORT_L8           1
-    #define LV_DRAW_SW_SUPPORT_AL88         1
+    #define LV_DRAW_SW_SUPPORT_ARGB8888_PREMULTIPLIED 0
+    #define LV_DRAW_SW_SUPPORT_L8           0
+    #define LV_DRAW_SW_SUPPORT_AL88         0
     #define LV_DRAW_SW_SUPPORT_A8           1
-    #define LV_DRAW_SW_SUPPORT_I1           1
+    #define LV_DRAW_SW_SUPPORT_I1           0
 
     /* The threshold of the luminance to consider a pixel as
      * active in indexed color format */
@@ -419,8 +423,11 @@
 #define LV_USE_ASSERT_OBJ           0   /**< Check the object's type and existence (e.g. not deleted). (Slow) */
 
 /** Add a custom handler when assert happens e.g. to restart MCU. */
-#define LV_ASSERT_HANDLER_INCLUDE <stdint.h>
-#define LV_ASSERT_HANDLER while(1);     /**< Halt by default */
+/* abort() instead of while(1): on a head unit a silent spin is
+ * indistinguishable from a hang, so die loudly and let the supervisor
+ * (the init script) restart us. */
+#define LV_ASSERT_HANDLER_INCLUDE <stdlib.h>
+#define LV_ASSERT_HANDLER abort();
 
 /*-------------
  * Debug
@@ -489,13 +496,13 @@
 * - lv_obj_stringify_id:    Return string-ified identifier, e.g. "button3".
 * - lv_obj_free_id:         Does nothing, as there is no memory allocation for the ID.
 * When disabled these functions needs to be implemented by the user.*/
-#define LV_USE_OBJ_ID_BUILTIN   1
+#define LV_USE_OBJ_ID_BUILTIN   0
 
 /** Use obj property set/get API. */
 #define LV_USE_OBJ_PROPERTY 0
 
 /** Enable property name support. */
-#define LV_USE_OBJ_PROPERTY_NAME 1
+#define LV_USE_OBJ_PROPERTY_NAME 0
 
 /* Use VG-Lite Simulator.
  * - Requires: LV_USE_THORVG_INTERNAL or LV_USE_THORVG_EXTERNAL */
@@ -593,7 +600,7 @@
 #define LV_FONT_MONTSERRAT_22 0
 #define LV_FONT_MONTSERRAT_24 0
 #define LV_FONT_MONTSERRAT_26 0
-#define LV_FONT_MONTSERRAT_28 1
+#define LV_FONT_MONTSERRAT_28 0
 #define LV_FONT_MONTSERRAT_30 0
 #define LV_FONT_MONTSERRAT_32 0
 #define LV_FONT_MONTSERRAT_34 0
@@ -702,17 +709,27 @@
  * */
 #define LV_WIDGETS_HAS_DEFAULT_VALUE  1
 
-#define LV_USE_ANIMIMG    1
+/* The hand-written picker UI (the default) creates only label, obj, button,
+ * buttonmatrix (keyboard), keyboard and textarea, so every other widget is
+ * dead ~200 KB of .text. The generated EEZ flow engine (USE_EEZ) is a generic
+ * LVGL runtime that references the full widget set, so it keeps them all. */
+#ifdef USE_EEZ
+#define FCP_OPT_WIDGET 1
+#else
+#define FCP_OPT_WIDGET 0
+#endif
 
-#define LV_USE_ARC        1
+#define LV_USE_ANIMIMG    FCP_OPT_WIDGET
 
-#define LV_USE_BAR        1
+#define LV_USE_ARC        FCP_OPT_WIDGET
+
+#define LV_USE_BAR        FCP_OPT_WIDGET
 
 #define LV_USE_BUTTON        1
 
 #define LV_USE_BUTTONMATRIX  1
 
-#define LV_USE_CALENDAR   1
+#define LV_USE_CALENDAR   FCP_OPT_WIDGET
 #if LV_USE_CALENDAR
     #define LV_CALENDAR_WEEK_STARTS_MONDAY 0
     #if LV_CALENDAR_WEEK_STARTS_MONDAY
@@ -727,17 +744,17 @@
     #define LV_USE_CALENDAR_CHINESE 0
 #endif  /*LV_USE_CALENDAR*/
 
-#define LV_USE_CANVAS     1
+#define LV_USE_CANVAS     FCP_OPT_WIDGET
 
-#define LV_USE_CHART      1
+#define LV_USE_CHART      FCP_OPT_WIDGET
 
-#define LV_USE_CHECKBOX   1
+#define LV_USE_CHECKBOX   FCP_OPT_WIDGET
 
-#define LV_USE_DROPDOWN   1   /**< Requires: lv_label */
+#define LV_USE_DROPDOWN   FCP_OPT_WIDGET   /**< Requires: lv_label */
 
-#define LV_USE_IMAGE      1   /**< Requires: lv_label */
+#define LV_USE_IMAGE      FCP_OPT_WIDGET   /**< Requires: lv_label */
 
-#define LV_USE_IMAGEBUTTON     1
+#define LV_USE_IMAGEBUTTON     FCP_OPT_WIDGET
 
 #define LV_USE_KEYBOARD   1
 
@@ -748,48 +765,48 @@
     #define LV_LABEL_WAIT_CHAR_COUNT 3  /**< The count of wait chart */
 #endif
 
-#define LV_USE_LED        1
+#define LV_USE_LED        FCP_OPT_WIDGET
 
-#define LV_USE_LINE       1
+#define LV_USE_LINE       FCP_OPT_WIDGET
 
-#define LV_USE_LIST       1
+#define LV_USE_LIST       FCP_OPT_WIDGET
 
 #define LV_USE_LOTTIE     0  /**< Requires: lv_canvas, thorvg */
 
-#define LV_USE_MENU       1
+#define LV_USE_MENU       FCP_OPT_WIDGET
 
-#define LV_USE_MSGBOX     1
+#define LV_USE_MSGBOX     FCP_OPT_WIDGET
 
-#define LV_USE_ROLLER     1   /**< Requires: lv_label */
+#define LV_USE_ROLLER     FCP_OPT_WIDGET   /**< Requires: lv_label */
 
-#define LV_USE_SCALE      1
+#define LV_USE_SCALE      FCP_OPT_WIDGET
 
-#define LV_USE_SLIDER     1   /**< Requires: lv_bar */
+#define LV_USE_SLIDER     FCP_OPT_WIDGET   /**< Requires: lv_bar */
 
-#define LV_USE_SPAN       1
+#define LV_USE_SPAN       FCP_OPT_WIDGET
 #if LV_USE_SPAN
     /** A line of text can contain this maximum number of span descriptors. */
     #define LV_SPAN_SNIPPET_STACK_SIZE 64
 #endif
 
-#define LV_USE_SPINBOX    1
+#define LV_USE_SPINBOX    FCP_OPT_WIDGET
 
-#define LV_USE_SPINNER    1
+#define LV_USE_SPINNER    FCP_OPT_WIDGET
 
-#define LV_USE_SWITCH     1
+#define LV_USE_SWITCH     FCP_OPT_WIDGET
 
-#define LV_USE_TABLE      1
+#define LV_USE_TABLE      FCP_OPT_WIDGET
 
-#define LV_USE_TABVIEW    1
+#define LV_USE_TABVIEW    FCP_OPT_WIDGET
 
 #define LV_USE_TEXTAREA   1   /**< Requires: lv_label */
 #if LV_USE_TEXTAREA != 0
     #define LV_TEXTAREA_DEF_PWD_SHOW_TIME 1500    /**< [ms] */
 #endif
 
-#define LV_USE_TILEVIEW   1
+#define LV_USE_TILEVIEW   FCP_OPT_WIDGET
 
-#define LV_USE_WIN        1
+#define LV_USE_WIN        FCP_OPT_WIDGET
 
 #define LV_USE_3DTEXTURE  0
 
@@ -805,17 +822,17 @@
     #define LV_THEME_DEFAULT_DARK 0
 
     /** 1: Enable grow on press */
-    #define LV_THEME_DEFAULT_GROW 1
+    #define LV_THEME_DEFAULT_GROW 0
 
     /** Default transition time in ms. */
-    #define LV_THEME_DEFAULT_TRANSITION_TIME 80
+    #define LV_THEME_DEFAULT_TRANSITION_TIME 0
 #endif /*LV_USE_THEME_DEFAULT*/
 
 /** A very simple theme that is a good starting point for a custom theme */
-#define LV_USE_THEME_SIMPLE 1
+#define LV_USE_THEME_SIMPLE 0
 
 /** A theme designed for monochrome displays */
-#define LV_USE_THEME_MONO 1
+#define LV_USE_THEME_MONO 0
 
 /*==================
  * LAYOUTS
@@ -826,7 +843,7 @@
 #define LV_USE_FLEX 1
 
 /** A layout similar to Grid in CSS. */
-#define LV_USE_GRID 1
+#define LV_USE_GRID FCP_OPT_WIDGET
 
 /*====================
  * 3RD PARTS LIBRARIES

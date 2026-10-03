@@ -122,35 +122,47 @@ void Decoder::appendFrame(std::vector<int16_t> &out)
     const int ch = _frame->ch_layout.nb_channels;
     const AVSampleFormat fmt = (AVSampleFormat)_frame->format;
     const bool planar = av_sample_fmt_is_planar(fmt);
+    const bool dup = _upmix && ch == 1;
 
-    auto emit = [&](int16_t s) { out.push_back(s); };
-    for (int i = 0; i < n; i++)
-    {
-        for (int c = 0; c < ch; c++)
+    // Grow once up front (no reallocation inside the per-sample loop), and
+    // pick the sample loop by format ONCE rather than running the switch on
+    // every sample -- this is the AAC path on an FPU-less core.
+    out.reserve(out.size() + (size_t)n * (dup ? 2 : ch));
+    size_t base = out.size();
+    out.resize(base + (size_t)n * (dup ? 2 : ch));
+    int16_t *w = out.data() + base;
+
+    auto run = [&](auto sample) {
+        for (int i = 0; i < n; i++)
         {
-            int16_t s = 0;
-            switch (fmt)
-            {
-            case AV_SAMPLE_FMT_FLTP: s = f2s16(((const float *)_frame->data[c])[i]); break;
-            case AV_SAMPLE_FMT_FLT:  s = f2s16(((const float *)_frame->data[0])[i * ch + c]); break;
-            case AV_SAMPLE_FMT_S16P: s = ((const int16_t *)_frame->data[c])[i]; break;
-            case AV_SAMPLE_FMT_S16:  s = ((const int16_t *)_frame->data[0])[i * ch + c]; break;
-            // aac_fixed (and the fixed-point opus/mp3 decoders) emit full-scale
-            // 32-bit integers: take the top 16 bits.
-            case AV_SAMPLE_FMT_S32P: s = (int16_t)(((const int32_t *)_frame->data[c])[i] >> 16); break;
-            case AV_SAMPLE_FMT_S32:  s = (int16_t)(((const int32_t *)_frame->data[0])[i * ch + c] >> 16); break;
-            default:
-                // Fallback for other planar/packed layouts.
-                if (planar)
-                    s = f2s16(((const float *)_frame->data[c])[i]);
-                else
-                    s = ((const int16_t *)_frame->data[0])[i * ch + c];
-                break;
-            }
-            emit(s);
+            for (int c = 0; c < ch; c++)
+                *w++ = sample(i, c);
+            if (dup) { w[0] = w[-1]; w++; } // mono -> stereo
         }
-        if (_upmix && ch == 1) // duplicate mono -> stereo (second channel)
-            emit(out.back());
+    };
+
+    switch (fmt)
+    {
+    case AV_SAMPLE_FMT_FLTP:
+        run([&](int i, int c) { return f2s16(((const float *)_frame->data[c])[i]); }); break;
+    case AV_SAMPLE_FMT_FLT:
+        run([&](int i, int c) { return f2s16(((const float *)_frame->data[0])[i * ch + c]); }); break;
+    case AV_SAMPLE_FMT_S16P:
+        run([&](int i, int c) { return ((const int16_t *)_frame->data[c])[i]; }); break;
+    case AV_SAMPLE_FMT_S16:
+        run([&](int i, int c) { return ((const int16_t *)_frame->data[0])[i * ch + c]; }); break;
+    // aac_fixed (and the fixed-point opus/mp3 decoders) emit full-scale
+    // 32-bit integers: take the top 16 bits.
+    case AV_SAMPLE_FMT_S32P:
+        run([&](int i, int c) { return (int16_t)(((const int32_t *)_frame->data[c])[i] >> 16); }); break;
+    case AV_SAMPLE_FMT_S32:
+        run([&](int i, int c) { return (int16_t)(((const int32_t *)_frame->data[0])[i * ch + c] >> 16); }); break;
+    default:
+        if (planar)
+            run([&](int i, int c) { return f2s16(((const float *)_frame->data[c])[i]); });
+        else
+            run([&](int i, int c) { return ((const int16_t *)_frame->data[0])[i * ch + c]; });
+        break;
     }
 }
 

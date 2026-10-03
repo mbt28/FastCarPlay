@@ -5,8 +5,8 @@
 #include "common/logger.h"
 #include <time.h>
 
-// Add sample size (buffer size in samples) to ChannelConfig
-ChannelConfig PcmAudio::_configTable[] = {
+// Add sample size (buffer size in samples) to ChannelConfig. const -> .rodata.
+const ChannelConfig PcmAudio::_configTable[] = {
     {8000, 1, 1},  // type = 3, ~256ms
     {48000, 2, 4}, // type = 4, ~170ms
     {16000, 1, 2}, // type = 5, ~256ms
@@ -20,8 +20,8 @@ PcmAudio::PcmAudio(const char *name) : _name("default"),
                                        _active(false),
                                        _fade(false),
                                        _config({0, 0, 0}),
-                                       _volume(1),
-                                       _fadedVolume(Settings::audioFade)
+                                       _volQ15(32768),
+                                       _fadedQ15((int32_t)(Settings::audioFade * 32768.0f + 0.5f))
 {
     if (name && strlen(name) > 0)
         _name = name;
@@ -70,47 +70,58 @@ ChannelConfig PcmAudio::getConfig(const Message *msg)
     return {44100, 2, 4};
 }
 
-bool PcmAudio::isZero(const Message *msg)
-{
-    const uint64_t *p = (const uint64_t *)msg->data();
-    int n = msg->length() / 8;
-    for (int i = 0; i < n; ++i)
-    {
-        if (p[i] != 0)
-            return false;
-    }
-    return true;
-}
-
 void PcmAudio::fade(bool enable)
 {
     _fade.store(enable);
     if (!_playing)
-        _volume = enable ? Settings::audioFade : 1.0;
+        _volQ15 = enable ? _fadedQ15 : 32768;
 }
 
-void PcmAudio::fade(uint8_t *data, int32_t length)
+// One pass over the segment: ramp the gain (per frame, so the fade lasts the
+// same wall-clock time at any channel count), scale each sample, and report
+// whether the whole segment is zero -- folding what used to be a second
+// uint64 walk in isZero() into this loop. All integer: no soft-float.
+bool PcmAudio::fadeAndScan(uint8_t *data, int32_t length, int channels)
 {
-    bool fade = _fade.load();
-    if (!fade && _volume >= 1)
-        return;
-
+    const bool fade = _fade.load();
     int16_t *buf = reinterpret_cast<int16_t *>(data);
-    for (int i = 0; i < length / 2; i++)
+    const int samples = length / 2;
+    if (channels < 1)
+        channels = 1;
+
+    // No fading needed: just scan for silence.
+    if (!fade && _volQ15 >= 32768)
     {
-        if (fade)
-        {
-            if (_volume - FADE_OUT_SPEED >= _fadedVolume)
-                _volume = _volume - FADE_OUT_SPEED;
-        }
-        else
-        {
-            if (_volume + FADE_IN_SPEED <= 1)
-                _volume = _volume + FADE_IN_SPEED;
-        }
-        if (_volume < 1)
-            buf[i] = buf[i] * _volume;
+        uint32_t acc = 0;
+        for (int i = 0; i < samples; i++)
+            acc |= (uint16_t)buf[i];
+        return acc == 0;
     }
+
+    uint32_t acc = 0;
+    int inFrame = 0;
+    for (int i = 0; i < samples; i++)
+    {
+        if (inFrame == 0) // advance the ramp once per frame
+        {
+            if (fade)
+            {
+                _volQ15 -= FADE_OUT_STEP_Q15;
+                if (_volQ15 < _fadedQ15) _volQ15 = _fadedQ15;
+            }
+            else
+            {
+                _volQ15 += FADE_IN_STEP_Q15;
+                if (_volQ15 > 32768) _volQ15 = 32768;
+            }
+        }
+        if (_volQ15 < 32768)
+            buf[i] = (int16_t)(((int32_t)buf[i] * _volQ15) >> 15);
+        acc |= (uint16_t)buf[i];
+        if (++inFrame >= channels)
+            inFrame = 0;
+    }
+    return acc == 0;
 }
 
 void PcmAudio::play(SDL_AudioDeviceID device, ChannelConfig config, int32_t segmentSize)
@@ -156,7 +167,8 @@ void PcmAudio::play(SDL_AudioDeviceID device, ChannelConfig config, int32_t segm
         if (config != getConfig(segment.get()))
             return;
 
-        fade(segment->data(), segment->length());
+        // Fade + silence-detect in one integer pass over the segment.
+        const bool silent = fadeAndScan(segment->data(), segment->length(), config.channels);
 
         SDL_QueueAudio(device, segment->data(), segment->length());
 
@@ -172,7 +184,7 @@ void PcmAudio::play(SDL_AudioDeviceID device, ChannelConfig config, int32_t segm
 
         if (_fader)
         {
-            if (isZero(segment.get()))
+            if (silent)
             {
                 if (nonZero && ++zeroSegments == FADE_ZERO_SEGMENTS)
                 {
@@ -248,7 +260,16 @@ void PcmAudio::loop()
             spec.callback = nullptr;
             spec.userdata = nullptr;
 
-            device = SDL_OpenAudioDevice(nullptr, 0, &spec, nullptr, 0);
+            // Passing obtained + ALLOW_FREQUENCY_CHANGE: if the codec cannot
+            // deliver this rate natively SDL would otherwise interpose a CPU
+            // resampler on every queued buffer. We'd rather know and let the
+            // device pick its own rate (SDL_QueueAudio still accepts our data).
+            SDL_AudioSpec obtained;
+            device = SDL_OpenAudioDevice(nullptr, 0, &spec, &obtained,
+                                         SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+            if (device != 0 && obtained.freq != spec.freq)
+                log_w("Audio %s: asked %dHz, device gave %dHz (SDL resamples)",
+                      _name.c_str(), spec.freq, obtained.freq);
             if (device == 0)
             {
                 log_w("Failed to open audio %s %dkHz %s samples %d > %s",

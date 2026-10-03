@@ -13,7 +13,7 @@ public:
     DataSlot();
     ~DataSlot();
 
-    void init(uint32_t slotSize, std::condition_variable *condition);
+    void init(uint32_t slotSize, std::mutex *mutex, std::condition_variable *condition);
     void reset();
     void commit(size_t dataSize);
     bool consume(size_t dataSize);
@@ -26,6 +26,7 @@ public:
     uint8_t *data;
 
 private:
+    std::mutex *_mtx;
     std::condition_variable *_cv;
 };
 

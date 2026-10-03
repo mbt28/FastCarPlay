@@ -86,6 +86,33 @@ bool looksLikeAvcC(const uint8_t *a, size_t n)
 }
 } // namespace
 
+bool avccFrameToAnnexBInPlace(uint8_t *frame, size_t len)
+{
+    // Validate the whole chain before touching anything: once a prefix is
+    // overwritten the lengths are gone.
+    size_t off = 0;
+    while (off + 4 <= len)
+    {
+        const size_t n = ((size_t)frame[off] << 24) | ((size_t)frame[off + 1] << 16) |
+                         ((size_t)frame[off + 2] << 8) | frame[off + 3];
+        if (n == 0 || off + 4 + n > len)
+            return false;
+        off += 4 + n;
+    }
+    if (off != len)
+        return false;
+
+    off = 0;
+    while (off + 4 <= len)
+    {
+        const size_t n = ((size_t)frame[off] << 24) | ((size_t)frame[off + 1] << 16) |
+                         ((size_t)frame[off + 2] << 8) | frame[off + 3];
+        std::memcpy(frame + off, START_CODE, 4);
+        off += 4 + n;
+    }
+    return true;
+}
+
 Bytes avccFrameToAnnexB(const uint8_t *frame, size_t len, int lengthSize)
 {
     Bytes out;

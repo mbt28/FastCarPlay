@@ -209,24 +209,57 @@ Bytes aesCtr128(const Bytes &key16, const Bytes &iv16, const Bytes &data)
 
 // ── ChaCha20-Poly1305 ───────────────────────────────────────────────────
 
-Bytes chachaSeal(const Bytes &key32, const Bytes &nonce12, const Bytes &plaintext, const Bytes &aad)
+bool chachaSeal(const uint8_t *key32, const uint8_t nonce12[12],
+                const uint8_t *plain, size_t plainLen,
+                const uint8_t *aad, size_t aadLen, uint8_t *out)
 {
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx)
-        return {};
-    Bytes out(plaintext.size() + 16);
+        return false;
     int outLen = 0, finalLen = 0, tmp = 0;
-    bool ok = EVP_EncryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key32.data(), nonce12.data()) == 1;
-    if (ok && !aad.empty())
-        ok = EVP_EncryptUpdate(ctx, nullptr, &tmp, aad.data(), (int)aad.size()) == 1;
-    ok = ok && EVP_EncryptUpdate(ctx, out.data(), &outLen, plaintext.data(), (int)plaintext.size()) == 1 &&
-         EVP_EncryptFinal_ex(ctx, out.data() + outLen, &finalLen) == 1 &&
-         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, 16, out.data() + plaintext.size()) == 1;
+    bool ok = EVP_EncryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key32, nonce12) == 1;
+    if (ok && aadLen)
+        ok = EVP_EncryptUpdate(ctx, nullptr, &tmp, aad, (int)aadLen) == 1;
+    ok = ok && EVP_EncryptUpdate(ctx, out, &outLen, plain, (int)plainLen) == 1 &&
+         EVP_EncryptFinal_ex(ctx, out + outLen, &finalLen) == 1 &&
+         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, 16, out + plainLen) == 1;
     EVP_CIPHER_CTX_free(ctx);
-    if (!ok)
+    return ok;
+}
+
+Bytes chachaSeal(const Bytes &key32, const Bytes &nonce12, const Bytes &plaintext, const Bytes &aad)
+{
+    Bytes out(plaintext.size() + 16);
+    if (!chachaSeal(key32.data(), nonce12.data(), plaintext.data(), plaintext.size(),
+                    aad.empty() ? nullptr : aad.data(), aad.size(), out.data()))
         return {};
-    out.resize(plaintext.size() + 16);
     return out;
+}
+
+bool chachaOpen(const uint8_t *key32, const uint8_t nonce12[12],
+                const uint8_t *ctAndTag, size_t ctAndTagLen,
+                const uint8_t *aad, size_t aadLen, uint8_t *out)
+{
+    if (ctAndTagLen < 16)
+        return false;
+    const size_t ctLen = ctAndTagLen - 16;
+    // The tag is read into the context BEFORE decrypting, so `out` may alias
+    // the ciphertext (the plaintext never overruns it: same length).
+    uint8_t tag[16];
+    memcpy(tag, ctAndTag + ctLen, 16);
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx)
+        return false;
+    int outLen = 0, finalLen = 0, tmp = 0;
+    bool ok = EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key32, nonce12) == 1;
+    if (ok && aadLen)
+        ok = EVP_DecryptUpdate(ctx, nullptr, &tmp, aad, (int)aadLen) == 1;
+    ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, 16, tag) == 1 &&
+         EVP_DecryptUpdate(ctx, out, &outLen, ctAndTag, (int)ctLen) == 1 &&
+         EVP_DecryptFinal_ex(ctx, out + outLen, &finalLen) == 1;
+    EVP_CIPHER_CTX_free(ctx);
+    return ok;
 }
 
 bool chachaOpen(const Bytes &key32, const Bytes &nonce12, const Bytes &ctAndTag, const Bytes &aad,
@@ -234,33 +267,25 @@ bool chachaOpen(const Bytes &key32, const Bytes &nonce12, const Bytes &ctAndTag,
 {
     if (ctAndTag.size() < 16)
         return false;
-    const size_t ctLen = ctAndTag.size() - 16;
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx)
+    Bytes plain(ctAndTag.size() - 16);
+    if (!chachaOpen(key32.data(), nonce12.data(), ctAndTag.data(), ctAndTag.size(),
+                    aad.empty() ? nullptr : aad.data(), aad.size(), plain.data()))
         return false;
-    Bytes plain(ctLen);
-    int outLen = 0, finalLen = 0, tmp = 0;
-    bool ok = EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key32.data(), nonce12.data()) == 1;
-    if (ok && !aad.empty())
-        ok = EVP_DecryptUpdate(ctx, nullptr, &tmp, aad.data(), (int)aad.size()) == 1;
-    ok = ok && EVP_DecryptUpdate(ctx, plain.data(), &outLen, ctAndTag.data(), (int)ctLen) == 1 &&
-         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, 16,
-                             (void *)(ctAndTag.data() + ctLen)) == 1 &&
-         EVP_DecryptFinal_ex(ctx, plain.data() + outLen, &finalLen) == 1;
-    EVP_CIPHER_CTX_free(ctx);
-    if (!ok)
-        return false;
-    plain.resize(outLen + finalLen);
     out = std::move(plain);
     return true;
 }
 
+void nonce64(uint64_t counter, uint8_t out[12])
+{
+    out[0] = out[1] = out[2] = out[3] = 0;
+    for (int i = 0; i < 8; i++)
+        out[4 + i] = (uint8_t)((counter >> (8 * i)) & 0xff); // little-endian
+}
+
 Bytes nonce64(uint64_t counter)
 {
-    Bytes n(12, 0);
-    for (int i = 0; i < 8; i++)
-        n[4 + i] = (uint8_t)((counter >> (8 * i)) & 0xff); // little-endian
+    Bytes n(12);
+    nonce64(counter, n.data());
     return n;
 }
 

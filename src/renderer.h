@@ -16,7 +16,7 @@ class RendererText
 public:
     RendererText(const void *font_data, int data_size, int ptsize);
     ~RendererText();
-    bool prepare(SDL_Renderer *renderer, std::string text, SDL_Color color);  
+    bool prepare(SDL_Renderer *renderer, const std::string &text, SDL_Color color);
     SDL_Rect draw(SDL_Renderer *renderer, int x, int y);
     int width;
     int height;

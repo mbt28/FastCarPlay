@@ -4,6 +4,7 @@ CC ?= gcc
 PKG_CONFIG ?= pkg-config
 HOST_XXD ?= xxd
 INSTALL ?= install
+STRIP ?= strip
 PREFIX ?= /usr
 SYSCONFDIR ?= /etc
 SRC_DIR := ./src
@@ -46,16 +47,6 @@ LDFLAGS :=
 CXXCOMMON := -Wall -std=c++17 -Isrc -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
 CCOMMON := -Wall -std=c99 -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
 
-# Allwinner Cedar hardware H.264 decode (F1C200s). Enable with USE_CEDAR=1;
-# libcedarc headers come from the (cross) sysroot, libs are linked here. libdrm
-# is for the optional DE backend UYVY plane (renderer = drm).
-ifeq ($(USE_CEDAR),1)
-CXXCOMMON += -DUSE_CEDAR $(shell $(PKG_CONFIG) --cflags libdrm)
-# -latomic: the 32-bit ARMv5 (arm926) target has no native 64-bit atomics, so
-# std::atomic<int64_t> in the Android Auto backend needs libatomic.
-LDOPTIONS += -lvdecoder -lcdc_base -lMemAdapter -lVE -lvideoengine -ldl -lrt -latomic $(shell $(PKG_CONFIG) --libs libdrm)
-endif
-
 # Mainline cedrus HW H.264 decode via ffmpeg's V4L2-Request hwaccel (F1C200s),
 # blob-free: no libcedarc, only libdrm + libav* (already linked). Enable USE_CEDRUS=1.
 ifeq ($(USE_CEDRUS),1)
@@ -93,17 +84,32 @@ endif
 
 # On-device UI: LVGL 9.3.0 (MIT), vendored source in third_party/lvgl (see
 # its VENDORING.md), compiled in. Screens live in src/ui. Enable USE_LVGL=1.
-# The generated code is regenerated from ui.eez-project -- never hand-edited.
+# By default only the hand-written picker screens are built. The EEZ Studio
+# generated flow engine (src/ui/generated, ~320 KB of .text + 12 KB .bss) is
+# dead unless lvgl-screen=generated is selected at runtime, so it is compiled
+# in only with USE_EEZ=1 -- a UI-less-of-it build pays nothing for it.
 ifeq ($(USE_LVGL),1)
 LVGL_DIR := ./third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -type f -name '*.c')
 LVGL_OBJS := $(patsubst $(LVGL_DIR)/%.c,$(BUILD_DIR)/lvgl/%.c.o,$(LVGL_SRCS))
-SRCS += $(shell find $(SRC_DIR)/ui -type f -name '*.cpp')
-SRCS_C += $(shell find $(SRC_DIR)/ui -type f -name '*.c')
 OBJS += $(LVGL_OBJS)
 # LV_CONF_INCLUDE_SIMPLE: LVGL picks up src/ui/lv_conf.h from the include path.
-# -Ithird_party: the generated code includes <lvgl/lvgl.h>.
-UI_FLAGS := -DUSE_LVGL -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -I$(SRC_DIR)/ui/generated -Ithird_party
+UI_FLAGS := -DUSE_LVGL -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -Ithird_party
+ifeq ($(USE_EEZ),1)
+# The whole src/ui tree, including the generated EEZ flow screens.
+SRCS += $(shell find $(SRC_DIR)/ui -type f -name '*.cpp')
+SRCS_C += $(shell find $(SRC_DIR)/ui -type f -name '*.c')
+# -Ithird_party already added; the generated code includes <lvgl/lvgl.h>.
+UI_FLAGS += -DUSE_EEZ -I$(SRC_DIR)/ui/generated
+# The EEZ flow engine is a generic LVGL runtime that references the full
+# widget set, so lv_conf.h must enable them -- and the vendored LVGL TUs below
+# need the same define to actually compile those widgets in.
+LVGL_CONF_FLAGS := -DUSE_EEZ
+else
+# Only the hand-written UI (everything under src/ui except generated/).
+SRCS += $(shell find $(SRC_DIR)/ui -maxdepth 1 -type f -name '*.cpp')
+SRCS_C += $(shell find $(SRC_DIR)/ui -maxdepth 1 -type f -name '*.c')
+endif
 CXXCOMMON += $(UI_FLAGS)
 CCOMMON += $(UI_FLAGS)
 endif
@@ -122,9 +128,15 @@ else
     PLATFORM_LDFLAGS := -Wl,--gc-sections -Wl,--as-needed
 endif
 
+# -ffast-math is deliberately absent: the target is soft-float (no FPU), so
+# relaxing IEEE rules cannot speed up a libgcc call, and its -ffinite-math-only
+# would quietly break isnan/isinf across the ffmpeg/SDL headers inlined here.
+# -Os over -O2: .text is ~2 MB against a 16 KB I-cache, so smaller code wins
+# the cache more than -O2's inlining loses. -flto lets --gc-sections reach
+# cross-TU dead code (much of the unused LVGL surface).
 release: BUILD_TYPE := release
-release: CXXFLAGS ?= -O2 -ffast-math -fno-rtti -fdata-sections -ffunction-sections -fomit-frame-pointer -fvisibility=hidden -pipe -DNDEBUG
-release: LDFLAGS += -O2 -ffast-math -Wl,-O1 $(PLATFORM_LDFLAGS)
+release: CXXFLAGS ?= -Os -flto -fno-rtti -fdata-sections -ffunction-sections -fomit-frame-pointer -fvisibility=hidden -pipe -DNDEBUG
+release: LDFLAGS += -Os -flto -Wl,-O1 $(PLATFORM_LDFLAGS)
 release: TARGET := $(TARGET_NAME)
 release: prepare
 
@@ -143,9 +155,15 @@ version-h:
 	@if cmp -s $(VERSION_H).new $(VERSION_H) 2>/dev/null; then rm -f $(VERSION_H).new; \
 	else mv $(VERSION_H).new $(VERSION_H); echo "version: $(FCP_VERSION) build $(FCP_BUILD)"; fi
 
+# Embed resources as `const` arrays so they land in .rodata (shared, clean,
+# read-only) instead of the writable .data segment -- xxd -i emits a plain
+# `unsigned char`, which for the ~640 KB of background+font would otherwise
+# sit in a dirty-able RW mapping.
 $(GEN_DIR)/%.cpp: $(RES_DIR)/%
 	@mkdir -p $(GEN_DIR)
-	$(HOST_XXD) -i -n $(basename $(notdir $<)) $< > $@
+	$(HOST_XXD) -i -n $(basename $(notdir $<)) $< | \
+	  sed -e 's/^unsigned char /extern const unsigned char /' \
+	      -e 's/^unsigned int /extern const unsigned int /' > $@
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(OUT_DIR)
@@ -162,10 +180,12 @@ $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
 	$(CC) $(CCOMMON) $(filter-out -fno-rtti,$(CXXFLAGS)) -MMD -MP -c $< -o $@
 
 # Vendored LVGL. Third-party: warnings off, and it never sees our -Wall/-Werror.
+# LVGL_CONF_FLAGS carries only the lv_conf.h feature toggles it must agree with
+# the rest of the build on (e.g. -DUSE_EEZ, which enables the full widget set).
 $(BUILD_DIR)/lvgl/%.c.o: $(LVGL_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu99 -w -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -I$(LVGL_DIR) \
-		$(filter-out -fno-rtti,$(CXXFLAGS)) -c $< -o $@
+		$(LVGL_CONF_FLAGS) $(filter-out -fno-rtti,$(CXXFLAGS)) -c $< -o $@
 
 # Header dependencies (-MMD): editing a header now rebuilds what includes it.
 # NOTE: this does NOT cover changing the feature flags themselves -- toggling
@@ -175,7 +195,7 @@ $(BUILD_DIR)/lvgl/%.c.o: $(LVGL_DIR)/%.c
 -include $(OBJS:.o=.d)
 
 install:
-	$(INSTALL) -D -m 0755 $(OUT_DIR)/$(TARGET_NAME) $(DESTDIR)$(PREFIX)/bin/fastcarplay
+	$(INSTALL) -D -m 0755 -s --strip-program=$(STRIP) $(OUT_DIR)/$(TARGET_NAME) $(DESTDIR)$(PREFIX)/bin/fastcarplay
 	$(INSTALL) -D -m 0644 settings.txt $(DESTDIR)$(SYSCONFDIR)/fastcarplay/settings.txt
 
 clean:

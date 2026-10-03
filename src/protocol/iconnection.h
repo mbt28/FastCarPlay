@@ -15,9 +15,14 @@ extern "C"
 #include "protocol/message.h"
 #include "protocol/protocol_const.h"
 
-#define WRITE_QUEUE_SIZE 128
-#define VIDEO_QUEUE_SIZE 128
-#define AUDIO_QUEUE_SIZE 128
+// Queue depths bound both memory and latency on a 64 MB board: at 128 slots
+// a stalled consumer could park 6-16 MB of payloads AND 2-4 seconds of A/V
+// behind it. 16 video slots is ~0.27 s at 60 fps (video pushes drop-oldest,
+// so overflow costs latency recovered by a keyframe, never fresh frames);
+// 24 audio slots is ~0.5 s of 48 kHz stereo segments.
+#define WRITE_QUEUE_SIZE 32
+#define VIDEO_QUEUE_SIZE 16
+#define AUDIO_QUEUE_SIZE 24
 
 // Protocol backend interface. Consumers (application loops, decoders, audio,
 // input) interact only through the queues and the members below, so any

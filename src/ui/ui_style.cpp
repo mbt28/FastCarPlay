@@ -30,13 +30,17 @@ Metrics metrics(int width, int height)
     m.gap = LV_MAX(2, height / 60);
 
     // Font tiers: LVGL fonts are bitmaps and cannot scale continuously, so
-    // pick the nearest size rather than stretching one.
+    // pick the nearest size rather than stretching one. Only the sizes the
+    // target panels actually reach are compiled in (see lv_conf.h); the 28 pt
+    // tier is built only when a >480 px panel needs it.
     if (height <= 272)
         m.font = &lv_font_montserrat_14;
-    else if (height <= 480)
-        m.font = &lv_font_montserrat_20;
-    else
+#if LV_FONT_MONTSERRAT_28
+    else if (height > 480)
         m.font = &lv_font_montserrat_28;
+#endif
+    else
+        m.font = &lv_font_montserrat_20;
 
     m.iconFont = icons::font(height);
     return m;

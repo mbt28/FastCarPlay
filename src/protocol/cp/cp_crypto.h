@@ -54,8 +54,25 @@ Bytes chachaSeal(const Bytes &key32, const Bytes &nonce12, const Bytes &plaintex
 bool chachaOpen(const Bytes &key32, const Bytes &nonce12, const Bytes &ctAndTag,
                 const Bytes &aad, Bytes &out);
 
+// Pointer forms for the per-frame hot paths: no temporary vectors, and
+// `out` may ALIAS the input (ChaCha20 is a keystream XOR, so the AV loops
+// decrypt frames in place inside their receive buffers).
+// open: ctAndTag is ciphertext||tag, ctAndTagLen >= 16; writes
+// (ctAndTagLen - 16) plaintext bytes to out. On auth failure out holds
+// garbage (when aliased the ciphertext is already overwritten) -- callers
+// treat the stream as unrecoverable then anyway.
+bool chachaOpen(const uint8_t *key32, const uint8_t nonce12[12],
+                const uint8_t *ctAndTag, size_t ctAndTagLen,
+                const uint8_t *aad, size_t aadLen, uint8_t *out);
+// seal: writes plainLen ciphertext bytes + the 16-byte tag to out (so out
+// must hold plainLen + 16); returns false on failure.
+bool chachaSeal(const uint8_t *key32, const uint8_t nonce12[12],
+                const uint8_t *plain, size_t plainLen,
+                const uint8_t *aad, size_t aadLen, uint8_t *out);
+
 // 12-byte nonce: 4 zero bytes + 8-byte little-endian counter (AirPlay style).
 Bytes nonce64(uint64_t counter);
+void nonce64(uint64_t counter, uint8_t out[12]);
 // 12-byte nonce from an ASCII label right-aligned (HomeKit style, e.g. "PV-Msg02").
 Bytes nonceLabel(const std::string &label);
 

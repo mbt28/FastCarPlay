@@ -13,7 +13,7 @@
 #include "common/logger.h"
 #include "settings.h"
 
-#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+#ifdef USE_CEDRUS
 #include "drm_display.h"
 #endif
 
@@ -141,7 +141,7 @@ bool haveDesktop()
 // question, the real session is opened later by the render loop.
 bool canDriveDrm()
 {
-#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+#ifdef USE_CEDRUS
     if (!drm_display::open("probe"))
         return false;
     drm_display::close();
@@ -195,10 +195,12 @@ Caps probe()
     caps.drm = canDriveDrm();
     if (caps.drm)
     {
-        // We own the screen, so video goes on a DRM plane either way -- whether
-        // the frames come from hardware or software decode does not change that.
+        // We own the screen: the UI goes on the DRM overlay plane either way.
+        // Without a hardware decoder, video stays off on this path (nothing
+        // presents software frames here) -- the application skips starting a
+        // decoder then, rather than burning the core on undisplayed frames.
         caps.mode = Mode::Drm;
-        caps.why = anyHw ? "DRM master + hardware decoder" : "DRM master, software decode";
+        caps.why = anyHw ? "DRM master + hardware decoder" : "DRM master, no HW decoder (video off)";
     }
     else
     {

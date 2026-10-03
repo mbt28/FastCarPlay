@@ -18,6 +18,13 @@ using Bytes = std::vector<uint8_t>;
 // Rewrite a run of length-prefixed NAL units to Annex-B. `lengthSize` is 1..4.
 Bytes avccFrameToAnnexB(const uint8_t *frame, size_t len, int lengthSize = 4);
 
+// Same conversion for the common 4-byte-length case, IN PLACE: a 4-byte
+// big-endian length and a 00 00 00 01 start code are the same size, so each
+// prefix is simply overwritten -- no allocation, no copy, no size change.
+// The chain is validated first; returns false (buffer untouched) when it is
+// malformed, so the caller can drop the frame.
+bool avccFrameToAnnexBInPlace(uint8_t *frame, size_t len);
+
 // Convert a VideoConfig payload (an avcC/hvcC atom, an avc1/hvc1 sample entry
 // with the record nested inside, or a bare record) into Annex-B parameter sets,
 // detecting the codec from the atom. Sets `hevc` true for H.265, false for H.264.

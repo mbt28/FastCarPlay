@@ -25,6 +25,11 @@ window-mode = 2
 source-fps  = 60
 android-dpi = 135
 
+# The HW decoder presents directly to the DRM plane, so the app-side frame
+# buffer is only drained, never displayed: the minimum (3) is enough and
+# frees two pinned decoder frames vs the default 5.
+rendering-buffer = 3
+
 audio-driver = dummy
 
 # The ARM926 has no AES instructions, so ChaCha20-Poly1305 is far cheaper for

@@ -5,16 +5,18 @@
 // drm). One process-wide DRM master owns the connector/CRTC/mode and two
 // planes:
 //   - the video plane (primary, NV12 + ALLWINNER_TILED routed through the
-//     DEFE front-end: HW de-tile + BT.601 CSC + scale) fed by CedarDecoder /
-//     V4l2DrmDecoder from their decode threads, and
-//   - an ARGB8888 overlay plane above it for the UI (home screen, toasts,
-//     debug), drawn through an SDL *software* renderer into an offscreen
-//     surface and copied to double-buffered dumb framebuffers. Per-pixel
-//     alpha is blended by the DE backend, so OSD over live video is free.
+//     DEFE front-end: HW de-tile + BT.601 CSC + scale) fed by V4l2DrmDecoder
+//     from its decode thread, and
+//   - an overlay plane above it for the UI (home screen, toasts, debug).
+//     Its pixel format comes from what the plane actually supports -- RGB565
+//     preferred (half the memory and copy bandwidth of 32-bit), ARGB8888 as
+//     the fallback -- and the UI writes straight into a single dumb
+//     framebuffer. The plane is committed only over the rows that carry
+//     content, so a toast band never occludes the live video below it.
 // The overlay plane is disabled whenever there is nothing to show, so it
 // costs no scanout bandwidth during normal video playback.
 
-#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+#ifdef USE_CEDRUS
 
 #include <cstdint>
 #include <SDL2/SDL.h>
@@ -38,26 +40,48 @@ int heightMm();
 // the video plane (srcW/srcH crop the buffer before the DEFE scales it to the
 // panel). Called from the decoder thread; serialised internally against the
 // UI commits. Performs the initial modeset if the UI hasn't already.
+// After it returns true the buffer may stay on scanout until the NEXT
+// successful showVideo() -- the decoder must keep it alive until then.
 bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
                int nplanes, const int *dmabufFds, const uint32_t *pitches,
                const uint32_t *offsets, uint64_t modifier, const char *tag);
 
 // Number of video frames presented so far (for "is video flowing" checks).
+// Lock-free: safe to poll from the main loop while a commit is in flight.
 uint32_t videoFrames();
 
-// UI overlay. uiRenderer() lazily creates the offscreen ARGB surface, the
-// SDL software renderer targeting it, and the dumb framebuffers; it never
-// needs an SDL video driver. uiPresent() copies the surface into the back
-// dumb buffer and commits the overlay plane; uiHide() disables the plane.
+// Drop the cached per-dmabuf framebuffers AND their GEM handles. Must be
+// called from the decoder's teardown before close(): the UI keeps the session
+// (and the DRM fd) open, so without this the handles would keep dma-buf
+// references on the decoder's freed frame pool -- a CMA leak per rebuild.
+void flushVideo();
+
+// ── UI overlay ──────────────────────────────────────────────────────────
+// The overlay's pixel format, chosen from the plane's format list at open()
+// (DRM_FORMAT_RGB565 preferred, DRM_FORMAT_ARGB8888 fallback), and its bytes
+// per pixel. Valid after open().
+uint32_t uiFormat();
+int uiBpp();
+
+// Create the single dumb framebuffer for the overlay (lazy, idempotent).
+bool uiBegin();
+// Copy a rectangle of pixels (tightly packed rows of `pitch` bytes, in
+// uiFormat()) into the dumb buffer. LVGL's flush callback lands here.
+void uiWriteRect(int x, int y, int w, int h, const uint8_t *px, int pitch);
+// Commit the overlay plane over rows [y0, y1) -- full screen for the home
+// UI, just the toast band over live video. No-op when already showing the
+// same band. uiHide() disables the plane.
+bool uiShow(int y0, int y1);
+void uiHide();
+
+// Legacy SDL path for Interface (home screen fallback, toasts, debug): a
+// software renderer targeting an offscreen surface in uiFormat().
+// uiPresent()/uiPresentRows() copy the surface (or just rows [y0, y1)) into
+// the dumb buffer and commit the plane over those rows.
 SDL_Renderer *uiRenderer();
 bool uiPresent();
-// Same as uiPresent() but copies only rows [y0, y1) of the surface (plus the
-// rows of the previous present, so both dumb buffers stay in sync). For the
-// small periodic UI updates of the home screen this replaces a 1.5 MB copy
-// per frame with a few hundred KB.
 bool uiPresentRows(int y0, int y1);
-void uiHide();
 } // namespace drm_display
 
-#endif /* USE_CEDAR || USE_CEDRUS */
+#endif /* USE_CEDRUS */
 #endif /* SRC_DRM_DISPLAY */

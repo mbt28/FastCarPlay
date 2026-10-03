@@ -273,6 +273,7 @@ public:
         {
             Bytes b = std::move(_rq.front());
             _rq.pop_front();
+            _rqBytes -= b.size();
             return b;
         }
         return {};
@@ -307,6 +308,7 @@ private:
     uint32_t _txSeq = 0, _txAck = 0;
     bool _connected = false, _closed = false;
     std::deque<Bytes> _rq;
+    size_t _rqBytes = 0; // total bytes queued in _rq (backpressure bound)
     std::mutex _m;
     std::condition_variable _cv;
 };
@@ -512,7 +514,19 @@ private:
             {
                 uint32_t proto = get32be(&rx[off]);
                 uint32_t len = get32be(&rx[off + 4]);
-                if (len < 8 || rx.size() - off < len)
+                // Upper bound as well as lower: without it a corrupt length
+                // (MUSB framing desync is documented on this controller) makes
+                // the loop break forever while the reader keeps appending, and
+                // rx grows until OOM. 1 MB is far above any real mux packet.
+                if (len < 8 || len > (1u << 20))
+                {
+                    if (_run)
+                        log_w("cp-usbmux: implausible packet len %u -- resyncing", len);
+                    rx.clear();
+                    off = 0;
+                    break;
+                }
+                if (rx.size() - off < len)
                     break;
                 const uint8_t *pkt = &rx[off];
                 if (len >= 16)
@@ -632,13 +646,26 @@ void MuxConn::onPacket(uint8_t flags, uint32_t seq, uint32_t, uint16_t, const ui
     }
     if (payload && len)
     {
+        bool overflow = false;
         {
             std::lock_guard<std::mutex> lk(_m);
             _txAck += (uint32_t)len;
+            _rqBytes += len;
             _rq.emplace_back(payload, payload + len);
+            // A healthy relay drains this immediately. If it has stalled past
+            // a generous bound, the client is wedged -- bounding the queue
+            // (rather than growing to OOM) by treating it as a dead peer is
+            // the only safe option, since mux TCP payload can't be dropped.
+            if (_rqBytes > (4u << 20))
+                overflow = true;
             _cv.notify_all();
         }
         tcp(TH_ACK, nullptr, 0);
+        if (overflow)
+        {
+            log_w("cp-usbmux: relay queue overflow on sport=%u -- closing", _sport);
+            markClosed();
+        }
     }
     if (flags & TH_FIN)
     {

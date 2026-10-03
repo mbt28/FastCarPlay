@@ -65,8 +65,8 @@ public:
 private:
     // ── AV + input glue (mirrors CpConnection) ───────────────────────────
     void onVideoCodec(bool hevc);
-    void onVideo(const std::vector<uint8_t> &annexB);
-    void onAudio(int type, int rate, int channels, const std::vector<uint8_t> &pcm);
+    void onVideo(const uint8_t *annexB, size_t len);
+    void onAudio(int type, int rate, int channels, const uint8_t *pcm, size_t bytes);
     void onSessionConnect();
     void onSessionDisconnect();
     void writerLoop();
