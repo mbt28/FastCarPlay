@@ -24,11 +24,10 @@ window-mode = 0
 
 audio-driver = alsa
 
-# Wi-Fi AP for the wireless backends (aa-wireless / carplay-wireless); ignored by
-# the wired ones. Needs hostapd + dnsmasq already running on this interface.
-wifi-ssid       = FastCarPlay-AP
-wifi-passphrase = drive1234
-wifi-channel    = 6
-wifi-ap-ip      = 192.168.4.1
+# Wi-Fi AP for the wireless backends (aa-wireless / carplay-wireless): NOT set
+# here. The app reads the effective SSID / passphrase / channel / IP from the
+# system AP's /etc/hostapd.conf at connect time, so the credentials handed to
+# the phone always match the network that is actually up. Point hostapd-conf at
+# a real hostapd config (with hostapd + dnsmasq running) to use a desktop AP.
 
 log-level = 4

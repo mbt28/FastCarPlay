@@ -46,12 +46,12 @@ aa-accessory-timeout = 8000
 mfi-i2c-bus   = /dev/i2c-0
 mfi-i2c-addr  = 0x10
 
-# Wi-Fi AP for the wireless backends (aa-wireless / carplay-wireless). Ignored
-# by the wired ones. 2.4GHz: it is what the ESP32 does, and an iPhone accepts it
-# for wireless CarPlay (5GHz is not required, contrary to the usual claim).
-wifi-ssid       = FastCarPlay-AP
-wifi-passphrase = drive1234
-wifi-channel    = 6
-wifi-ap-ip      = 192.168.4.1
+# Wi-Fi AP for the wireless backends (aa-wireless / carplay-wireless): NOT set
+# here. The AP belongs to the system (hostapd + dnsmasq from /etc/hostapd.conf,
+# started by S43wifi/S44ap over the ESP32), and the app reads its effective
+# SSID / passphrase / channel / IP from that file at connect time -- so the
+# credentials handed to the phone always describe the network that is actually
+# up. Hardcoding wifi-ssid/wifi-passphrase/wifi-ap-ip here only re-introduces
+# drift: change the AP in /etc/hostapd.conf instead.
 
 log-level = 3
