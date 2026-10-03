@@ -42,6 +42,22 @@ public:
     // Runs the flow + LVGL timers and copies the result to the renderer.
     void render();
 
+    // Split form for callers that pace themselves: tick() runs the flow +
+    // LVGL timers and reports whether LVGL flushed anything to the texture
+    // since the last blit(); blit() copies the texture to the renderer. When
+    // tick() returns false the screen is unchanged and the caller can skip
+    // the clear/copy/present entirely (on the F1C200s a full 800x480 software
+    // present costs more than a 60 fps frame budget, so presenting every
+    // iteration pinned the core while the UI sat idle).
+    bool tick();
+    void blit();
+
+    // Like blit(), but copies only the union of the rectangles LVGL flushed
+    // since the last blit and returns it (empty rect if nothing changed). The
+    // renderer's target keeps its contents between frames, so partial blits
+    // are enough once a full blit has happened.
+    SDL_Rect blitDirty();
+
 private:
     // LVGL types are kept out of this header so including it (e.g. from
     // application.cpp) does not drag in lvgl.h; the .cpp casts them back.
@@ -58,6 +74,8 @@ private:
     int _width = 0;
     int _height = 0;
     int _px = 0, _py = 0;
+    bool _flushed = true; // texture changed since the last blit()
+    SDL_Rect _dirty{0, 0, 0, 0}; // union of flushed areas since the last blit()
     bool _pressed = false;
     bool _generated = false; // EEZ screens vs the built-in picker
 };

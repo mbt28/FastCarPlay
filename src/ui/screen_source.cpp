@@ -1,3 +1,4 @@
+#include "ui_style.h"
 #include "screen_source.h"
 
 #ifdef USE_LVGL
@@ -72,7 +73,7 @@ void update()
         if (g_rows[i] != nullptr)
             ui_style::rowSelected(g_rows[i], selected);
         if (g_ticks[i] != nullptr)
-            lv_label_set_text(g_ticks[i], selected ? LV_SYMBOL_OK : "");
+            ui_style::setText(g_ticks[i], selected ? LV_SYMBOL_OK : "");
     }
 }
 } // namespace screen_source

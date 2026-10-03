@@ -1027,10 +1027,28 @@ void Application::loopDrm()
 #ifdef __linux__
                 touchInput.routeToUi(true);
 #endif
-                SDL_SetRenderDrawColor(uiRenderer, 0, 0, 0, 255);
-                SDL_RenderClear(uiRenderer);
-                osd.render();
-                drm_display::uiPresent();
+                // Re-compose and commit the overlay only when LVGL flushed
+                // something, the frame is dirty, or the home screen is not
+                // up yet. Doing it every 50 ms (a full 800x480 clear + copy +
+                // 1.5 MB memcpy into the dumb buffer + atomic commit) kept the
+                // main thread at ~99% whenever no phone was projecting.
+                const bool uiChanged = osd.tick();
+                if (dirty || !uiShowsHome)
+                {
+                    // Full repaint: first show, or app-side state change.
+                    SDL_SetRenderDrawColor(uiRenderer, 0, 0, 0, 255);
+                    SDL_RenderClear(uiRenderer);
+                    osd.blit();
+                    drm_display::uiPresent();
+                }
+                else if (uiChanged)
+                {
+                    // Only LVGL moved (status text, animation): copy and
+                    // commit just the rows it touched.
+                    const SDL_Rect r = osd.blitDirty();
+                    if (r.h > 0)
+                        drm_display::uiPresentRows(r.y, r.y + r.h);
+                }
                 uiShowsHome = true;
                 osdShown = false;
 
@@ -1072,7 +1090,11 @@ void Application::loopDrm()
         // Drain the buffer so a buffering (software) decoder can't stall; the
         // HW decoders present directly and leave this empty.
         decoder->buffer.consume(&frame, &frameId);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // While our own UI is on screen, tick faster so LVGL's input and
+        // refresh timers (30/33 ms) run every period and touch feedback lands
+        // within one frame; this is cheap now that an unchanged screen costs
+        // nothing. With video up the loop only shepherds the session.
+        std::this_thread::sleep_for(std::chrono::milliseconds(videoActive ? 50 : 16));
     }
 
     drm_display::uiHide();
@@ -1242,10 +1264,18 @@ void Application::loop()
                                          : uiStatusText(_state.latestState));
                 if (ui_bridge::takeResumeRequest())
                     protocol.requestVideoFocus();
-                SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 255);
-                SDL_RenderClear(_renderer);
-                osd.render();
-                SDL_RenderPresent(_renderer);
+                // Present only when LVGL changed something (or the app marked
+                // the frame dirty). An unchanged home screen used to be
+                // cleared, copied and presented every iteration, which on the
+                // F1C200s' software renderer took longer than the frame
+                // budget and left the main thread spinning at ~99% while idle.
+                if (osd.tick() || _state.dirty)
+                {
+                    SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 255);
+                    SDL_RenderClear(_renderer);
+                    osd.blit();
+                    SDL_RenderPresent(_renderer);
+                }
                 _state.dirty = false;
 
                 SDL_Event e;

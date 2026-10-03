@@ -1,3 +1,4 @@
+#include <cstring>
 #include "ui_style.h"
 
 #ifdef USE_LVGL
@@ -114,8 +115,33 @@ lv_obj_t *rowValue(lv_obj_t *row, const Metrics &m, const char *text)
     return label;
 }
 
+void setText(lv_obj_t *label, const char *text)
+{
+    if (label == nullptr || text == nullptr)
+        return;
+    const char *cur = lv_label_get_text(label);
+    if (cur == nullptr || strcmp(cur, text) != 0)
+        lv_label_set_text(label, text);
+}
+
+void setHidden(lv_obj_t *obj, bool hidden)
+{
+    if (obj == nullptr || lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN) == hidden)
+        return;
+    if (hidden)
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
+}
+
 void rowSelected(lv_obj_t *row, bool selected)
 {
+    // Called every tick for every row: skip when the row already shows this
+    // state (style setters refresh/invalidate even for an unchanged value).
+    const lv_color_t want = lv_color_hex(selected ? COLOR_ROW_ON : COLOR_ROW);
+    const lv_color_t have = lv_obj_get_style_bg_color(row, LV_PART_MAIN);
+    if (lv_color_eq(want, have) && lv_obj_get_style_border_width(row, LV_PART_MAIN) == (selected ? 2 : 0))
+        return;
     lv_obj_set_style_bg_color(row, lv_color_hex(selected ? COLOR_ROW_ON : COLOR_ROW),
                               LV_PART_MAIN);
     lv_obj_set_style_border_width(row, selected ? 2 : 0, LV_PART_MAIN);

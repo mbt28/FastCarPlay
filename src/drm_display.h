@@ -51,6 +51,11 @@ uint32_t videoFrames();
 // dumb buffer and commits the overlay plane; uiHide() disables the plane.
 SDL_Renderer *uiRenderer();
 bool uiPresent();
+// Same as uiPresent() but copies only rows [y0, y1) of the surface (plus the
+// rows of the previous present, so both dumb buffers stay in sync). For the
+// small periodic UI updates of the home screen this replaces a 1.5 MB copy
+// per frame with a few hundred KB.
+bool uiPresentRows(int y0, int y1);
 void uiHide();
 } // namespace drm_display
 

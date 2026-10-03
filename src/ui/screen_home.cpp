@@ -1,3 +1,5 @@
+#include "ui_style.h"
+#include <cstring>
 #include "screen_home.h"
 
 #ifdef USE_LVGL
@@ -61,14 +63,18 @@ void update()
 
     // Hidden rather than disabled: a control that would do nothing is just
     // something else to read.
-    if (g_resume != nullptr)
+    // update() runs every main-loop tick (20 Hz on the device). Only touch
+    // widgets when something actually changed: ui_style::setText() and the
+    // style setters invalidate unconditionally, and every invalidation costs
+    // a redraw + flush + overlay commit on the F1C200s (measured 2026-10-03:
+    // the idle home screen alone kept the main thread at 26% because of this).
+    static bool lastWaiting = !waiting;
+    if (g_resume != nullptr && waiting != lastWaiting)
     {
-        if (waiting)
-            lv_obj_remove_flag(g_resume, LV_OBJ_FLAG_HIDDEN);
-        else
-            lv_obj_add_flag(g_resume, LV_OBJ_FLAG_HIDDEN);
+        ui_style::setHidden(g_resume, !(waiting));
         ui_style::rowSelected(g_resume, waiting);
     }
+    lastWaiting = waiting;
 
     if (g_header != nullptr)
     {
@@ -76,7 +82,9 @@ void update()
         const char *status = get_var_status();
         snprintf(line, sizeof(line), "%s  -  %s", ui_bridge::protocolName(),
                  (status != nullptr && *status != '\0') ? status : "ready");
-        lv_label_set_text(g_header, line);
+        const char *current = lv_label_get_text(g_header);
+        if (current == nullptr || strcmp(current, line) != 0)
+            ui_style::setText(g_header, line);
     }
 }
 } // namespace screen_home

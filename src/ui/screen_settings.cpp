@@ -1,3 +1,4 @@
+#include "ui_style.h"
 #include "screen_settings.h"
 
 #ifdef USE_LVGL
@@ -154,35 +155,29 @@ void update()
     char buffer[24];
 
     if (g_values[ROW_SOURCE] != nullptr)
-        lv_label_set_text(g_values[ROW_SOURCE], ui_bridge::protocolName());
+        ui_style::setText(g_values[ROW_SOURCE], ui_bridge::protocolName());
 
     if (g_values[ROW_NIGHT] != nullptr)
-        lv_label_set_text(g_values[ROW_NIGHT], nightModeName(Settings::nightMode));
+        ui_style::setText(g_values[ROW_NIGHT], nightModeName(Settings::nightMode));
 
     if (g_values[ROW_FPS] != nullptr)
     {
         snprintf(buffer, sizeof(buffer), "%d fps", (int)Settings::aaFps);
-        lv_label_set_text(g_values[ROW_FPS], buffer);
+        ui_style::setText(g_values[ROW_FPS], buffer);
     }
 
     if (g_values[ROW_DEBUG] != nullptr)
-        lv_label_set_text(g_values[ROW_DEBUG], Settings::debugOverlay ? "On" : "Off");
+        ui_style::setText(g_values[ROW_DEBUG], Settings::debugOverlay ? "On" : "Off");
 
     if (g_values[ROW_ICONS] != nullptr)
-        lv_label_set_text(g_values[ROW_ICONS], Settings::iconTheme.value.c_str());
+        ui_style::setText(g_values[ROW_ICONS], Settings::iconTheme.value.c_str());
 
     // "Restart now" is only meaningful once something needs it, so it stays
     // hidden rather than inviting a pointless restart.
-    if (g_rows[ROW_RESTART] != nullptr)
-    {
-        if (ui_bridge::restartNeeded())
-            lv_obj_remove_flag(g_rows[ROW_RESTART], LV_OBJ_FLAG_HIDDEN);
-        else
-            lv_obj_add_flag(g_rows[ROW_RESTART], LV_OBJ_FLAG_HIDDEN);
-    }
+    ui_style::setHidden(g_rows[ROW_RESTART], !ui_bridge::restartNeeded());
 
     if (g_header != nullptr)
-        lv_label_set_text(g_header, ui_bridge::restartNeeded() ? "Settings  -  restart to apply"
+        ui_style::setText(g_header, ui_bridge::restartNeeded() ? "Settings  -  restart to apply"
                                                    : "Settings");
 }
 } // namespace screen_settings

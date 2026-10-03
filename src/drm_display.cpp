@@ -482,18 +482,44 @@ SDL_Renderer *uiRenderer()
     return urenderer;
 }
 
+// Rows copied by the previous present: the other dumb buffer still lacks them.
+static int ui_prev_y0 = 0, ui_prev_y1 = 0;
+
+static bool uiPresentRange(int y0, int y1);
+
 bool uiPresent()
+{
+    return uiPresentRange(0, (int)ch);
+}
+
+bool uiPresentRows(int y0, int y1)
+{
+    return uiPresentRange(y0, y1);
+}
+
+static bool uiPresentRange(int y0, int y1)
 {
     std::lock_guard<std::mutex> lock(mtx);
     if (!ui_ready)
         return false;
 
-    // Copy the composed surface into the back dumb buffer (row-wise: pitches
-    // may differ). UI updates are rare, so the copy cost is irrelevant.
+    // Copy the changed rows of the composed surface into the back dumb buffer
+    // (row-wise: pitches may differ). The back buffer is two presents old, so
+    // include the rows the previous present changed as well.
+    int c0 = y0, c1 = y1;
+    if (ui_prev_y1 > ui_prev_y0)
+    {
+        if (ui_prev_y0 < c0) c0 = ui_prev_y0;
+        if (ui_prev_y1 > c1) c1 = ui_prev_y1;
+    }
+    if (c0 < 0) c0 = 0;
+    if (c1 > (int)ch) c1 = (int)ch;
     DumbFb &b = ubuf[uback];
     const uint8_t *src = (const uint8_t *)usurface->pixels;
-    for (uint32_t y = 0; y < ch; y++)
+    for (int y = c0; y < c1; y++)
         memcpy(b.map + y * b.pitch, src + y * usurface->pitch, cw * 4);
+    ui_prev_y0 = y0;
+    ui_prev_y1 = y1;
 
     drmModeAtomicReq *req = drmModeAtomicAlloc();
     uint32_t flags = add_modeset(req);
@@ -501,7 +527,18 @@ bool uiPresent()
     if (up.zpos)
         drmModeAtomicAddProperty(req, uplane, up.zpos, 1);
 
-    int crc = drmModeAtomicCommit(fd, req, flags, nullptr);
+    // Once the mode is up, commit without waiting for the flip: a blocking
+    // commit parks the main loop for a vblank (~16 ms) on every UI update.
+    // EBUSY means the previous flip is still pending -- then wait for it.
+    int crc = -1;
+    if (modeset_done)
+    {
+        crc = drmModeAtomicCommit(fd, req, flags | DRM_MODE_ATOMIC_NONBLOCK, nullptr);
+        if (crc && errno != EBUSY)
+            crc = -1;
+    }
+    if (crc)
+        crc = drmModeAtomicCommit(fd, req, flags, nullptr);
     if (crc && !modeset_done && blackfb.fb == 0)
     {
         // Some drivers refuse to enable the CRTC without the primary plane;
