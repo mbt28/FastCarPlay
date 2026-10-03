@@ -47,6 +47,13 @@ lv_obj_t *rowValue(lv_obj_t *row, const Metrics &m, const char *text);
 
 // Highlight a row as the active choice.
 void rowSelected(lv_obj_t *row, bool selected);
+
+// Change-aware setters for per-tick update() functions. LVGL's setters
+// invalidate unconditionally, and on the F1C200s every invalidation is a
+// redraw + overlay commit (20-35 ms), so screens that rewrote every label
+// each tick kept the main loop saturated and the UI felt dead.
+void setText(lv_obj_t *label, const char *text);
+void setHidden(lv_obj_t *obj, bool hidden);
 } // namespace ui_style
 
 #endif /* USE_LVGL */

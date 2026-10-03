@@ -1,3 +1,4 @@
+#include "ui_style.h"
 #include "screen_wireless.h"
 
 #ifdef USE_LVGL
@@ -275,10 +276,10 @@ void update()
 {
     for (int i = 0; i < (int)(sizeof(FIELDS) / sizeof(FIELDS[0])); i++)
         if (g_values[i] != nullptr)
-            lv_label_set_text(g_values[i], fieldValue(i));
+            ui_style::setText(g_values[i], fieldValue(i));
 
     if (g_header != nullptr)
-        lv_label_set_text(g_header, ui_bridge::restartNeeded() ? "Wireless  -  restart to apply"
+        ui_style::setText(g_header, ui_bridge::restartNeeded() ? "Wireless  -  restart to apply"
                                                    : "Wireless");
 }
 } // namespace screen_wireless

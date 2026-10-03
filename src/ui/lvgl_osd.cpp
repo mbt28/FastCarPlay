@@ -33,6 +33,11 @@ struct LvglOsdCallbacks
                           area->x2 - area->x1 + 1,
                           area->y2 - area->y1 + 1};
             SDL_UpdateTexture(self->_texture, &rect, px, rect.w * 4);
+            self->_flushed = true;
+            if (self->_dirty.w == 0 || self->_dirty.h == 0)
+                self->_dirty = rect;
+            else
+                SDL_UnionRect(&self->_dirty, &rect, &self->_dirty);
         }
         lv_display_flush_ready(disp);
     }
@@ -91,7 +96,7 @@ bool LvglOsd::begin(SDL_Renderer *renderer, int width, int height)
     }
     // Blend so the overlay can sit above live video on the DRM plane; an
     // opaque screen still draws fully.
-    SDL_SetTextureBlendMode(_texture, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureBlendMode(_texture, SDL_BLENDMODE_NONE); // opaque screens: plain copy, not a per-pixel blend
 
     int lines = _height / LVGL_BUFFER_LINES_DIV;
     if (lines < 1)
@@ -195,15 +200,46 @@ void LvglOsd::encoder(int steps, bool pressed)
 
 void LvglOsd::render()
 {
+    tick();
+    blit();
+}
+
+bool LvglOsd::tick()
+{
     if (_disp == nullptr)
-        return;
+        return false;
 
     if (_generated)
         ui_tick(); // flow tick + screen tick (EEZ generated)
     else
         ui_screens::tick();
     lv_timer_handler();
+    return _flushed;
+}
+
+void LvglOsd::blit()
+{
+    if (_disp == nullptr)
+        return;
     SDL_RenderCopy(_renderer, _texture, nullptr, nullptr);
+    // SDL batches render commands; the DRM path reads the renderer's target
+    // surface directly, so execute them now (otherwise the present copies a
+    // surface that is one update behind and the UI looks a frame laggy).
+    SDL_RenderFlush(_renderer);
+    _flushed = false;
+    _dirty = SDL_Rect{0, 0, 0, 0};
+}
+
+SDL_Rect LvglOsd::blitDirty()
+{
+    SDL_Rect r = _dirty;
+    if (_disp == nullptr || r.w <= 0 || r.h <= 0)
+        return SDL_Rect{0, 0, 0, 0};
+    SDL_RenderCopy(_renderer, _texture, &r, &r);
+    SDL_RenderFlush(_renderer); // see blit()
+    _flushed = false;
+    _dirty = SDL_Rect{0, 0, 0, 0};
+    return r;
 }
 
 #endif /* USE_LVGL */
