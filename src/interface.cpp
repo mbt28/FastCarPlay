@@ -1,4 +1,5 @@
 #include "interface.h"
+#include <algorithm>
 #include "resource/background.h"
 #include "resource/font.h"
 #include "resource/colours.h"
@@ -52,7 +53,7 @@ bool Interface::render(AVFrame *frame)
     return true;
 }
 
-bool Interface::drawHome(bool force, int state, std::string name)
+bool Interface::drawHome(bool force, int state, const std::string &name)
 {
     if (state == _state && !force)
         return false;
@@ -89,9 +90,10 @@ bool Interface::drawHome(bool force, int state, std::string name)
 
     if (state == PROTOCOL_STATUS_CONNECTED)
     {
-        if(name.length()>0)
-            name = " to "+name;
-        if (_textStatus.prepare(_renderer, "Connecting"+name, color3))
+        std::string text = "Connecting";
+        if (name.length() > 0)
+            text += " to " + name;
+        if (_textStatus.prepare(_renderer, text, color3))
             drawText = true;
     }
 
@@ -111,31 +113,29 @@ bool Interface::drawHome(bool force, int state, std::string name)
     return true;
 }
 
-// Transparent canvas with only the toast/debug decorations: used by the DRM
-// overlay plane, where the live video is composed by the hardware below.
-// Returns whether anything was drawn (an all-transparent canvas means the
-// overlay can be hidden instead).
-bool Interface::drawOsd()
+// Canvas with only the toast/debug decorations: used by the DRM overlay
+// plane, where the live video is composed by the hardware below. Returns the
+// number of rows (from the top) that carry content -- the caller commits the
+// plane over exactly that band, so the video stays visible underneath even
+// on overlay formats without per-pixel alpha (RGB565) -- or 0 when nothing
+// was drawn and the overlay can be hidden instead.
+int Interface::drawOsd()
 {
     SDL_SetRenderDrawBlendMode(_renderer, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 0);
     SDL_RenderClear(_renderer);
 
-    bool drew = false;
+    int band = 0;
     if (_toast)
-    {
-        drawToast();
-        drew = true;
-    }
+        band = std::max(band, drawToast());
     if (_debug)
     {
-        drawDebug();
+        band = std::max(band, drawDebug());
         _debug = false;
-        drew = true;
     }
 
     SDL_RenderPresent(_renderer);
-    return drew;
+    return band;
 }
 
 void Interface::debug(const char *text)
@@ -156,10 +156,10 @@ void Interface::hideToast()
     _toast = false;
 }
 
-void Interface::drawDebug()
+int Interface::drawDebug()
 {
     if (_debugText.empty())
-        return;
+        return 0;
 
     constexpr int padding = 8;
     constexpr int lineSpacing = 2;
@@ -191,12 +191,13 @@ void Interface::drawDebug()
 
         lineStart = lineEnd + 1;
     }
+    return y;
 }
 
-void Interface::drawToast()
+int Interface::drawToast()
 {
     if (_toastText.empty())
-        return;
+        return 0;
 
     int padding = Settings::fontSize*0.3;
     int width, height;
@@ -204,10 +205,13 @@ void Interface::drawToast()
     SDL_SetRenderDrawBlendMode(_renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 150);
 
+    int band = 0;
     if (_textToast.prepare(_renderer, _toastText, color4))
     {
-        SDL_Rect backgroundRect = {0, 0, width, _textToast.height + padding * 2};
+        band = _textToast.height + padding * 2;
+        SDL_Rect backgroundRect = {0, 0, width, band};
         SDL_RenderFillRect(_renderer, &backgroundRect);
         _textToast.draw(_renderer, (width - _textToast.width * Settings::aspectCorrection) / 2, padding);
     }
+    return band;
 }

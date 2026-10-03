@@ -11,15 +11,19 @@ public:
     Interface(SDL_Renderer *renderer, const DisplayGeometry &geometry);
     ~Interface();
     bool render(AVFrame *frame);
-    bool drawHome(bool force, int state, std::string name);
-    bool drawOsd();
+    bool drawHome(bool force, int state, const std::string &name);
+    // Draw the toast/debug decorations on a cleared canvas and return the
+    // height (in rows, from the top) they occupy -- 0 when nothing was drawn.
+    // The DRM path commits the overlay plane over exactly that band, so the
+    // live video below stays visible (needed on formats with no alpha).
+    int drawOsd();
     void debug(const char *text);
     void showToast(const std::string &text);
     void hideToast();
 
 private:
-    void drawDebug();
-    void drawToast();
+    int drawDebug();
+    int drawToast();
 
     DisplayGeometry _geometry;
     int _state;

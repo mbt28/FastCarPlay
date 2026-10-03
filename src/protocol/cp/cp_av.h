@@ -84,10 +84,14 @@ struct Sinks
     std::function<void(bool hevc)> onVideoCodec;
     // A screen video access unit as Annex-B (00 00 00 01 start codes): first the
     // config parameter sets, then decoded frames. Ready for avcodec/cedrus.
-    std::function<void(const Bytes &)> onVideo;
+    // The pointer is only valid for the duration of the call (it aliases the
+    // session's receive buffer -- frames are decrypted and reframed in place,
+    // so the sink copies once, into its own Message).
+    std::function<void(const uint8_t *data, size_t len)> onVideo;
     // Decoded audio: the CarPlay stream type (100/101 nav-speech, 102 media), the
     // PCM rate + channel count, and S16 interleaved (native-endian) samples.
-    std::function<void(int type, int rate, int channels, const Bytes &pcm)> onAudio;
+    // The pointer is only valid for the duration of the call.
+    std::function<void(int type, int rate, int channels, const uint8_t *pcm, size_t bytes)> onAudio;
     // The phone tapped the CarPlay dock's car/home icon (a POST /command
     // {type:'requestUI'}), asking us to bring the head-unit's own UI to the
     // foreground -- the CarPlay equivalent of Android Auto's host-ui-requested.

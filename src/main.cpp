@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstring>
 #include <unistd.h>
+#include <sys/resource.h>
 
 #include "common/functions.h"
 #include "common/logger.h"
@@ -82,9 +83,28 @@ static void restartSelf()
     std::cerr << "[Main] execvp " << savedArgv[0] << " failed > " << strerror(errno) << std::endl;
 }
 
+// glibc derives a new thread's default stack size from RLIMIT_STACK. The
+// default (8 MB) across the ~16 threads this app runs reserves ~128 MB of
+// address space on a 64 MB board. The deepest frames here are small, fixed
+// local buffers (a 32 KB screen receive buffer, a ~15 KB nanopb response);
+// 1 MB is generous headroom and an 8x cut. Must run before any thread.
+static void capThreadStacks()
+{
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_STACK, &rl) != 0)
+        return;
+    const rlim_t want = 1 * 1024 * 1024;
+    if (rl.rlim_cur == RLIM_INFINITY || rl.rlim_cur > want)
+    {
+        rl.rlim_cur = want;
+        setrlimit(RLIMIT_STACK, &rl); // best-effort; main's own stack is already mapped
+    }
+}
+
 int main(int argc, char **argv)
 {
     savedArgv = argv;
+    capThreadStacks();
 
     // Answer "what is actually running?" without starting anything. After a
     // partly-applied update this is not the same as what /etc claims, which is

@@ -1,6 +1,6 @@
 #include "serial_input.h"
 
-#ifdef USE_CEDAR
+#ifdef USE_CEDRUS
 
 #include <poll.h>
 #include <unistd.h>
@@ -105,4 +105,4 @@ void SerialInput::loop()
     }
 }
 
-#endif /* USE_CEDAR */
+#endif /* USE_CEDRUS */

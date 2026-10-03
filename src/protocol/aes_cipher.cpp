@@ -43,16 +43,17 @@ bool AESCipher::encrypt(uint8_t *data, uint32_t length, char *err) const
     if (EVP_EncryptInit_ex(ctx.get(), EVP_aes_128_cfb(), nullptr, _encKey.data(), _initVec.data()) != 1)
         return error(err, "Encryption initialization failed");
 
-    std::unique_ptr<uint8_t[]> temp(new uint8_t[length + AES_BLOCK_SIZE]);
+    // AES-CFB is a stream mode: OpenSSL accepts out == in, so encrypt in
+    // place -- no temp buffer, no copy-back of the whole payload per message
+    // (a 60 KB keyframe otherwise paid an extra 60 KB alloc + 60 KB copy).
     int out_len = 0;
-    if (EVP_EncryptUpdate(ctx.get(), temp.get(), &out_len, data, length) != 1)
+    if (EVP_EncryptUpdate(ctx.get(), data, &out_len, data, length) != 1)
         return error(err, "Encryption failed during update");
 
     int final_len = 0;
-    if (EVP_EncryptFinal_ex(ctx.get(), temp.get() + out_len, &final_len) != 1)
+    if (EVP_EncryptFinal_ex(ctx.get(), data + out_len, &final_len) != 1)
         return error(err, "Encryption failed during final");
 
-    std::copy_n(temp.get(), length, data);
     return true;
 }
 
@@ -68,15 +69,14 @@ bool AESCipher::decrypt(uint8_t *data, uint32_t length, char *err) const
     if (EVP_DecryptInit_ex(ctx.get(), EVP_aes_128_cfb(), nullptr, _encKey.data(), _initVec.data()) != 1)
         return error(err, "Decryption initialization failed");
 
-    std::unique_ptr<uint8_t[]> temp(new uint8_t[length + AES_BLOCK_SIZE]);
+    // In place: AES-CFB accepts out == in (see encrypt()).
     int out_len = 0;
-    if (EVP_DecryptUpdate(ctx.get(), temp.get(), &out_len, data, length) != 1)
+    if (EVP_DecryptUpdate(ctx.get(), data, &out_len, data, length) != 1)
         return error(err, "Decryption failed during update");
 
     int final_len = 0;
-    if (EVP_DecryptFinal_ex(ctx.get(), temp.get() + out_len, &final_len) != 1)
+    if (EVP_DecryptFinal_ex(ctx.get(), data + out_len, &final_len) != 1)
         return error(err, "Decryption failed during final");
 
-    std::copy_n(temp.get(), length, data);
     return true;
 }

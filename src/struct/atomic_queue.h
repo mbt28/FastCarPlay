@@ -4,12 +4,20 @@
 #include <cstddef>
 #include <cstdint>
 #include <atomic>
-#include <memory>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 
 using namespace std;
 
+// A small bounded FIFO of unique_ptr slots. Pushes and pops take the mutex --
+// at the queue's rates (frames/segments, not samples) that costs nothing, and
+// it makes the queue safe for several producers (two CarPlay audio streams
+// feed one aux queue) while closing the classic lost-wakeup window: the old
+// lock-free push published its state and notified OUTSIDE the mutex the
+// waiter's predicate ran under, so a consumer could re-check, miss the new
+// item, and sleep until its timeout. `_count` stays atomic so has()/count()
+// remain cheap lock-free probes from other threads.
 template <typename T>
 class AtomicQueue
 {
@@ -24,43 +32,82 @@ public:
 
     ~AtomicQueue() = default;
 
+    // Push; when full the NEW item is dropped (returns false). Right for
+    // input/command queues where earlier events must not be reordered away.
     bool pushDiscard(unique_ptr<T> obj)
     {
-        if (_count.load(std::memory_order_acquire) == _size)
-            return false;
-
-        _first = (_first + 1) % _size;
-        _data[_first] = std::move(obj);
-        _count.fetch_add(1, std::memory_order_release);
+        {
+            lock_guard<std::mutex> lock(_mtx);
+            if (_count.load(std::memory_order_relaxed) == _size)
+                return false;
+            _first = (_first + 1) % _size;
+            _data[_first] = std::move(obj);
+            _count.fetch_add(1, std::memory_order_release);
+        }
         _lock.notify_one();
         return true;
     }
 
+    // Push; when full the OLDEST queued item is dropped to make room. Right
+    // for live AV streams: the newest data is the only data worth showing,
+    // and a stalled consumer must cost latency, not block fresh frames.
+    // Returns false when something was dropped (so a video producer can ask
+    // the source for a keyframe).
+    bool pushDropOldest(unique_ptr<T> obj)
+    {
+        bool dropped = false;
+        {
+            lock_guard<std::mutex> lock(_mtx);
+            if (_count.load(std::memory_order_relaxed) == _size)
+            {
+                _last = (_last + 1) % _size;
+                _data[_last].reset();
+                _count.fetch_sub(1, std::memory_order_release);
+                dropped = true;
+            }
+            _first = (_first + 1) % _size;
+            _data[_first] = std::move(obj);
+            _count.fetch_add(1, std::memory_order_release);
+        }
+        _lock.notify_one();
+        return !dropped;
+    }
+
+    // Push; when full the NEWEST queued item is replaced in place.
     bool pushReplace(unique_ptr<T> obj)
     {
-        if (_count.load(std::memory_order_acquire) == _size)
+        bool replaced = false;
         {
-            _data[_first] = std::move(obj);
-            return false;
+            lock_guard<std::mutex> lock(_mtx);
+            if (_count.load(std::memory_order_relaxed) == _size)
+            {
+                _data[_first] = std::move(obj);
+                replaced = true;
+            }
+            else
+            {
+                _first = (_first + 1) % _size;
+                _data[_first] = std::move(obj);
+                _count.fetch_add(1, std::memory_order_release);
+            }
         }
-
-        _first = (_first + 1) % _size;
-        _data[_first] = std::move(obj);
-        _count.fetch_add(1, std::memory_order_release);
-        _lock.notify_one();
-        return true;
+        if (!replaced)
+            _lock.notify_one();
+        return !replaced;
     }
 
     const T *peek()
     {
-        if (_count.load(std::memory_order_acquire) == 0)
+        lock_guard<std::mutex> lock(_mtx);
+        if (_count.load(std::memory_order_relaxed) == 0)
             return nullptr;
         return _data[(_last + 1) % _size].get();
     }
 
     unique_ptr<T> pop()
     {
-        if (_count.load(std::memory_order_acquire) == 0)
+        lock_guard<std::mutex> lock(_mtx);
+        if (_count.load(std::memory_order_relaxed) == 0)
             return nullptr;
 
         _last = (_last + 1) % _size;
@@ -93,7 +140,11 @@ public:
 
     void clear()
     {
-        _data = std::make_unique<std::unique_ptr<T>[]>(_size);
+        lock_guard<std::mutex> lock(_mtx);
+        // Reset the slots in place: replacing the whole array (the previous
+        // behaviour) re-allocated _size pointers on an audio-thread path.
+        for (uint16_t i = 0; i < _size; i++)
+            _data[i].reset();
         _first = 0;
         _last = 0;
         _count.store(0, std::memory_order_release);

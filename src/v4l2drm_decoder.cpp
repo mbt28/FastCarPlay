@@ -34,11 +34,13 @@ extern "C"
 namespace
 {
 // Present one decoded drm_prime frame on the shared DRM video plane
-// (drm_display owns the session; the UI overlay shares it).
-void drm_show(AVFrame *frame)
+// (drm_display owns the session; the UI overlay shares it). Returns whether
+// the frame is now (queued for) scanout -- the caller must then keep its
+// buffer alive until a later frame has replaced it on the plane.
+bool drm_show(AVFrame *frame)
 {
     AVDRMFrameDescriptor *d = (AVDRMFrameDescriptor *)frame->data[0];
-    if (!d || d->nb_objects < 1 || d->nb_layers < 1) return;
+    if (!d || d->nb_objects < 1 || d->nb_layers < 1) return false;
     const AVDRMLayerDescriptor *layer = &d->layers[0];
 
     int fds[4] = {0};
@@ -64,9 +66,9 @@ void drm_show(AVFrame *frame)
                 (unsigned long long)modifier);
     }
 
-    drm_display::showVideo(layer->format, frame->width, frame->height,
-                           frame->width, frame->height,
-                           np, fds, pitches, offsets, modifier, "Cedrus");
+    return drm_display::showVideo(layer->format, frame->width, frame->height,
+                                  frame->width, frame->height,
+                                  np, fds, pitches, offsets, modifier, "Cedrus");
 }
 
 // get_format: select the V4L2-Request (DRM_PRIME) hwaccel when offered.
@@ -167,10 +169,45 @@ bool V4l2DrmDecoder::setup(AVCodecID codecId)
 
 void V4l2DrmDecoder::teardown()
 {
+    // Give the held scanout buffers back before the context dies with them.
+    releaseHeld();
     if (_parser) { av_parser_close(_parser); _parser = nullptr; }
     if (_ctx) avcodec_free_context(&_ctx);
     if (_hwdev) av_buffer_unref(&_hwdev);
+    // The UI keeps the DRM session open across a decoder rebuild, so the
+    // cached framebuffers (and their GEM handles pinning this decoder's
+    // frame pool in CMA) must be dropped explicitly before close().
+    drm_display::flushVideo();
     drm_display::close();
+}
+
+// Keep the last two presented frames referenced: commit N may still be
+// scanning out while commit N+1 is only queued (non-blocking flips), so a
+// buffer handed straight back to the decoder could be written mid-scan.
+// Once a third commit succeeds, the oldest buffer is certainly off screen.
+void V4l2DrmDecoder::holdShown(AVFrame *&frame)
+{
+    AVFrame *old = _held[_heldNext];
+    if (old)
+        av_frame_unref(old);
+    else
+        _held[_heldNext] = av_frame_alloc();
+    if (_held[_heldNext])
+        av_frame_move_ref(_held[_heldNext], frame);
+    else
+        av_frame_unref(frame); // allocation failed: tear risk over leak
+    _heldNext ^= 1;
+}
+
+void V4l2DrmDecoder::releaseHeld()
+{
+    for (AVFrame *&f : _held)
+    {
+        if (f)
+            av_frame_free(&f);
+        f = nullptr;
+    }
+    _heldNext = 0;
 }
 
 void V4l2DrmDecoder::runner()
@@ -208,11 +245,15 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
     while (_data->wait(_active))
     {
         std::unique_ptr<Message> segment = _data->pop();
+        if (!segment)
+            continue;
         uint8_t *data_ptr = segment->data();
         int data_size = segment->length();
 
         while (_active && data_size > 0)
         {
+            // The stateless cedrus decoder needs the parser to extract the
+            // slice parameters; feeding raw Annex-B straight in fails.
             uint8_t *pk_data;
             int pk_size;
             int len = av_parser_parse2(_parser, _ctx, &pk_data, &pk_size,
@@ -250,9 +291,9 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
             failures = 0;
             while (avcodec_receive_frame(_ctx, frame) == 0 && _active)
             {
-                if (frame->format == AV_PIX_FMT_DRM_PRIME)
-                    drm_show(frame);
-                av_frame_unref(frame);
+                if (frame->format == AV_PIX_FMT_DRM_PRIME && drm_show(frame))
+                    holdShown(frame); // on scanout: keep it alive, release an older one
+                av_frame_unref(frame); // no-op when holdShown moved the ref out
             }
         }
     }

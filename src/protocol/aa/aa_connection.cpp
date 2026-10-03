@@ -1,5 +1,6 @@
 #include "aa_connection.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <sstream>
@@ -268,8 +269,12 @@ void AaConnection::processLoop()
         if (first)
         {
             channel.assembly.clear();
+            // totalSize is a wire field validated only against the 2 MB cap
+            // above; reserving it verbatim lets eight channels pin 16 MB from
+            // eight malformed FIRST frames. Reserve a realistic AU size and
+            // let the vector grow for the rare genuinely-large message.
             if (totalSize)
-                channel.assembly.reserve(totalSize);
+                channel.assembly.reserve(std::min<uint32_t>(totalSize, 256 * 1024));
             channel.assembling = true;
         }
         else if (!channel.assembling)
@@ -598,7 +603,9 @@ void AaConnection::emitVideo(const uint8_t *data, size_t length)
         return;
     }
     memcpy(message->data(), data, length);
-    videoStream.pushDiscard(std::move(message));
+    // Overflow drops the OLDEST queued frame: live projection only ever
+    // wants the newest picture, and the decoder rides out the gap.
+    videoStream.pushDropOldest(std::move(message));
 }
 
 void AaConnection::emitAudio(uint8_t channel, const uint8_t *data, size_t length)

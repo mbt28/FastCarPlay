@@ -63,6 +63,14 @@ private:
     // Set once a hardware decoder has given up, so we stop choosing it.
     bool _hwDisabled = false;
     std::unique_ptr<class IDecoder> makeDecoder(AVCodecID codecId);
+    // Whether a decoder for this codec could put pixels on screen on the
+    // current video path. On the DRM/headless paths only hardware decode
+    // presents anything; a software fallback would burn the whole core
+    // decoding frames nobody shows.
+    bool decoderPresentable(AVCodecID codecId) const;
+    // start() the decoder only when it can present; otherwise leave it idle
+    // (the session keeps running -- audio and control work, video is off).
+    void startDecoder(class IDecoder &decoder, class IConnection &protocol, AVCodecID codecId);
     void syncDecoderCodec(std::unique_ptr<class IDecoder> &decoder, class IConnection &protocol,
                           AVCodecID &started);
     std::unique_ptr<class IConnection> makeConnection();

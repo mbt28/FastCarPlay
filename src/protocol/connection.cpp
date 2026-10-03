@@ -643,8 +643,13 @@ void Connection::onMessage(std::unique_ptr<Message> message)
 
     if (message->type() == CMD_VIDEO_DATA && message->setOffset(20))
     {
-        if (!videoStream.pushDiscard(std::move(message)))
-            log_w("Discard message > video queue is full");
+        // Overflow drops the OLDEST queued frame (stale video has no value);
+        // ask for a keyframe so the picture recovers immediately.
+        if (!videoStream.pushDropOldest(std::move(message)))
+        {
+            log_w("Video queue overflow > dropped oldest frame, requesting refresh");
+            send(Message::Control(BTN_SCREEN_REFRESH));
+        }
         return;
     }
 

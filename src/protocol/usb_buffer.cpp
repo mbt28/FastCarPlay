@@ -5,7 +5,7 @@
 #include <stdexcept>
 
 DataSlot::DataSlot()
-    : ready(false), offset(0), length(0), size(0), data(nullptr), _cv(nullptr)
+    : ready(false), offset(0), length(0), size(0), data(nullptr), _mtx(nullptr), _cv(nullptr)
 {
 }
 
@@ -19,13 +19,14 @@ DataSlot::~DataSlot()
     }
 }
 
-void DataSlot::init(uint32_t slotSize, std::condition_variable *condition)
+void DataSlot::init(uint32_t slotSize, std::mutex *mutex, std::condition_variable *condition)
 {
     ready.store(false);
     offset = 0;
     length = 0;
     size = slotSize;
     data = static_cast<uint8_t *>(malloc(size));
+    _mtx = mutex;
     _cv = condition;
 }
 
@@ -40,8 +41,21 @@ void DataSlot::commit(size_t dataSize)
 {
     length = dataSize;
     offset = 0;
+    // Publish `ready` under the same mutex the reader's wait predicate runs
+    // under -- otherwise this store+notify can land between the reader's
+    // predicate check and its sleep, and the wakeup is lost until the NEXT
+    // commit (an AV-latency hiccup on a trickling stream).
+    if (_mtx)
+    {
+        {
+            std::lock_guard<std::mutex> lock(*_mtx);
+            ready.store(true);
+        }
+        if (_cv)
+            _cv->notify_one();
+        return;
+    }
     ready.store(true);
-
     if (_cv)
         _cv->notify_one();
 }
@@ -70,7 +84,7 @@ UsbBuffer::UsbBuffer(uint16_t slotCount, uint32_t slotSize)
 
     for (uint16_t i = 0; i < _size; i++)
     {
-        _slots[i].init(slotSize, &_cv);
+        _slots[i].init(slotSize, &_mutex, &_cv);
     }
 }
 

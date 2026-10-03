@@ -12,6 +12,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+extern "C"
+{
+#include <libavcodec/avcodec.h> // AV_INPUT_BUFFER_PADDING_SIZE
+}
+
 #include "common/logger.h"
 #include "cp_control_cipher.h"
 #include "cp_crypto.h"
@@ -48,21 +53,24 @@ namespace
 const char *PLIST_CT = "application/x-apple-binary-plist";
 
 // Capture received stream bytes to $FCP_CP_CAPTURE/<tag>.bin (append) for
-// bring-up analysis. No-op when the env var is unset.
-void capture(const char *tag, const Bytes &b)
+// bring-up analysis. No-op when the env var is unset -- and then it must
+// cost nothing: this sits on the per-recv hot path, so the env lookups are
+// done once and no temporary buffer is ever built.
+void capture(const char *tag, const uint8_t *data, size_t len)
 {
-    const char *dir = getenv("FCP_CP_CAPTURE");
-    if (!dir || b.empty())
+    static const char *dir = getenv("FCP_CP_CAPTURE");
+    static const bool screenToo = getenv("FCP_CP_CAPTURE_SCREEN") != nullptr;
+    if (!dir || !data || len == 0)
         return;
     // The screen stream is ~100 KB/s; writing it to the SD card starves CMA
     // (dirty pages pinned -> cedrus allocation failures). Opt in explicitly.
-    if (strcmp(tag, "screen") == 0 && !getenv("FCP_CP_CAPTURE_SCREEN"))
+    if (!screenToo && strcmp(tag, "screen") == 0)
         return;
     char path[512];
     snprintf(path, sizeof(path), "%s/stream-%s.bin", dir, tag);
     if (FILE *f = fopen(path, "ab"))
     {
-        fwrite(b.data(), 1, b.size(), f);
+        fwrite(data, 1, len, f);
         fclose(f);
     }
 }
@@ -70,14 +78,14 @@ void capture(const char *tag, const Bytes &b)
 // Append a decoded Annex-B access unit to $FCP_CP_VIDEO_OUT (a single elementary
 // stream file) for offline decode/verify: `ffmpeg -i $FCP_CP_VIDEO_OUT out.png`.
 // No-op when the env var is unset.
-void videoOut(const Bytes &annexB)
+void videoOut(const uint8_t *annexB, size_t len)
 {
-    const char *path = getenv("FCP_CP_VIDEO_OUT");
-    if (!path || annexB.empty())
+    static const char *path = getenv("FCP_CP_VIDEO_OUT");
+    if (!path || !annexB || len == 0)
         return;
     if (FILE *f = fopen(path, "ab"))
     {
-        fwrite(annexB.data(), 1, annexB.size(), f);
+        fwrite(annexB, 1, len, f);
         fclose(f);
     }
 }
@@ -387,16 +395,19 @@ void AvSession::screenLoop(int fd, int64_t streamId)
     uint64_t counter = 0;
     bool codecReported = false;
 
-    auto emit = [&](const Bytes &annexB) {
-        if (annexB.empty())
+    auto emit = [&](const uint8_t *annexB, size_t len) {
+        if (!annexB || len == 0)
             return;
-        videoOut(annexB);
+        videoOut(annexB, len);
         if (_sinks.onVideo)
-            _sinks.onVideo(annexB);
+            _sinks.onVideo(annexB, len);
     };
 
+    // One accumulator, mutated in place: frames are decrypted where they lie
+    // (ChaCha20 allows out == in) and the 4-byte NAL length prefixes are
+    // overwritten with start codes. From the socket to the decoder's Message
+    // a frame is copied once (into the Message), not five times.
     Bytes acc;
-    uint8_t buf[32768];
     size_t total = 0, frames = 0, configs = 0;
     while (_running)
     {
@@ -404,16 +415,20 @@ void AvSession::screenLoop(int fd, int64_t streamId)
         int r = ::poll(&pfd, 1, 300);
         if (r < 0) break;
         if (r == 0) continue;
-        ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        // recv straight into the accumulator's tail: no bounce buffer.
+        constexpr size_t CHUNK = 32768;
+        const size_t have = acc.size();
+        acc.resize(have + CHUNK);
+        ssize_t n = ::recv(fd, acc.data() + have, CHUNK, 0);
         if (n <= 0) break;
+        acc.resize(have + (size_t)n);
         total += (size_t)n;
-        capture("screen", Bytes(buf, buf + n)); // raw capture (FCP_CP_CAPTURE)
-        acc.insert(acc.end(), buf, buf + n);
+        capture("screen", acc.data() + have, (size_t)n); // raw capture (FCP_CP_CAPTURE)
 
         size_t off = 0;
         while (acc.size() - off >= HEADER_LEN)
         {
-            const uint8_t *hdr = acc.data() + off;
+            uint8_t *hdr = acc.data() + off;
             const uint32_t bodySize =
                 hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
             if (bodySize > MAX_BODY)
@@ -424,7 +439,7 @@ void AvSession::screenLoop(int fd, int64_t streamId)
             if (acc.size() - off < HEADER_LEN + bodySize)
                 break; // message not fully received yet
             const uint8_t opcode = hdr[4];
-            const uint8_t *body = hdr + HEADER_LEN;
+            uint8_t *body = hdr + HEADER_LEN;
 
             if (opcode == OP_VIDEO_CONFIG)
             {
@@ -438,17 +453,22 @@ void AvSession::screenLoop(int fd, int64_t streamId)
                     if (_sinks.onVideoCodec)
                         _sinks.onVideoCodec(hevc);
                 }
-                emit(annexB);
+                emit(annexB.data(), annexB.size());
                 configs++;
             }
             else if (opcode == OP_VIDEO_FRAME)
             {
-                Bytes plain;
+                uint8_t *plain = body;
+                size_t plainLen = bodySize;
                 if (bodySize >= 16)
                 {
-                    const Bytes ctAndTag(body, body + bodySize);
-                    const Bytes aad(hdr, hdr + HEADER_LEN);
-                    if (!cp_crypto::chachaOpen(key, cp_crypto::nonce64(counter), ctAndTag, aad, plain))
+                    // Decrypt in place inside the accumulator; the 128-byte
+                    // header (the AAD) sits right before the ciphertext and
+                    // is fully read before the first output byte lands.
+                    uint8_t nonce[12];
+                    cp_crypto::nonce64(counter, nonce);
+                    if (!cp_crypto::chachaOpen(key.data(), nonce, body, bodySize,
+                                               hdr, HEADER_LEN, body))
                     {
                         log_w("[cp-av] screen frame %llu decrypt FAILED (bodySize=%u) -- "
                               "key/nonce mismatch, stream unrecoverable",
@@ -456,16 +476,19 @@ void AvSession::screenLoop(int fd, int64_t streamId)
                         return; // AEAD desync: the counter can no longer align
                     }
                     counter++;
+                    plainLen = bodySize - 16;
                 }
-                else
+                if (plainLen > 0 && cp_nalu::avccFrameToAnnexBInPlace(plain, plainLen))
                 {
-                    plain.assign(body, body + bodySize);
+                    if (frames == 0)
+                        log_i("[cp-av] screen first frame decrypted+reframed (%zuB annexB)", plainLen);
+                    emit(plain, plainLen);
+                    frames++;
                 }
-                Bytes annexB = cp_nalu::avccFrameToAnnexB(plain.data(), plain.size(), 4);
-                if (frames == 0)
-                    log_i("[cp-av] screen first frame decrypted+reframed (%zuB annexB)", annexB.size());
-                emit(annexB);
-                frames++;
+                else if (plainLen > 0)
+                {
+                    log_w("[cp-av] screen frame %zuB has a malformed NAL chain -- dropped", plainLen);
+                }
             }
             // opcode 2 (keepalive) & others: empty body, no nonce -- skip.
 
@@ -514,6 +537,11 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
           dec.outRate(), dec.outChannels());
 
     uint8_t buf[4096];
+    // Decrypt the access unit into a reusable scratch with ffmpeg's required
+    // trailing padding (its bitstream readers over-read past `size`); decoding
+    // straight from an exact-sized buffer is an out-of-bounds read.
+    std::vector<uint8_t> au;
+    au.reserve(4096);
     std::vector<int16_t> pcm;
     size_t totalBytes = 0, packets = 0, decFails = 0;
     // Throughput probe: compare audio delivered vs wall-clock so we can tell a
@@ -538,13 +566,17 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
         const size_t len = (size_t)n;
 
         // AAD = RTP timestamp+SSRC (bytes 4..12); nonce = 4 zero + last 8 bytes;
-        // ciphertext+tag = bytes 12 .. len-8.
-        const Bytes aad(buf + 4, buf + 12);
-        Bytes nonce(12, 0);
-        std::memcpy(nonce.data() + 4, buf + len - 8, 8);
-        const Bytes ctTag(buf + 12, buf + len - 8);
-        Bytes au;
-        if (!cp_crypto::chachaOpen(key, nonce, ctTag, aad, au))
+        // ciphertext+tag = bytes 12 .. len-8. Decrypt straight into `au`
+        // (plaintext = ciphertext length), keeping ffmpeg's padding past it.
+        uint8_t nonce[12] = {0};
+        std::memcpy(nonce + 4, buf + len - 8, 8);
+        const size_t ctTagLen = len - 8 - 12; // ciphertext + 16B tag
+        if (ctTagLen < 16)
+            continue;
+        const size_t auLen = ctTagLen - 16;
+        au.assign(auLen + AV_INPUT_BUFFER_PADDING_SIZE, 0);
+        if (!cp_crypto::chachaOpen(key.data(), nonce, buf + 12, ctTagLen,
+                                   buf + 4, 8, au.data()))
         {
             if (decFails++ == 0) // log once, not per packet
                 log_w("[cp-av] audio %d decrypt failed (key/nonce mismatch)", type);
@@ -552,7 +584,7 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
         }
 
         pcm.clear();
-        dec.decode(au.data(), (int)au.size(), pcm);
+        dec.decode(au.data(), (int)auLen, pcm);
         if (pcm.empty())
             continue;
         totalBytes += pcm.size() * 2;
@@ -578,10 +610,8 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
             }
         }
         if (_sinks.onAudio)
-        {
-            const uint8_t *p = (const uint8_t *)pcm.data();
-            _sinks.onAudio(type, dec.outRate(), dec.outChannels(), Bytes(p, p + pcm.size() * 2));
-        }
+            _sinks.onAudio(type, dec.outRate(), dec.outChannels(),
+                           (const uint8_t *)pcm.data(), pcm.size() * 2);
     }
     log_i("[cp-av] audio %d closed (%zu PCM bytes, %zu packets, %zu decrypt fails)", type, totalBytes,
           packets, decFails);

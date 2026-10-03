@@ -24,17 +24,11 @@
 #endif
 #ifdef USE_CEDRUS
 #include "v4l2drm_decoder.h" // mainline cedrus (ffmpeg v4l2-request) HW decoder (F1C200s)
-#endif
-#if defined(USE_CEDAR) || defined(USE_CEDRUS)
-#include "drm_display.h" // shared DRM session: video plane + UI overlay plane
-#include "interface.h"
+#include "drm_display.h"     // shared DRM session: video plane + UI overlay plane
+#include "serial_input.h"    // TEST-only serial-console navigation (F1C200s)
 #endif
 #ifdef __linux__
 #include "touch_input.h" // evdev touchscreen; used on the drm/headless render paths
-#endif
-#ifdef USE_CEDAR
-#include "cedar_decoder.h" // Allwinner Cedar HW H.264 decoder (F1C200s)
-#include "serial_input.h"  // TEST-only serial-console navigation (F1C200s)
 #endif
 #include "pcm_audio.h"
 #include "common/functions.h"
@@ -171,14 +165,7 @@ void Application::start(const char *title)
         SDL_ShowCursor(SDL_DISABLE);
 
     // Create renderer for the window
-#ifdef USE_CEDAR
-    // F1C200s has no GPU and SDL has no usable display backend; video is painted
-    // directly to /dev/fb0 by CedarDecoder. SDL just needs a (software) renderer
-    // for the UI; run it with SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy.
-    Uint32 flags = SDL_RENDERER_SOFTWARE;
-#else
     Uint32 flags = SDL_RENDERER_ACCELERATED;
-#endif
     if (Settings::vsync)
         flags |= SDL_RENDERER_PRESENTVSYNC;
 
@@ -234,7 +221,7 @@ void Application::syncDecoderCodec(std::unique_ptr<IDecoder> &decoder, IConnecti
         _hwDisabled = true;
         decoder->stop();
         decoder = makeDecoder(want);
-        decoder->start(&protocol.videoStream, want);
+        startDecoder(*decoder, protocol, want);
         started = want;
         return;
     }
@@ -244,7 +231,7 @@ void Application::syncDecoderCodec(std::unique_ptr<IDecoder> &decoder, IConnecti
     log_i("Video codec is now %s -- reopening the decoder", avcodec_get_name(want));
     decoder->stop();
     decoder = makeDecoder(want);
-    decoder->start(&protocol.videoStream, want);
+    startDecoder(*decoder, protocol, want);
     started = want;
 }
 
@@ -693,23 +680,45 @@ void onQuitSignal(int)
 
 std::unique_ptr<IDecoder> Application::makeDecoder(AVCodecID codecId)
 {
-    // Cedar HW decoder is selectable at runtime but only linked in on USE_CEDAR
-    // builds; otherwise (and by default) the software avcodec Decoder is used.
-    // Hardware decode is only worth taking when we own a DRM plane to hand the
-    // dma-buf to (see video_path.h), and only for a codec this chip has a block
-    // for -- otherwise fall through to software, which always works.
+    // The cedrus HW decoder is only linked in on USE_CEDRUS builds; otherwise
+    // (and by default) the software avcodec Decoder is used. Hardware decode
+    // is only worth taking when we own a DRM plane to hand the dma-buf to
+    // (see video_path.h), and only for a codec this chip has a block for --
+    // otherwise fall through to software, which always works.
 #ifdef USE_CEDRUS
     if (!_hwDisabled && video_path::hwAvailable(codecId))
         return std::make_unique<V4l2DrmDecoder>();
 #endif
-#ifdef USE_CEDAR
-    // libcedarc is H.264-only and needs the DRM/DEFE presentation path.
-    if (!_hwDisabled && codecId == AV_CODEC_ID_H264 &&
-        video_path::detect().mode == video_path::Mode::Drm)
-        return std::make_unique<CedarDecoder>();
-#endif
     (void)codecId;
     return std::make_unique<Decoder>();
+}
+
+bool Application::decoderPresentable(AVCodecID codecId) const
+{
+    const video_path::Mode mode = video_path::detect().mode;
+    if (mode == video_path::Mode::Sdl)
+        return true; // the SDL loop renders software frames itself
+#ifdef USE_CEDRUS
+    // On the DRM path only the hardware decoder presents (to the video
+    // plane); loopDrm shows no software frames. Headless shows nothing.
+    if (mode == video_path::Mode::Drm)
+        return !_hwDisabled && video_path::hwAvailable(codecId);
+#endif
+    return false;
+}
+
+void Application::startDecoder(IDecoder &decoder, IConnection &protocol, AVCodecID codecId)
+{
+    if (decoderPresentable(codecId))
+    {
+        decoder.start(&protocol.videoStream, codecId);
+        return;
+    }
+    // Decoding frames nobody can show would pin the core for nothing; the
+    // session itself stays useful (audio + control), only video is off. The
+    // stream queue is bounded, so the unconsumed frames just get dropped.
+    log_w("No presentable decoder for %s on this video path -- video disabled",
+          avcodec_get_name(codecId));
 }
 
 void Application::publishStatus(IConnection &protocol)
@@ -735,7 +744,7 @@ DisplayGeometry Application::resolveGeometry() const
 {
     DisplayGeometry g;
 
-#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+#ifdef USE_CEDRUS
     if (video_path::detect().mode == video_path::Mode::Drm && drm_display::width() > 0)
     {
         g.width = drm_display::width();
@@ -808,7 +817,7 @@ std::unique_ptr<IConnection> Application::makeConnection()
 }
 
 // No-renderer path: no SDL window/renderer/fonts are created. The decoder
-// presents frames itself (Cedar -> /dev/fb0) and navigation comes from the
+// presents frames itself (cedrus -> DRM plane) and navigation comes from the
 // serial console. Keeps the process alive and drives the protocol state.
 void Application::loopHeadless()
 {
@@ -817,7 +826,7 @@ void Application::loopHeadless()
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
     PcmAudio audioMain("main"), audioAux("aux");
 
-    decoder->start(&protocol.videoStream, protocol.videoCodec());
+    startDecoder(*decoder, protocol, protocol.videoCodec());
     AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
@@ -826,7 +835,7 @@ void Application::loopHeadless()
 #ifdef __linux__
     TouchInput touchInput(protocol);   // evdev touchscreen (renderer = drm/none)
 #endif
-#ifdef USE_CEDAR
+#ifdef USE_CEDRUS
     SerialInput serialInput(protocol); // TEST-only serial-console navigation
 #endif
 
@@ -853,7 +862,7 @@ void Application::loopHeadless()
             lastState = state;
         }
         // Drain the buffer so a buffering (software) decoder can't stall; the
-        // Cedar decoder presents to fb directly and leaves this empty.
+        // HW decoder presents to the DRM plane directly and leaves this empty.
         decoder->buffer.consume(&frame, &frameId);
         publishStatus(protocol);
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -861,14 +870,15 @@ void Application::loopHeadless()
 }
 
 // DRM path: the decoder presents video frames itself on the DRM/DEFE video
-// plane; the UI (home screen while not streaming, toasts, the debug overlay)
-// is drawn with the regular Interface code through an SDL *software*
-// renderer into the ARGB overlay plane above the video. No SDL video driver
-// is used; input comes from the touchscreen/serial listeners as in the
-// headless path.
+// plane; the UI goes on the overlay plane above it. The LVGL screens write
+// straight into the plane's dumb framebuffer (no intermediate texture or
+// composition surface); the plain Interface home screen and the debug band
+// over live video draw through a lazily-created SDL software surface. No SDL
+// video driver is used; input comes from the touchscreen/serial listeners as
+// in the headless path.
 void Application::loopDrm()
 {
-#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+#ifdef USE_CEDRUS
     if (!drm_display::open("UI"))
     {
         log_w("DRM display unavailable; falling back to headless");
@@ -876,10 +886,9 @@ void Application::loopDrm()
         return;
     }
 
-    SDL_Renderer *uiRenderer = drm_display::uiRenderer();
-    if (!uiRenderer)
+    if (!drm_display::uiBegin())
     {
-        // No ARGB overlay plane: video still works, UI doesn't.
+        // No usable overlay plane: video still works, UI doesn't.
         log_w("DRM UI overlay unavailable; running headless");
         drm_display::close();
         loopHeadless();
@@ -889,27 +898,53 @@ void Application::loopDrm()
     // The panel is up now, so its size is known before anything that needs it.
     _geometry = resolveGeometry();
 
-    Interface interface(uiRenderer, _geometry);
-    interface.drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
-    drm_display::uiPresent();
-
     const int uiWidth = drm_display::width();
     const int uiHeight = drm_display::height();
+
 #ifdef USE_LVGL
-    // The LVGL screens replace the plain status home screen on the overlay
-    // plane, driven by the touchscreen. Same renderer as Interface -- they are
-    // used mutually exclusively (LVGL when idle, Interface's OSD over video).
+    // The LVGL screens own the overlay plane while idle, flushing straight
+    // into its dumb framebuffer in the plane's own format.
     LvglOsd osd;
-    if (Settings::lvglUi && !osd.begin(uiRenderer, uiWidth, uiHeight))
+    if (Settings::lvglUi && !osd.beginDrm(uiWidth, uiHeight))
         log_w("LVGL UI unavailable > using the plain home screen");
 #endif
+
+    // Interface (plain home screen, debug band over video) composes through
+    // an SDL software surface -- a full panel of pixels -- so it is created
+    // only if something actually draws with it.
+    std::unique_ptr<Interface> interface;
+    auto ensureInterface = [&]() -> Interface * {
+        if (!interface)
+        {
+            SDL_Renderer *r = drm_display::uiRenderer();
+            if (r)
+                interface = std::make_unique<Interface>(r, _geometry);
+        }
+        return interface.get();
+    };
+
+#ifdef USE_LVGL
+    const bool lvglUi = osd.active();
+#else
+    const bool lvglUi = false;
+#endif
+    if (!lvglUi)
+    {
+        // First paint before the connection comes up, so the screen is never
+        // blank. (LVGL paints on its first tick a few ms later.)
+        if (Interface *ui = ensureInterface())
+        {
+            ui->drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
+            drm_display::uiPresent();
+        }
+    }
 
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
     PcmAudio audioMain("main"), audioAux("aux");
 
-    decoder->start(&protocol.videoStream, protocol.videoCodec());
+    startDecoder(*decoder, protocol, protocol.videoCodec());
     AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
@@ -926,9 +961,7 @@ void Application::loopDrm()
         });
 #endif
 #endif
-#ifdef USE_CEDAR
     SerialInput serialInput(protocol); // TEST-only serial-console navigation
-#endif
 
     g_quit = 0;
     std::signal(SIGINT, onQuitSignal);
@@ -938,7 +971,9 @@ void Application::loopDrm()
     bool uiShowsHome = true;
     bool osdShown = false;
     uint32_t framesAtConnect = drm_display::videoFrames();
+#ifndef NDEBUG
     Uint32 debugTick = 0;
+#endif
     AVFrame *frame = nullptr;
     uint32_t frameId = 0;
 
@@ -977,13 +1012,15 @@ void Application::loopDrm()
         {
             if (_state.showToast == 1)
             {
-                interface.showToast(_state.toast);
+                if (Interface *ui = ensureInterface())
+                    ui->showToast(_state.toast);
                 _state.showToast = now ? now : 1;
                 dirty = true;
             }
             else if (now - _state.showToast >= TOAST_TIME * 1000)
             {
-                interface.hideToast();
+                if (interface)
+                    interface->hideToast();
                 _state.showToast = 0;
                 dirty = true;
             }
@@ -1006,7 +1043,8 @@ void Application::loopDrm()
                           protocol.audioStreamMain.count(),
                           protocol.audioStreamAux.count(),
                           protocol.writeQueue.count());
-            interface.debug(debugBuffer);
+            if (Interface *ui = ensureInterface())
+                ui->debug(debugBuffer);
             dirty = true;
         }
 #endif
@@ -1027,28 +1065,19 @@ void Application::loopDrm()
 #ifdef __linux__
                 touchInput.routeToUi(true);
 #endif
-                // Re-compose and commit the overlay only when LVGL flushed
-                // something, the frame is dirty, or the home screen is not
-                // up yet. Doing it every 50 ms (a full 800x480 clear + copy +
-                // 1.5 MB memcpy into the dumb buffer + atomic commit) kept the
-                // main thread at ~99% whenever no phone was projecting.
-                const bool uiChanged = osd.tick();
+                // LVGL's flushes land straight in the dumb framebuffer, so
+                // presenting is just making sure the plane covers the panel.
+                // An unchanged screen costs one timer tick and nothing else.
+                bool uiChanged = osd.tick();
                 if (dirty || !uiShowsHome)
                 {
-                    // Full repaint: first show, or app-side state change.
-                    SDL_SetRenderDrawColor(uiRenderer, 0, 0, 0, 255);
-                    SDL_RenderClear(uiRenderer);
-                    osd.blit();
-                    drm_display::uiPresent();
+                    // Full repaint: first show, return from video, or an
+                    // app-side state change (the buffer may hold OSD rows).
+                    osd.invalidate();
+                    uiChanged = true;
                 }
-                else if (uiChanged)
-                {
-                    // Only LVGL moved (status text, animation): copy and
-                    // commit just the rows it touched.
-                    const SDL_Rect r = osd.blitDirty();
-                    if (r.h > 0)
-                        drm_display::uiPresentRows(r.y, r.y + r.h);
-                }
+                if (uiChanged)
+                    drm_display::uiShow(0, uiHeight);
                 uiShowsHome = true;
                 osdShown = false;
 
@@ -1059,7 +1088,8 @@ void Application::loopDrm()
 #endif
             {
                 // Home screen (opaque) on the overlay; also covers stale video.
-                if (interface.drawHome(dirty || !uiShowsHome, state, protocol.phoneName()))
+                Interface *ui = ensureInterface();
+                if (ui && ui->drawHome(dirty || !uiShowsHome, state, protocol.phoneName()))
                     drm_display::uiPresent();
                 uiShowsHome = true;
                 osdShown = false;
@@ -1070,12 +1100,15 @@ void Application::loopDrm()
 #if defined(USE_LVGL) && defined(__linux__)
             touchInput.routeToUi(false); // video is up: touch goes to the phone
 #endif
-            // Video plays below; overlay carries only toasts/debug, or hides.
+            // Video plays below; the overlay carries only the toast/debug
+            // band -- committed over just those rows, so the video stays
+            // visible below it -- or hides entirely.
             if (uiShowsHome || dirty)
             {
-                if (interface.drawOsd())
+                const int band = interface ? interface->drawOsd() : 0;
+                if (band > 0)
                 {
-                    drm_display::uiPresent();
+                    drm_display::uiPresentRows(0, band);
                     osdShown = true;
                 }
                 else if (uiShowsHome || osdShown)
@@ -1101,7 +1134,7 @@ void Application::loopDrm()
     drm_display::close();
 #else
     loopHeadless();
-#endif
+#endif /* USE_CEDRUS */
 }
 
 void Application::loop()
@@ -1145,7 +1178,7 @@ void Application::loop()
     if (Settings::keyPipe.value.length() > 2)
         _keyListener = new PipeListener(Settings::keyPipe.value.c_str());
 
-    decoder->start(&protocol.videoStream, protocol.videoCodec());
+    startDecoder(*decoder, protocol, protocol.videoCodec());
     AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
     audioMain.start(&protocol.audioStreamMain);
     audioAux.start(&protocol.audioStreamAux, &audioMain);
@@ -1269,10 +1302,11 @@ void Application::loop()
                 // cleared, copied and presented every iteration, which on the
                 // F1C200s' software renderer took longer than the frame
                 // budget and left the main thread spinning at ~99% while idle.
+                // No clear first: blit() copies the full opaque texture over
+                // every pixel of the target (BLENDMODE_NONE), so a clear
+                // would be a wasted full-surface fill.
                 if (osd.tick() || _state.dirty)
                 {
-                    SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 255);
-                    SDL_RenderClear(_renderer);
                     osd.blit();
                     SDL_RenderPresent(_renderer);
                 }

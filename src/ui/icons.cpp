@@ -89,9 +89,11 @@ const lv_font_t *font(int height)
     // Builtin symbols live in the Montserrat fonts, so mirror the body tier.
     if (height <= 272)
         return &lv_font_montserrat_14;
-    if (height <= 480)
-        return &lv_font_montserrat_20;
-    return &lv_font_montserrat_28;
+#if LV_FONT_MONTSERRAT_28
+    if (height > 480)
+        return &lv_font_montserrat_28;
+#endif
+    return &lv_font_montserrat_20;
 }
 
 bool separateFont()

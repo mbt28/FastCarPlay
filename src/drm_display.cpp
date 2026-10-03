@@ -1,8 +1,9 @@
 #include "drm_display.h"
 
-#if defined(USE_CEDAR) || defined(USE_CEDRUS)
+#ifdef USE_CEDRUS
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
@@ -42,36 +43,58 @@ bool modeset_done = false;
 
 // video plane (primary, NV12 -> DEFE)
 uint32_t vplane = 0;
-// Decoded-frame DRM framebuffers, cached by dma-buf fd. The decoder's frame
+// Decoded-frame DRM framebuffers, cached by dma-buf fd: the decoder's frame
 // pool cycles a small, stable set of fds, so we build each framebuffer once and
-// reuse it instead of AddFB2/RmFB every frame (costly on the ARM926).
-std::map<int, uint32_t> vfbCache;
-uint32_t vframes = 0;
+// reuse it instead of AddFB2/RmFB every frame (costly on the ARM926). The GEM
+// handles are kept so flushVideo() can close them -- RmFB alone leaves them
+// holding dma-buf references on the pool, leaking CMA across decoder rebuilds.
+// Geometry/format are part of the entry so a recycled fd number can never
+// alias a stale framebuffer onto a new buffer.
+struct VFb
+{
+    uint32_t fb = 0;
+    uint32_t handles[4] = {0};
+    int nh = 0;
+    uint32_t w = 0, h = 0, fourcc = 0;
+};
+std::map<int, VFb> vfbCache;
+std::atomic<uint32_t> vframes{0};
 struct PlaneProps
 {
     uint32_t fb, crtc, sx, sy, sw, sh, cx, cy, cw, ch, zpos;
 } vp{}, up{};
 uint32_t P_crtc_mode = 0, P_crtc_active = 0, P_conn_crtc = 0;
 
-// UI overlay plane (ARGB8888) + double-buffered dumb framebuffers
+// Reused atomic request: libdrm reallocs the property array inside, so one
+// request per session instead of an alloc/free per frame.
+drmModeAtomicReq *areq = nullptr;
+
+// UI overlay plane: format follows what the plane supports (RGB565 preferred)
+// and the UI writes into a single dumb framebuffer. The plane is committed
+// over just the band of rows that carries content.
 uint32_t uplane = 0;
+uint32_t ufmt = DRM_FORMAT_ARGB8888;
+int ubpp = 4;
+bool vplane_rgb565 = false; // for the black placeholder fb's format
 struct DumbFb
 {
     uint32_t handle = 0, pitch = 0, fb = 0;
     uint64_t size = 0;
     uint8_t *map = nullptr;
 };
-DumbFb ubuf[2];
-int uback = 0;
+DumbFb ubuf;
 bool ui_ready = false;
 bool ui_visible = false;
+int band_y0 = 0, band_y1 = 0; // rows the plane currently covers
 SDL_Surface *usurface = nullptr;
 SDL_Renderer *urenderer = nullptr;
 
 // black fallback fb for the video plane: some drivers refuse a CRTC with no
 // primary plane, so a UI-only modeset (home screen before any video) may need
-// the primary enabled with something.
+// the primary enabled with something. Freed once real video has replaced it
+// on scanout (and lazily recreated if the UI ever needs it again).
 DumbFb blackfb;
+int blackfb_live = 0; // video commits since blackfb left the plane
 
 uint32_t prop_id(uint32_t obj_id, uint32_t obj_type, const char *name)
 {
@@ -136,6 +159,16 @@ void get_plane_props(uint32_t plane, PlaneProps &p)
     p.zpos = prop_id(plane, DRM_MODE_OBJECT_PLANE, "zpos"); // optional
 }
 
+// A fresh (or reset) atomic request to fill. Caller holds the mutex.
+drmModeAtomicReq *request()
+{
+    if (!areq)
+        areq = drmModeAtomicAlloc();
+    else
+        drmModeAtomicSetCursor(areq, 0);
+    return areq;
+}
+
 // Append the initial connector/CRTC/mode setup if it hasn't happened yet.
 // Returns the commit flags to use. Caller holds the mutex.
 uint32_t add_modeset(drmModeAtomicReq *req)
@@ -163,32 +196,22 @@ void add_plane_fullscreen(drmModeAtomicReq *req, uint32_t plane,
     drmModeAtomicAddProperty(req, plane, p.ch, ch);
 }
 
-bool create_dumb(DumbFb &b, uint32_t fmt)
+// The UI plane over rows [y0, y1) only: a toast band commits a short plane
+// above the video instead of covering the whole screen (with no per-pixel
+// alpha in RGB565, a full-height plane would black the video out).
+void add_plane_band(drmModeAtomicReq *req, uint32_t plane,
+                    const PlaneProps &p, uint32_t fb, int y0, int y1)
 {
-    drm_mode_create_dumb creq{};
-    creq.width = cw;
-    creq.height = ch;
-    creq.bpp = 32;
-    if (drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq))
-    { perror("[Drm] CREATE_DUMB"); return false; }
-    b.handle = creq.handle;
-    b.pitch = creq.pitch;
-    b.size = creq.size;
-
-    drm_mode_map_dumb mreq{};
-    mreq.handle = b.handle;
-    if (drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq))
-    { perror("[Drm] MAP_DUMB"); return false; }
-    b.map = (uint8_t *)mmap(nullptr, b.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mreq.offset);
-    if (b.map == MAP_FAILED) { b.map = nullptr; perror("[Drm] mmap dumb"); return false; }
-    memset(b.map, 0, b.size);
-
-    uint32_t handles[4] = {b.handle, 0, 0, 0};
-    uint32_t pitches[4] = {b.pitch, 0, 0, 0};
-    uint32_t offsets[4] = {0, 0, 0, 0};
-    if (drmModeAddFB2(fd, cw, ch, fmt, handles, pitches, offsets, &b.fb, 0))
-    { perror("[Drm] AddFB2 dumb"); return false; }
-    return true;
+    drmModeAtomicAddProperty(req, plane, p.fb, fb);
+    drmModeAtomicAddProperty(req, plane, p.crtc, crtc);
+    drmModeAtomicAddProperty(req, plane, p.sx, 0);
+    drmModeAtomicAddProperty(req, plane, p.sy, (uint64_t)y0 << 16);
+    drmModeAtomicAddProperty(req, plane, p.sw, (uint64_t)cw << 16);
+    drmModeAtomicAddProperty(req, plane, p.sh, (uint64_t)(y1 - y0) << 16);
+    drmModeAtomicAddProperty(req, plane, p.cx, 0);
+    drmModeAtomicAddProperty(req, plane, p.cy, y0);
+    drmModeAtomicAddProperty(req, plane, p.cw, cw);
+    drmModeAtomicAddProperty(req, plane, p.ch, y1 - y0);
 }
 
 void destroy_dumb(DumbFb &b)
@@ -202,6 +225,34 @@ void destroy_dumb(DumbFb &b)
         drmIoctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dreq);
         b.handle = 0;
     }
+}
+
+bool create_dumb(DumbFb &b, uint32_t fmt, int bpp)
+{
+    drm_mode_create_dumb creq{};
+    creq.width = cw;
+    creq.height = ch;
+    creq.bpp = bpp * 8;
+    if (drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq))
+    { perror("[Drm] CREATE_DUMB"); return false; }
+    b.handle = creq.handle;
+    b.pitch = creq.pitch;
+    b.size = creq.size;
+
+    drm_mode_map_dumb mreq{};
+    mreq.handle = b.handle;
+    if (drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq))
+    { perror("[Drm] MAP_DUMB"); destroy_dumb(b); return false; }
+    b.map = (uint8_t *)mmap(nullptr, b.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mreq.offset);
+    if (b.map == MAP_FAILED) { b.map = nullptr; perror("[Drm] mmap dumb"); destroy_dumb(b); return false; }
+    memset(b.map, 0, b.size);
+
+    uint32_t handles[4] = {b.handle, 0, 0, 0};
+    uint32_t pitches[4] = {b.pitch, 0, 0, 0};
+    uint32_t offsets[4] = {0, 0, 0, 0};
+    if (drmModeAddFB2(fd, cw, ch, fmt, handles, pitches, offsets, &b.fb, 0))
+    { perror("[Drm] AddFB2 dumb"); destroy_dumb(b); return false; }
+    return true;
 }
 
 void session_close();
@@ -259,7 +310,8 @@ bool session_try_card(const char *path, const char *tag)
     drmModeFreeResources(res);
 
     // Video plane: prefer the primary that takes NV12 (DEFE-routed).
-    // UI plane: the first non-primary overlay that takes ARGB8888.
+    // UI plane: the first non-primary overlay with a usable RGB format; the
+    // format itself comes from what the plane supports, RGB565 first.
     uint32_t vfallback = 0;
     drmModePlaneRes *prr = drmModeGetPlaneResources(fd);
     if (!prr) return false;
@@ -273,16 +325,34 @@ bool session_try_card(const char *path, const char *tag)
             if (!vplane && plane_has_format(pl, DRM_FORMAT_NV12))
             {
                 if (!vfallback) vfallback = pl->plane_id;
-                if (type == DRM_PLANE_TYPE_PRIMARY) vplane = pl->plane_id;
+                if (type == DRM_PLANE_TYPE_PRIMARY)
+                {
+                    vplane = pl->plane_id;
+                    vplane_rgb565 = plane_has_format(pl, DRM_FORMAT_RGB565);
+                }
             }
-            if (!uplane && type == DRM_PLANE_TYPE_OVERLAY &&
-                plane_has_format(pl, DRM_FORMAT_ARGB8888))
-                uplane = pl->plane_id;
+            if (!uplane && type == DRM_PLANE_TYPE_OVERLAY)
+            {
+                if (plane_has_format(pl, DRM_FORMAT_RGB565))
+                { uplane = pl->plane_id; ufmt = DRM_FORMAT_RGB565; ubpp = 2; }
+                else if (plane_has_format(pl, DRM_FORMAT_ARGB8888))
+                { uplane = pl->plane_id; ufmt = DRM_FORMAT_ARGB8888; ubpp = 4; }
+                else if (plane_has_format(pl, DRM_FORMAT_XRGB8888))
+                { uplane = pl->plane_id; ufmt = DRM_FORMAT_XRGB8888; ubpp = 4; }
+            }
         }
         drmModeFreePlane(pl);
     }
     drmModeFreePlaneResources(prr);
-    if (!vplane) vplane = vfallback;
+    if (!vplane)
+    {
+        vplane = vfallback;
+        if (vplane)
+        {
+            drmModePlane *pl = drmModeGetPlane(fd, vplane);
+            if (pl) { vplane_rgb565 = plane_has_format(pl, DRM_FORMAT_RGB565); drmModeFreePlane(pl); }
+        }
+    }
     if (!vplane) { fprintf(stderr, "[%s] no NV12 plane found\n", tag); return false; }
     if (uplane == vplane) uplane = 0;
 
@@ -296,10 +366,10 @@ bool session_try_card(const char *path, const char *tag)
     if (drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &mode_blob))
     { fprintf(stderr, "[%s] CreatePropertyBlob: %s\n", tag, strerror(errno)); return false; }
 
-    fprintf(stderr, "[Drm] crtc=%u %ux%u video-plane=%u ui-plane=%u\n",
-            crtc, cw, ch, vplane, uplane);
+    fprintf(stderr, "[Drm] crtc=%u %ux%u video-plane=%u ui-plane=%u ui-format=%.4s\n",
+            crtc, cw, ch, vplane, uplane, (const char *)&ufmt);
     if (!uplane)
-        fprintf(stderr, "[Drm] no ARGB overlay plane: UI overlay disabled\n");
+        fprintf(stderr, "[Drm] no RGB overlay plane: UI overlay disabled\n");
     return true;
 }
 
@@ -335,7 +405,21 @@ bool session_open(const char *tag)
 void flush_video_fbs()
 {
     for (auto &kv : vfbCache)
-        drmModeRmFB(fd, kv.second);
+    {
+        drmModeRmFB(fd, kv.second.fb);
+        // Close the GEM handles too (deduped: NV12 planes in one dma-buf share
+        // a handle). RmFB alone keeps them referencing the decoder's buffers.
+        for (int i = 0; i < kv.second.nh; i++)
+        {
+            uint32_t h = kv.second.handles[i];
+            if (!h) continue;
+            bool dup = false;
+            for (int j = 0; j < i; j++)
+                if (kv.second.handles[j] == h) { dup = true; break; }
+            if (!dup)
+                drmCloseBufferHandle(fd, h);
+        }
+    }
     vfbCache.clear();
 }
 
@@ -343,19 +427,98 @@ void session_close()
 {
     if (urenderer) { SDL_DestroyRenderer(urenderer); urenderer = nullptr; }
     if (usurface) { SDL_FreeSurface(usurface); usurface = nullptr; }
-    destroy_dumb(ubuf[0]);
-    destroy_dumb(ubuf[1]);
+    destroy_dumb(ubuf);
     destroy_dumb(blackfb);
+    blackfb_live = 0;
     ui_ready = false;
     ui_visible = false;
+    band_y0 = band_y1 = 0;
     flush_video_fbs();
+    if (areq) { drmModeAtomicFree(areq); areq = nullptr; }
     if (mode_blob) { drmModeDestroyPropertyBlob(fd, mode_blob); mode_blob = 0; }
     if (fd >= 0) { ::close(fd); fd = -1; }
     conn = crtc = cw = ch = 0;
     cwmm = chmm = 0;
     vplane = uplane = 0;
-    vframes = 0;
+    ufmt = DRM_FORMAT_ARGB8888;
+    ubpp = 4;
+    vplane_rgb565 = false;
+    vframes.store(0, std::memory_order_relaxed);
     modeset_done = false;
+}
+
+// Create the UI dumb framebuffer (lazy). Caller holds the mutex.
+bool ui_begin_locked()
+{
+    if (fd < 0 || !uplane)
+        return false;
+    if (ui_ready)
+        return true;
+    if (!create_dumb(ubuf, ufmt, ubpp))
+        return false;
+    ui_ready = true;
+    return true;
+}
+
+// Commit the UI plane over [y0, y1). Caller holds the mutex.
+bool ui_show_locked(int y0, int y1)
+{
+    if (!ui_ready)
+        return false;
+    if (y0 < 0) y0 = 0;
+    if (y1 > (int)ch) y1 = (int)ch;
+    if (y1 <= y0)
+        return false;
+    if (ui_visible && band_y0 == y0 && band_y1 == y1)
+        return true; // already showing exactly this band
+
+    drmModeAtomicReq *req = request();
+    uint32_t flags = add_modeset(req);
+    add_plane_band(req, uplane, up, ubuf.fb, y0, y1);
+    if (up.zpos)
+        drmModeAtomicAddProperty(req, uplane, up.zpos, 1);
+
+    // Once the mode is up, commit without waiting for the flip: a blocking
+    // commit parks the caller for a vblank (~16 ms) on every UI update.
+    // EBUSY means the previous flip is still pending -- then wait for it.
+    int crc = -1;
+    if (modeset_done)
+    {
+        crc = drmModeAtomicCommit(fd, req, flags | DRM_MODE_ATOMIC_NONBLOCK, nullptr);
+        if (crc && errno != EBUSY)
+            crc = -1;
+    }
+    if (crc)
+        crc = drmModeAtomicCommit(fd, req, flags, nullptr);
+    if (crc && !modeset_done && blackfb.fb == 0)
+    {
+        // Some drivers refuse to enable the CRTC without the primary plane;
+        // retry the UI-only modeset with a black fb on the video plane. The
+        // first real video frame simply replaces it (and then frees it).
+        if (create_dumb(blackfb, vplane_rgb565 ? DRM_FORMAT_RGB565 : DRM_FORMAT_XRGB8888,
+                        vplane_rgb565 ? 2 : 4))
+        {
+            req = request();
+            flags = add_modeset(req);
+            add_plane_band(req, uplane, up, ubuf.fb, y0, y1);
+            if (up.zpos)
+                drmModeAtomicAddProperty(req, uplane, up.zpos, 1);
+            add_plane_fullscreen(req, vplane, vp, blackfb.fb, cw, ch);
+            crc = drmModeAtomicCommit(fd, req, flags, nullptr);
+            blackfb_live = 0;
+        }
+    }
+    if (crc)
+    {
+        static bool warned = false;
+        if (!warned) { warned = true; fprintf(stderr, "[Drm] ui commit failed: %s\n", strerror(errno)); }
+        return false;
+    }
+    modeset_done = true;
+    ui_visible = true;
+    band_y0 = y0;
+    band_y1 = y1;
+    return true;
 }
 } // namespace
 
@@ -390,16 +553,36 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
     int np = nplanes < 4 ? nplanes : 4;
 
     // Reuse the framebuffer for this pool buffer if we've already built one.
-    // Keyed by the primary plane's fd, which is stable per pool buffer. Only on
-    // a cache miss do we import the dma-buf handles + create the framebuffer.
+    // Keyed by the primary plane's fd (stable per pool buffer) and checked
+    // against geometry/format, so a recycled fd number after a pool rebuild
+    // can never scan out a stale framebuffer. Only on a miss do we import the
+    // dma-buf handles + create the framebuffer.
     uint32_t fb = 0;
     auto cached = vfbCache.find(dmabufFds[0]);
-    if (cached != vfbCache.end())
+    if (cached != vfbCache.end() &&
+        cached->second.w == (uint32_t)w && cached->second.h == (uint32_t)h &&
+        cached->second.fourcc == fourcc)
     {
-        fb = cached->second;
+        fb = cached->second.fb;
     }
     else
     {
+        if (cached != vfbCache.end())
+        {
+            // Same fd number, different buffer: retire the stale entry.
+            drmModeRmFB(fd, cached->second.fb);
+            for (int i = 0; i < cached->second.nh; i++)
+            {
+                uint32_t hn = cached->second.handles[i];
+                bool dup = false;
+                for (int j = 0; j < i; j++)
+                    if (cached->second.handles[j] == hn) { dup = true; break; }
+                if (hn && !dup)
+                    drmCloseBufferHandle(fd, hn);
+            }
+            vfbCache.erase(cached);
+        }
+        VFb entry;
         uint32_t handles[4] = {0}, pit[4] = {0}, off[4] = {0};
         uint64_t mods[4] = {0};
         for (int i = 0; i < np; i++)
@@ -418,15 +601,30 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
         if (drmModeAddFB2WithModifiers(fd, w, h, fourcc, handles, pit, off, mods,
                                        &fb, DRM_MODE_FB_MODIFIERS))
         { fprintf(stderr, "[%s] AddFB2WithModifiers: %s\n", tag, strerror(errno)); return false; }
-        vfbCache[dmabufFds[0]] = fb;
+        entry.fb = fb;
+        memcpy(entry.handles, handles, sizeof(handles));
+        entry.nh = np;
+        entry.w = (uint32_t)w;
+        entry.h = (uint32_t)h;
+        entry.fourcc = fourcc;
+        vfbCache[dmabufFds[0]] = entry;
     }
 
-    drmModeAtomicReq *req = drmModeAtomicAlloc();
+    drmModeAtomicReq *req = request();
     uint32_t flags = add_modeset(req);
     add_plane_fullscreen(req, vplane, vp, fb, srcW, srcH);
 
-    int crc = drmModeAtomicCommit(fd, req, flags, nullptr);
-    drmModeAtomicFree(req);
+    // Non-blocking commit so the decode thread never parks on the vblank;
+    // EBUSY (previous flip still pending) falls back to the blocking wait.
+    int crc = -1;
+    if (modeset_done)
+    {
+        crc = drmModeAtomicCommit(fd, req, flags | DRM_MODE_ATOMIC_NONBLOCK, nullptr);
+        if (crc && errno != EBUSY)
+            crc = -1;
+    }
+    if (crc)
+        crc = drmModeAtomicCommit(fd, req, flags, nullptr);
     if (crc)
     {
         static bool warned = false;
@@ -434,18 +632,25 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
         return false; // fb stays cached; a transient commit failure won't drop it
     }
     modeset_done = true;
-    vframes++;
+    vframes.fetch_add(1, std::memory_order_relaxed);
+
+    // Video owns the primary plane now; the black placeholder can go. Wait one
+    // extra commit so the flip that replaced it has certainly completed.
+    if (blackfb.fb && ++blackfb_live >= 2)
+    {
+        destroy_dumb(blackfb);
+        blackfb_live = 0;
+    }
 
     static int frames = 0;
     static int64_t t0 = 0;
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-    if (t0 == 0) t0 = now;
-    if (++frames >= 60 || now - t0 >= 2000)
+    if (++frames >= 60)
     {
-        if (now > t0)
-            fprintf(stderr, "[%s] decode %.1f fps  %dx%d (DEFE)\n",
-                    tag, frames * 1000.0 / (now - t0), w, h);
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        if (t0 > 0 && now > t0)
+            fprintf(stderr, "[%s] decode %d fps  %dx%d (DEFE)\n",
+                    tag, (int)(frames * 1000 / (now - t0)), w, h);
         frames = 0;
         t0 = now;
     }
@@ -454,38 +659,89 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
 
 uint32_t videoFrames()
 {
+    return vframes.load(std::memory_order_relaxed);
+}
+
+void flushVideo()
+{
     std::lock_guard<std::mutex> lock(mtx);
-    return vframes;
+    if (fd >= 0)
+        flush_video_fbs();
+}
+
+uint32_t uiFormat()
+{
+    return ufmt;
+}
+
+int uiBpp()
+{
+    return ubpp;
+}
+
+bool uiBegin()
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    return ui_begin_locked();
+}
+
+void uiWriteRect(int x, int y, int w, int h, const uint8_t *px, int pitch)
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    if (!ui_ready || !ubuf.map)
+        return;
+    if (x < 0 || y < 0 || x + w > (int)cw || y + h > (int)ch || w <= 0 || h <= 0)
+        return;
+    uint8_t *dst = ubuf.map + (size_t)y * ubuf.pitch + (size_t)x * ubpp;
+    const size_t row = (size_t)w * ubpp;
+    for (int i = 0; i < h; i++)
+        memcpy(dst + (size_t)i * ubuf.pitch, px + (size_t)i * pitch, row);
+}
+
+bool uiShow(int y0, int y1)
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    return ui_show_locked(y0, y1);
 }
 
 SDL_Renderer *uiRenderer()
 {
     std::lock_guard<std::mutex> lock(mtx);
-    if (fd < 0 || !uplane)
+    if (!ui_begin_locked())
         return nullptr;
-    if (ui_ready)
+    if (urenderer)
         return urenderer;
 
-    if (!create_dumb(ubuf[0], DRM_FORMAT_ARGB8888) ||
-        !create_dumb(ubuf[1], DRM_FORMAT_ARGB8888))
-        return nullptr;
-
-    // Offscreen composition surface; SDL's ARGB8888 matches DRM's (both are
-    // the same little-endian 32-bit word order).
-    usurface = SDL_CreateRGBSurfaceWithFormat(0, cw, ch, 32, SDL_PIXELFORMAT_ARGB8888);
+    // Offscreen composition surface in the plane's own format, so the copy
+    // into the dumb buffer is a straight row memcpy.
+    const uint32_t sdlFmt = ufmt == DRM_FORMAT_RGB565 ? SDL_PIXELFORMAT_RGB565
+                                                      : SDL_PIXELFORMAT_ARGB8888;
+    usurface = SDL_CreateRGBSurfaceWithFormat(0, cw, ch, ubpp * 8, sdlFmt);
     if (!usurface) { fprintf(stderr, "[Drm] ui surface: %s\n", SDL_GetError()); return nullptr; }
     urenderer = SDL_CreateSoftwareRenderer(usurface);
     if (!urenderer) { fprintf(stderr, "[Drm] ui renderer: %s\n", SDL_GetError()); return nullptr; }
     SDL_SetRenderDrawBlendMode(urenderer, SDL_BLENDMODE_BLEND);
-
-    ui_ready = true;
     return urenderer;
 }
 
-// Rows copied by the previous present: the other dumb buffer still lacks them.
-static int ui_prev_y0 = 0, ui_prev_y1 = 0;
+static bool uiPresentRange(int y0, int y1)
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    if (!ui_ready || !usurface)
+        return false;
+    if (y0 < 0) y0 = 0;
+    if (y1 > (int)ch) y1 = (int)ch;
+    if (y1 <= y0)
+        return false;
 
-static bool uiPresentRange(int y0, int y1);
+    // Copy the changed rows of the composed surface into the dumb buffer
+    // (row-wise: pitches may differ), then put the plane over them.
+    const uint8_t *src = (const uint8_t *)usurface->pixels;
+    for (int y = y0; y < y1; y++)
+        memcpy(ubuf.map + (size_t)y * ubuf.pitch, src + (size_t)y * usurface->pitch,
+               (size_t)cw * ubpp);
+    return ui_show_locked(y0, y1);
+}
 
 bool uiPresent()
 {
@@ -497,90 +753,20 @@ bool uiPresentRows(int y0, int y1)
     return uiPresentRange(y0, y1);
 }
 
-static bool uiPresentRange(int y0, int y1)
-{
-    std::lock_guard<std::mutex> lock(mtx);
-    if (!ui_ready)
-        return false;
-
-    // Copy the changed rows of the composed surface into the back dumb buffer
-    // (row-wise: pitches may differ). The back buffer is two presents old, so
-    // include the rows the previous present changed as well.
-    int c0 = y0, c1 = y1;
-    if (ui_prev_y1 > ui_prev_y0)
-    {
-        if (ui_prev_y0 < c0) c0 = ui_prev_y0;
-        if (ui_prev_y1 > c1) c1 = ui_prev_y1;
-    }
-    if (c0 < 0) c0 = 0;
-    if (c1 > (int)ch) c1 = (int)ch;
-    DumbFb &b = ubuf[uback];
-    const uint8_t *src = (const uint8_t *)usurface->pixels;
-    for (int y = c0; y < c1; y++)
-        memcpy(b.map + y * b.pitch, src + y * usurface->pitch, cw * 4);
-    ui_prev_y0 = y0;
-    ui_prev_y1 = y1;
-
-    drmModeAtomicReq *req = drmModeAtomicAlloc();
-    uint32_t flags = add_modeset(req);
-    add_plane_fullscreen(req, uplane, up, b.fb, cw, ch);
-    if (up.zpos)
-        drmModeAtomicAddProperty(req, uplane, up.zpos, 1);
-
-    // Once the mode is up, commit without waiting for the flip: a blocking
-    // commit parks the main loop for a vblank (~16 ms) on every UI update.
-    // EBUSY means the previous flip is still pending -- then wait for it.
-    int crc = -1;
-    if (modeset_done)
-    {
-        crc = drmModeAtomicCommit(fd, req, flags | DRM_MODE_ATOMIC_NONBLOCK, nullptr);
-        if (crc && errno != EBUSY)
-            crc = -1;
-    }
-    if (crc)
-        crc = drmModeAtomicCommit(fd, req, flags, nullptr);
-    if (crc && !modeset_done && blackfb.fb == 0)
-    {
-        // Some drivers refuse to enable the CRTC without the primary plane;
-        // retry the UI-only modeset with a black fb on the video plane. The
-        // first real video frame simply replaces it.
-        if (create_dumb(blackfb, DRM_FORMAT_XRGB8888))
-        {
-            drmModeAtomicFree(req);
-            req = drmModeAtomicAlloc();
-            flags = add_modeset(req);
-            add_plane_fullscreen(req, uplane, up, b.fb, cw, ch);
-            if (up.zpos)
-                drmModeAtomicAddProperty(req, uplane, up.zpos, 1);
-            add_plane_fullscreen(req, vplane, vp, blackfb.fb, cw, ch);
-            crc = drmModeAtomicCommit(fd, req, flags, nullptr);
-        }
-    }
-    drmModeAtomicFree(req);
-    if (crc)
-    {
-        static bool warned = false;
-        if (!warned) { warned = true; fprintf(stderr, "[Drm] ui commit failed: %s\n", strerror(errno)); }
-        return false;
-    }
-    modeset_done = true;
-    ui_visible = true;
-    uback ^= 1;
-    return true;
-}
-
 void uiHide()
 {
     std::lock_guard<std::mutex> lock(mtx);
     if (!ui_ready || !ui_visible || !modeset_done)
         return;
-    drmModeAtomicReq *req = drmModeAtomicAlloc();
+    drmModeAtomicReq *req = request();
     drmModeAtomicAddProperty(req, uplane, up.fb, 0);
     drmModeAtomicAddProperty(req, uplane, up.crtc, 0);
     if (drmModeAtomicCommit(fd, req, 0, nullptr) == 0)
+    {
         ui_visible = false;
-    drmModeAtomicFree(req);
+        band_y0 = band_y1 = 0;
+    }
 }
 } // namespace drm_display
 
-#endif /* USE_CEDAR || USE_CEDRUS */
+#endif /* USE_CEDRUS */

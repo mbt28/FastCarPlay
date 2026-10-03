@@ -45,7 +45,7 @@ RendererText::~RendererText()
     }
 };
 
-bool RendererText::prepare(SDL_Renderer *renderer, std::string text, SDL_Color color)
+bool RendererText::prepare(SDL_Renderer *renderer, const std::string &text, SDL_Color color)
 {
     if (!_texture || _text.compare(text) != 0 || !sameColor(_color, color))
     {
@@ -129,12 +129,15 @@ SDL_Rect RendererImage::draw(SDL_Renderer *renderer, int w, int h)
         _texture = SDL_CreateTextureFromSurface(renderer, _surface);
         if (!_texture)
             return {0, 0, 0, 0};
-        SDL_GetRendererOutputSize(renderer, &width, &height);
+        // The texture carries the pixels from here on; the decoded surface
+        // (full image size, uncompressed) has no further use. width/height
+        // keep the image's own dimensions for the scale below.
+        SDL_FreeSurface(_surface);
+        _surface = nullptr;
     }
 
-    float scale = 1.0 * w / width;
-
-    SDL_Rect dst = {0, 0, w, (int)(height*scale)};
+    // Fill the target width, keep the image's aspect ratio.
+    SDL_Rect dst = {0, 0, w, height * w / (width > 0 ? width : w)};
     SDL_RenderCopy(renderer, _texture, nullptr, &dst);
     return dst;
 }

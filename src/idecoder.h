@@ -13,7 +13,7 @@ extern "C"
 
 // Common interface for the video-decoder backends so the backend can be chosen
 // at runtime (the "cedar-decode" setting): the software avcodec Decoder, or the
-// hardware CedarDecoder (compiled in only when built with USE_CEDAR). Both push
+// hardware V4l2DrmDecoder (compiled in only when built with USE_CEDRUS). Both push
 // frames into the shared VideoBuffer for the renderer.
 class IDecoder
 {
