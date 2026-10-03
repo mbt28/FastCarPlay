@@ -262,7 +262,7 @@ void PcmAudio::loop()
             _config = config;
         }
 
-        if (difftime(time(NULL), playEnd) > AUDIO_RESET_SECONDS)
+        if (device != 0 && difftime(time(NULL), playEnd) > AUDIO_RESET_SECONDS)
             SDL_ClearQueuedAudio(device);
 
         if (_fader)
@@ -272,6 +272,15 @@ void PcmAudio::loop()
         if (_fader)
             _fader->fade(false);
         SDL_PauseAudioDevice(device, 1);
+        // Release the hardware while idle. The F1C200s codec has ONE playback
+        // stream and alsa-lib's default device has no software mixer, so a
+        // paused-but-open "main" made every "aux" open (calls, Siri, nav) fail
+        // with EBUSY (seen 2026-10-03: no call audio). Reopening on the next
+        // segment costs the codec's power-up delay, which the prefill absorbs.
+        SDL_ClearQueuedAudio(device);
+        SDL_CloseAudioDevice(device);
+        device = 0;
+        _config = ChannelConfig{}; // forces a fresh open for the next segment
         playEnd = time(NULL);
         log_d("Stop playing %s %dkHz %s",
               _name.c_str(),
