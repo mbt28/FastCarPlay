@@ -144,6 +144,10 @@ private:
         std::atomic<uint8_t> payloadType{0};
         int64_t streamId = 0;
         int rate = 16000;     // mic capture + RTP clock rate
+        // Uplink codec the phone negotiated for this input stream: Pcm (wired
+        // CarPlay) is sent as-is; Opus (wireless voice: telephony/Siri) is
+        // encoded with libopus before sealing. AAC never appears on the uplink.
+        cp_audio::Codec uplinkCodec = cp_audio::Codec::Pcm;
         uint64_t uplinkGen = 0; // supersede tag: only the newest input stream keeps the mic
     };
 

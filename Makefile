@@ -42,7 +42,10 @@ TARGET_NAME := fastcarplay
 
 all: release
 
-LDOPTIONS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl) -pthread
+# opus: the fixed-point Opus encoder for the wireless CarPlay mic uplink (decode
+# still rides libavcodec's libopus wrapper). <opus/opus.h> resolves via the
+# sysroot's default include path, so only the library (-lopus) is added here.
+LDOPTIONS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl opus) -pthread
 LDFLAGS :=
 CXXCOMMON := -Wall -std=c++17 -Isrc -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
 CCOMMON := -Wall -std=c99 -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto

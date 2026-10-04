@@ -16,6 +16,7 @@
 struct AVCodecContext;
 struct AVPacket;
 struct AVFrame;
+struct OpusDecoder;
 
 namespace cp_audio
 {
@@ -58,6 +59,11 @@ private:
     AVCodecContext *_ctx = nullptr;
     AVPacket *_pkt = nullptr;
     AVFrame *_frame = nullptr;
+    // OPUS is decoded with libopus DIRECTLY to int16 (fixed-point): ffmpeg's
+    // libopus wrapper only decodes to float, and float->S16 on this FPU-less
+    // core is soft-float and dominates the cost. AAC still uses libavcodec above.
+    struct OpusDecoder *_opusDec = nullptr;
+    std::vector<int16_t> _opusBuf; // reused opus_decode output (int16, per-call)
 };
 
 } // namespace cp_audio

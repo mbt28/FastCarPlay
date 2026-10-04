@@ -10,6 +10,8 @@ extern "C"
 #include <libavutil/samplefmt.h>
 }
 
+#include <opus/opus.h> // OPUS decoded directly to int16 (fixed-point), not via ffmpeg's float path
+
 #include "common/logger.h"
 
 namespace cp_audio
@@ -48,6 +50,7 @@ Decoder::~Decoder()
     if (_frame) av_frame_free(&_frame);
     if (_pkt) av_packet_free(&_pkt);
     if (_ctx) avcodec_free_context(&_ctx);
+    if (_opusDec) opus_decoder_destroy(_opusDec);
 }
 
 bool Decoder::init(Codec codec, int rate, int channels, bool upmixToStereo)
@@ -61,53 +64,57 @@ bool Decoder::init(Codec codec, int rate, int channels, bool upmixToStereo)
     if (codec == Codec::Pcm)
         return true; // no libavcodec context; passthrough + byte-swap
 
-    const AVCodecID id = codec == Codec::AacLc ? AV_CODEC_ID_AAC : AV_CODEC_ID_OPUS;
-    // Prefer integer-only decoders: the F1C200s' ARM926 has no FPU, so the
-    // default float AAC decoder runs on soft-float emulation and burns most of
-    // the core (measured 2026-10-03: main thread 61% during AAC-LC playback).
-    // aac_fixed outputs S16P directly, which the conversion below handles.
-    const AVCodec *dec = nullptr;
-    if (codec == Codec::AacLc)
-        dec = avcodec_find_decoder_by_name("aac_fixed");
-    else
-        dec = avcodec_find_decoder_by_name("libopus"); // fixed-point libopus if built in
+    if (codec == Codec::Opus)
+    {
+        // Decode OPUS with libopus DIRECTLY to int16. opus_decode() is
+        // fixed-point here and emits S16 with no float step, whereas ffmpeg's
+        // libopus wrapper only decodes to float -- and float->S16 per sample on
+        // this FPU-less core is soft-float and dominates the cost. The decoder
+        // rate is independent of the packet's encoded rate (opus resamples
+        // internally), so a 48k decoder handles the phone's 16/24k voice packets
+        // and we avoid a separate resampler too.
+        int err = 0;
+        _opusDec = opus_decoder_create(rate, channels, &err);
+        if (!_opusDec || err != OPUS_OK)
+        {
+            log_e("[cp-audio] opus_decoder_create(%d,%d) failed: %d", rate, channels, err);
+            return false;
+        }
+        log_i("[cp-audio] OPUS decoder: libopus int16 %dHz %dch%s", rate, channels,
+              _upmix ? " (upmix->stereo)" : "");
+        return true;
+    }
+
+    // AAC-LC via libavcodec's FIXED-POINT decoder: the F1C200s' ARM926 has no
+    // FPU, so the default float AAC decoder runs on soft-float and burns most of
+    // the core (measured 2026-10-03: 61% during AAC-LC playback). aac_fixed
+    // emits S32P, which appendFrame() takes the top 16 bits of.
+    const AVCodec *dec = avcodec_find_decoder_by_name("aac_fixed");
     if (!dec)
-        dec = avcodec_find_decoder(id);
+        dec = avcodec_find_decoder(AV_CODEC_ID_AAC);
     if (!dec)
     {
-        log_e("[cp-audio] no %s decoder in libavcodec", codec == Codec::AacLc ? "AAC" : "OPUS");
+        log_e("[cp-audio] no AAC decoder in libavcodec");
         return false;
     }
-    log_i("[cp-audio] %s decoder: %s", codec == Codec::AacLc ? "AAC" : "OPUS", dec->name);
+    log_i("[cp-audio] AAC decoder: %s", dec->name);
     _ctx = avcodec_alloc_context3(dec);
     if (!_ctx)
         return false;
     _ctx->sample_rate = rate;
     av_channel_layout_default(&_ctx->ch_layout, channels);
 
-    if (codec == Codec::AacLc)
-    {
-        // Apple ships raw AAC-LC access units (no ADTS); the decoder needs the
-        // 2-byte AudioSpecificConfig: objectType(5)=2 | freqIndex(4) | channels(4).
-        const int asc = ((2 << 11) | (aacFreqIndex(rate) << 7) | (channels << 3)) & 0xffff;
-        _ctx->extradata = (uint8_t *)av_mallocz(2 + AV_INPUT_BUFFER_PADDING_SIZE);
-        _ctx->extradata[0] = (uint8_t)(asc >> 8);
-        _ctx->extradata[1] = (uint8_t)(asc & 0xff);
-        _ctx->extradata_size = 2;
-    }
-    else // OPUS: a minimal OpusHead so the decoder knows channels/rate.
-    {
-        static const uint8_t head[19] = {'O',  'p',  'u',  's',  'H', 'e', 'a',  'd',  0x01, 0x01,
-                                         0x00, 0x00, 0x80, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x00};
-        _ctx->extradata = (uint8_t *)av_mallocz(sizeof(head) + AV_INPUT_BUFFER_PADDING_SIZE);
-        std::memcpy(_ctx->extradata, head, sizeof(head));
-        _ctx->extradata[9] = (uint8_t)channels; // channel count
-        _ctx->extradata_size = sizeof(head);
-    }
+    // Apple ships raw AAC-LC access units (no ADTS); the decoder needs the
+    // 2-byte AudioSpecificConfig: objectType(5)=2 | freqIndex(4) | channels(4).
+    const int asc = ((2 << 11) | (aacFreqIndex(rate) << 7) | (channels << 3)) & 0xffff;
+    _ctx->extradata = (uint8_t *)av_mallocz(2 + AV_INPUT_BUFFER_PADDING_SIZE);
+    _ctx->extradata[0] = (uint8_t)(asc >> 8);
+    _ctx->extradata[1] = (uint8_t)(asc & 0xff);
+    _ctx->extradata_size = 2;
 
     if (avcodec_open2(_ctx, dec, nullptr) < 0)
     {
-        log_e("[cp-audio] failed to open %s decoder", codec == Codec::AacLc ? "AAC" : "OPUS");
+        log_e("[cp-audio] failed to open AAC decoder");
         avcodec_free_context(&_ctx);
         return false;
     }
@@ -181,6 +188,34 @@ bool Decoder::decode(const uint8_t *au, int len, std::vector<int16_t> &out)
                 out.push_back(s);
         }
         return true;
+    }
+
+    if (_codec == Codec::Opus)
+    {
+        // libopus direct -> int16, no float and no ffmpeg. One RTP payload is one
+        // opus packet; a packet is at most 120 ms/ch = 5760 samples @48k.
+        const int maxFrame = 5760;
+        if ((int)_opusBuf.size() < maxFrame * _srcChannels)
+            _opusBuf.resize((size_t)maxFrame * _srcChannels);
+        const int n = opus_decode(_opusDec, au, len, _opusBuf.data(), maxFrame, 0);
+        if (n < 0)
+        {
+            log_w("[cp-audio] opus_decode failed: %d", n);
+            return false;
+        }
+        const int ch = _srcChannels;
+        const bool dup = _upmix && ch == 1;
+        size_t base = out.size();
+        out.resize(base + (size_t)n * (dup ? 2 : ch));
+        int16_t *w = out.data() + base;
+        const int16_t *r = _opusBuf.data();
+        for (int i = 0; i < n; i++)
+        {
+            for (int c = 0; c < ch; c++)
+                *w++ = *r++;
+            if (dup) { w[0] = w[-1]; w++; } // mono -> stereo
+        }
+        return n > 0;
     }
 
     _pkt->data = (uint8_t *)au;
