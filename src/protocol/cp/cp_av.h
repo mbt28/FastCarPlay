@@ -17,11 +17,13 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <netinet/in.h>
+#include <sys/socket.h> // sockaddr_storage, socklen_t
 
 #include "cp_audio.h"
 #include "cp_rtsp.h"
@@ -128,6 +130,21 @@ private:
         int ctrlFd = -1; // UDP RTCP control socket (audio only)
         uint16_t port = 0;
         std::thread thread;
+
+        // Microphone uplink, for input-capable audio streams (type 100) only.
+        // The downlink audioLoop latches the phone's source address and RTP
+        // payload type here on the first inbound packet; uplinkThread then
+        // seals captured mic frames with the per-stream Input key and sends
+        // them back to that address. Held via unique_ptr in _streams, so the
+        // atomics never force a move/copy of the Listener itself.
+        std::thread uplinkThread;
+        std::atomic<bool> havePeer{false};
+        struct sockaddr_storage peer{};
+        socklen_t peerLen = 0;
+        std::atomic<uint8_t> payloadType{0};
+        int64_t streamId = 0;
+        int rate = 16000;     // mic capture + RTP clock rate
+        uint64_t uplinkGen = 0; // supersede tag: only the newest input stream keeps the mic
     };
 
     // Bind an ephemeral dual-stack TCP port; returns the port (0 on failure).
@@ -151,9 +168,16 @@ private:
     void sendEventCommand(int fd, const Bytes &body);
     void screenLoop(int fd, int64_t streamId);
     // Audio is UDP/RTP: receive on the data socket, drain RTCP on the control
-    // socket, decrypt each packet, decode the access unit, and emit PCM.
+    // socket, decrypt each packet, decode the access unit, and emit PCM. When
+    // `uplink` is non-null this is an input-capable stream, and the loop also
+    // latches the phone's source address + RTP payload type into it on the
+    // first inbound packet so the mic uplink knows where to send.
     void audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type, cp_audio::Codec codec,
-                   int rate, int channels, bool upmix);
+                   int rate, int channels, bool upmix, Listener *uplink = nullptr);
+    // Microphone uplink: SDL-capture 16 kHz mono PCM, 20 ms frames, seal each
+    // with the per-stream Input key (RTP + ChaCha20-Poly1305, mirroring the
+    // downlink framing), and send to the phone's latched data address.
+    void uplinkLoop(Listener *l);
     // The iAP2-over-CarPlay tunnel (stream 130): the phone continues iAP2 here
     // after it drops Bluetooth. Receive-only (our replies ride the event channel).
     void tunnelLoop(int fd, int64_t seed);
@@ -161,12 +185,37 @@ private:
     // Derive a stream data key: HKDF-SHA512(shared, "DataStream-Salt"<id>, info).
     Bytes streamKey(int64_t streamId, const char *info);
 
+    // Active audio streams, for the POST /feedback response. The phone treats a
+    // clock-driven media stream (type 102) as dead and tears it down every few
+    // seconds if /feedback does NOT list it -- which is why an empty feedback
+    // left music playing on the phone instead of the head unit. One entry per
+    // stream type (latest SETUP wins, matching the phone's re-SETUP churn);
+    // marked live on the stream's first received packet.
+    struct AudioMeta
+    {
+        int type = 0;
+        int rate = 0;
+        int64_t streamId = 0;
+        bool active = false;
+    };
+    void markAudioStream(int type, int rate, int64_t streamId); // at SETUP
+    void markAudioActive(int64_t streamId);                     // on first packet
+    std::mutex _audioMetaMtx;
+    std::vector<AudioMeta> _audioMeta;
+
     Config _cfg;
     Bytes _shared;
     Sinks _sinks;
     InputSource *_inputSource = nullptr;
     unsigned _eventCseq = 0; // reverse-HTTP CSeq for our event commands
     std::atomic<bool> _running{true};
+    // One ALSA capture client at a time. The phone tears a telephony/Siri
+    // stream down and re-SETUPs a fresh one repeatedly; _uplinkGen tags each
+    // new input stream so the newest uplink supersedes the previous one and
+    // takes the mic, rather than the first holding it for the whole session.
+    // _captureBusy is the device token handed over during that supersede.
+    std::atomic<bool> _captureBusy{false};
+    std::atomic<uint64_t> _uplinkGen{0};
 
     Listener _event;
     std::vector<std::unique_ptr<Listener>> _streams;

@@ -145,6 +145,10 @@ public:
     static inline Setting<float> audioFade{"audio-fade", 0.3};
     static inline Setting<int> audioAuxDelay{"audio-aux-delay", 200};
     static inline Setting<int> audioBuffer{"audio-buffer-samples", 512};
+    // Software gain applied to captured mic PCM before it is sent to the phone
+    // (the F1C ADC + fixed mixer boost give a low level). Integer multiplier
+    // with saturation; 1 = unchanged. Tune on-device via usersettings.txt.
+    static inline Setting<int> micGain{"mic-gain", 8};
     static inline Setting<std::string> audioDriver{"audio-driver", ""};
     static inline Setting<std::string> onConnect{"on-connect-script", ""};
     static inline Setting<std::string> onDisconnect{"on-disconnect-script", ""};
