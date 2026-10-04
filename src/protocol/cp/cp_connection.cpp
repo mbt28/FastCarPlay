@@ -430,7 +430,7 @@ void CpConnection::start()
         std::string("deviceid=") + deviceId,
         "features=0x44540380,0x61",
         "flags=0x4",
-        "srcvers=550.1",
+        "srcvers=280.33.8",
         "pi=" + id.pairingId,
         "pk=" + hex(id.pubRaw),
     };
@@ -455,7 +455,7 @@ void CpConnection::start()
     cfg.wifi.port = 7000;
     cfg.wifi.deviceIdentifier = mac.empty() ? id.pairingId : mac;
     cfg.wifi.publicKey = hex(id.pubRaw);
-    cfg.wifi.sourceVersion = "550.1";
+    cfg.wifi.sourceVersion = "280.33.8";
 
     if (!_bt.start(cfg))
     {
