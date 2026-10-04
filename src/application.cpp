@@ -968,6 +968,12 @@ void Application::loopDrm()
     std::signal(SIGTERM, onQuitSignal);
 
     auto lastState = PROTOCOL_STATUS_UNKNOWN;
+    // The cedrus v4l2 pool (~19MB of the 24MB CMA) exists only while a phone is
+    // connected: it is torn down on disconnect and rebuilt on reconnect, so an
+    // idle head unit holds no decode CMA and a reconnect allocates from a
+    // near-empty pool. Starts true (decoder was start()ed just above); the first
+    // non-CONNECTED state tears it down.
+    bool decoderRunning = true;
     bool uiShowsHome = true;
     bool osdShown = false;
     uint32_t framesAtConnect = drm_display::videoFrames();
@@ -979,7 +985,11 @@ void Application::loopDrm()
 
     while (_active && !g_quit)
     {
-        syncDecoderCodec(decoder, protocol, startedCodec);
+        // Only sync/rebuild-on-codec-change while the decoder is live; a torn-down
+        // (disconnected) decoder has nothing to sync and must not be restarted
+        // here -- the state block below owns its lifecycle.
+        if (decoderRunning)
+            syncDecoderCodec(decoder, protocol, startedCodec);
         publishStatus(protocol);
         Uint32 now = SDL_GetTicks();
         auto state = protocol.state();
@@ -998,10 +1008,36 @@ void Application::loopDrm()
         {
             if (state == PROTOCOL_STATUS_CONNECTED)
             {
-                decoder->flush();
+                // Rebuild from scratch on (re)connect: the previous disconnect
+                // tore the decoder down to free its cedrus CMA pool, so setup()
+                // here allocates fresh from a near-empty CMA region. A plain
+                // flush() would keep the old pool pinned and the phone's fresh
+                // SPS would then OOM ffmpeg's v4l2 CREATE_BUFS ("create buffers
+                // failed for type 2") with only ~1MB CMA free -- the reconnect
+                // hang that needed a reboot. (If the decoder is somehow still
+                // live -- e.g. a direct UNKNOWN->CONNECTED first connect -- a
+                // flush suffices.)
+                if (!decoderRunning)
+                {
+                    decoder = makeDecoder(startedCodec);
+                    startDecoder(*decoder, protocol, startedCodec);
+                    decoderRunning = true;
+                }
+                else
+                    decoder->flush();
                 decoder->buffer.reset();
                 framesAtConnect = drm_display::videoFrames();
                 protocol.send(Message::Control(BTN_SCREEN_REFRESH));
+            }
+            else if (decoderRunning)
+            {
+                // Phone went away: tear the decoder down now so its ~19MB cedrus
+                // pool is returned to CMA immediately instead of sitting pinned
+                // (which is what makes the next allocation fail). stop() joins
+                // the decode thread, so teardown()'s releaseHeld + flushVideo
+                // run before we touch the decoder again.
+                decoder->stop();
+                decoderRunning = false;
             }
             lastState = state;
             dirty = true;
