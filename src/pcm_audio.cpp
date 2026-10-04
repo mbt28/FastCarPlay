@@ -6,12 +6,16 @@
 #include <time.h>
 
 // Add sample size (buffer size in samples) to ChannelConfig. const -> .rodata.
+// The scale (3rd field) multiplies audio-buffer-samples into the SDL period, so
+// it sets the per-format buffer depth. Media (type 4, 48k stereo) gets a deep
+// buffer -- it is latency-insensitive and is where the CPU-starvation underruns
+// bite; voice (mono) stays shallower to keep call latency down.
 const ChannelConfig PcmAudio::_configTable[] = {
-    {8000, 1, 1},  // type = 3, ~256ms
-    {48000, 2, 4}, // type = 4, ~170ms
-    {16000, 1, 2}, // type = 5, ~256ms
-    {24000, 1, 2}, // type = 6, ~170ms
-    {16000, 2, 2}, // type = 7, ~256ms
+    {8000, 1, 1},  // type = 3
+    {48000, 2, 8}, // type = 4  media (48k stereo): deep buffer vs CPU-spike underruns
+    {16000, 1, 2}, // type = 5  voice
+    {24000, 1, 2}, // type = 6  voice
+    {16000, 2, 2}, // type = 7
 };
 
 PcmAudio::PcmAudio(const char *name) : _name("default"),
@@ -172,6 +176,18 @@ void PcmAudio::play(SDL_AudioDeviceID device, ChannelConfig config, int32_t segm
 
         SDL_QueueAudio(device, segment->data(), segment->length());
 
+        // Voice: keep the queue near the live edge so a call is not heard late.
+        // Bursty wireless delivery (and an initial lead) build the queue and the
+        // dry-exit logic never drains it; if it passes the latency cap, flush to
+        // resync -- a brief gap beats a persistent ~1 s lag. Media is not capped.
+        if (_fader && _playing)
+        {
+            const Uint32 cap = (Uint32)((int64_t)config.rate * config.channels * 2 *
+                                        Settings::audioMaxLatencyMs / 1000);
+            if (SDL_GetQueuedAudioSize(device) > cap)
+                SDL_ClearQueuedAudio(device);
+        }
+
         if (!_playing && prefill-- <= 0)
         {
             log_d("Start playing %s %dkHz %s",
@@ -234,8 +250,32 @@ void PcmAudio::loop()
     SDL_AudioSpec spec;
 
     time_t playEnd = time(NULL);
-    while (_data->wait(_active))
+    while (_active)
     {
+        // Acquire the next segment. If we are holding an open (paused) device
+        // from the previous burst, wait only the idle-grace window: if nothing
+        // arrives, release the codec + its dmix client (frees CPU on this
+        // CPU-tight board). Audio that keeps flowing within the window rides the
+        // still-open handle, so there is no reopen churn mid-call.
+        if (device != 0)
+        {
+            _data->waitFor(_active, Settings::audioIdleHoldMs);
+            if (!_active)
+                break;
+            if (!_data->has(1))
+            {
+                SDL_PauseAudioDevice(device, 1);
+                SDL_ClearQueuedAudio(device);
+                SDL_CloseAudioDevice(device);
+                device = 0;
+                _config = ChannelConfig{};
+                playEnd = time(NULL);
+                continue;
+            }
+        }
+        else if (!_data->wait(_active))
+            break;
+
         const Message *segment = _data->peek();
         if (!segment)
             continue;
@@ -256,7 +296,10 @@ void PcmAudio::loop()
             spec.freq = config.rate;
             spec.format = AUDIO_S16SYS;
             spec.channels = config.channels;
-            spec.samples = Settings::audioBuffer * config.scale;
+            // Voice (aux, _fader set) opens a small buffer for low call latency;
+            // media (main) keeps the deep audioBuffer*scale buffer for smoothness.
+            spec.samples = _fader ? (Uint16)Settings::audioVoiceBuffer
+                                  : (Uint16)(Settings::audioBuffer * config.scale);
             spec.callback = nullptr;
             spec.userdata = nullptr;
 
@@ -276,7 +319,7 @@ void PcmAudio::loop()
                       _name.c_str(),
                       config.rate,
                       (config.channels == 2 ? "stereo" : "mono"),
-                      Settings::audioBuffer * config.scale, SDL_GetError());
+                      (int)spec.samples, SDL_GetError());
                 SDL_Delay(100);
                 continue;
             }
@@ -292,21 +335,13 @@ void PcmAudio::loop()
         _playing = false;
         if (_fader)
             _fader->fade(false);
+        // Hold the device open + paused across the gap (no reopen churn); the
+        // loop top releases it after the idle-grace window if audio really
+        // stopped, so an idle stream does not keep a dmix client (and its CPU)
+        // alive. dmix mixes concurrently, so holding it open costs no EBUSY.
         SDL_PauseAudioDevice(device, 1);
-        // Release the hardware while idle. The F1C200s codec has ONE playback
-        // stream and alsa-lib's default device has no software mixer, so a
-        // paused-but-open "main" made every "aux" open (calls, Siri, nav) fail
-        // with EBUSY (seen 2026-10-03: no call audio). Reopening on the next
-        // segment costs the codec's power-up delay, which the prefill absorbs.
         SDL_ClearQueuedAudio(device);
-        SDL_CloseAudioDevice(device);
-        device = 0;
-        _config = ChannelConfig{}; // forces a fresh open for the next segment
         playEnd = time(NULL);
-        log_d("Stop playing %s %dkHz %s",
-              _name.c_str(),
-              config.rate,
-              (config.channels == 2 ? "stereo" : "mono"));
     }
 
     if (device != 0)
