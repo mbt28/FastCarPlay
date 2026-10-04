@@ -18,6 +18,7 @@ extern "C"
 }
 
 #include <SDL2/SDL.h> // mic capture for the uplink (iscapture=1, ALSA backend)
+#include <opus/opus.h> // fixed-point Opus encoder for the wireless voice uplink
 
 #include "common/logger.h"
 #include "settings.h" // mic-gain
@@ -706,7 +707,13 @@ void AvSession::uplinkLoop(Listener *l)
     want.freq = rate;
     want.format = AUDIO_S16LSB;
     want.channels = 1;              // the ADC is mono; a stereo open dups L/R
-    want.samples = (Uint16)(rate / 50); // ~20 ms device buffer
+    // Large capture period (not the 20ms opus frame): during a continuous call
+    // the ADC IRQ/wakeup rate competes with the DAC-refill thread on the single
+    // CPU, starving the DAC FIFO -> the driver emits zeros on underrun -> the
+    // caller is silent. A big capture period cuts that wakeup rate ~4x, handing
+    // CPU back to playback. Opus still ships 20ms frames: frameSamples below is
+    // rate/50 and is re-sliced from the queued capture, independent of this.
+    want.samples = 2048;
     want.callback = nullptr;        // queued capture: pull with SDL_DequeueAudio
     SDL_AudioDeviceID dev = SDL_OpenAudioDevice(nullptr, SDL_TRUE, &want, &got, 0);
     if (dev == 0)
@@ -720,20 +727,57 @@ void AvSession::uplinkLoop(Listener *l)
             log_w("[cp-av] uplink: SDL audio driver is 'dummy' -- mic will be silent");
     SDL_PauseAudioDevice(dev, 0); // start capturing
 
+    const bool useOpus = (l->uplinkCodec == cp_audio::Codec::Opus);
     const Bytes key = streamKey(l->streamId, "DataStream-Input-Encryption-Key");
     const int frameSamples = rate / 50;                  // 320 @ 16 kHz = 20 ms
-    const size_t frameBytes = (size_t)frameSamples * 2;  // mono S16
+    const size_t frameBytes = (size_t)frameSamples * 2;  // mono S16 capture frame
     const uint32_t ssrc = 0;                             // CarPlay input streams use SSRC 0 (LIVI ref)
-    // Reused buffers; nothing in the loop allocates.
+
+    // The phone picks OPUS for wireless voice (telephony/Siri). This core has no
+    // FPU, but libopus here is built fixed-point, so we encode on the uplink.
+    // OPUS_APPLICATION_VOIP + voice signal + wideband keeps it SILK-only (cheap)
+    // regardless of the sample rate; low complexity + ~24 kbps VBR fits the
+    // arm926 budget. Wired CarPlay picks PCM and skips the encoder entirely.
+    OpusEncoder *enc = nullptr;
+    if (useOpus)
+    {
+        int err = 0;
+        enc = opus_encoder_create(rate, 1, OPUS_APPLICATION_VOIP, &err);
+        if (!enc || err != OPUS_OK)
+        {
+            log_e("[cp-av] uplink: opus_encoder_create(%d) failed (%d) -- no mic", rate, err);
+            SDL_PauseAudioDevice(dev, 1);
+            SDL_CloseAudioDevice(dev);
+            _captureBusy.store(false);
+            return;
+        }
+        // Bitrate tiers mirror LIVI. The distortion was 24 kbps at 48k mono PLUS
+        // an artificial wideband cap -- far too few bits for the rate, and the
+        // forced downsample mangled it. Give opus the bits for the rate and let
+        // it pick its own bandwidth; VOIP + voice signal + low complexity keep
+        // the encode affordable on the FPU-less core.
+        const int obitrate = rate <= 24000 ? 48000 : rate <= 32000 ? 64000 : 96000;
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE(obitrate));
+        opus_encoder_ctl(enc, OPUS_SET_VBR(1));
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY(1));
+        opus_encoder_ctl(enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+        opus_encoder_ctl(enc, OPUS_SET_DTX(0)); // keep RTP timestamps continuous
+    }
+
+    // Reused buffers; nothing in the loop allocates. The RTP packet must fit the
+    // larger of a raw PCM frame or a worst-case Opus packet.
+    const size_t kMaxOpus = 1500;
+    const size_t payloadCap = useOpus ? kMaxOpus : frameBytes;
     std::vector<uint8_t> pcm(frameBytes);
-    std::vector<uint8_t> pkt(12 + frameBytes + 16 + 8);
+    std::vector<uint8_t> encOut(useOpus ? kMaxOpus : 0);
+    std::vector<uint8_t> pkt(12 + payloadCap + 16 + 8);
     uint16_t seq = 0;
     uint32_t ts = 0;
     uint64_t nonceCtr = 0;
     size_t sent = 0;
 
-    log_i("[cp-av] uplink loop started (stream %lld, %d Hz mono, %d-sample frames, got %d Hz)",
-          (long long)l->streamId, rate, frameSamples, got.freq);
+    log_i("[cp-av] uplink loop started (stream %lld, %d Hz mono %s, %d-sample frames, got %d Hz)",
+          (long long)l->streamId, rate, useOpus ? "Opus" : "PCM", frameSamples, got.freq);
     // Runs until the session stops OR a newer input stream supersedes us (the
     // phone re-SETUPs telephony repeatedly) -- then we release the mic for it.
     while (_running.load() && _uplinkGen.load() == myGen)
@@ -753,25 +797,43 @@ void AvSession::uplinkLoop(Listener *l)
             continue;
 
         // Apply software gain with saturation (the F1C ADC + fixed mixer boost
-        // run quiet), then byte-swap: CarPlay PCM is BIG-ENDIAN on the wire (the
-        // downlink is decoded BE->native too), so the little-endian capture must
-        // be swapped before sealing or the phone reads byte-swapped samples.
-        // Mirrors LIVI swap16().
+        // run quiet), then produce the payload. Opus takes native-endian int16
+        // and is encoded here; raw PCM is byte-swapped to big-endian (the
+        // CarPlay wire order, as the downlink is decoded BE->native) -- a
+        // byte-swap that must NOT be applied to Opus. Mirrors LIVI swap16().
+        const uint8_t *payload;
+        size_t payloadLen;
         {
             int16_t *s16 = reinterpret_cast<int16_t *>(pcm.data());
             const int g = Settings::micGain;
             if (g > 1)
-            {
                 for (int i = 0; i < frameSamples; i++)
                 {
                     int v = (int)s16[i] * g;
                     s16[i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
                 }
-            }
-            for (int i = 0; i < frameSamples; i++)
+
+            if (useOpus)
             {
-                uint16_t u = (uint16_t)s16[i];
-                s16[i] = (int16_t)((u >> 8) | (u << 8));
+                int nb = opus_encode(enc, s16, frameSamples, encOut.data(),
+                                     (opus_int32)encOut.size());
+                if (nb < 0)
+                {
+                    log_w("[cp-av] uplink: opus_encode failed (%d)", nb);
+                    continue;
+                }
+                payload = encOut.data();
+                payloadLen = (size_t)nb;
+            }
+            else
+            {
+                for (int i = 0; i < frameSamples; i++)
+                {
+                    uint16_t u = (uint16_t)s16[i];
+                    s16[i] = (int16_t)((u >> 8) | (u << 8));
+                }
+                payload = pcm.data();
+                payloadLen = frameBytes;
             }
         }
 
@@ -786,16 +848,17 @@ void AvSession::uplinkLoop(Listener *l)
         for (int i = 0; i < 8; i++)
             nonce[4 + i] = (uint8_t)(nonceCtr >> (8 * i));
 
-        if (!cp_crypto::chachaSeal(key.data(), nonce, pcm.data(), frameBytes, p + 4, 8, p + 12))
+        if (!cp_crypto::chachaSeal(key.data(), nonce, payload, payloadLen, p + 4, 8, p + 12))
         {
             log_w("[cp-av] uplink: seal failed");
             continue;
         }
         // The nonce counter travels as the last 8 bytes, as the phone does downlink.
         for (int i = 0; i < 8; i++)
-            p[12 + frameBytes + 16 + i] = (uint8_t)(nonceCtr >> (8 * i));
+            p[12 + payloadLen + 16 + i] = (uint8_t)(nonceCtr >> (8 * i));
 
-        ::sendto(l->fd, p, pkt.size(), MSG_NOSIGNAL,
+        const size_t sendLen = 12 + payloadLen + 16 + 8;
+        ::sendto(l->fd, p, sendLen, MSG_NOSIGNAL,
                  (struct sockaddr *)&l->peer, l->peerLen);
         seq++;
         ts += (uint32_t)frameSamples;
@@ -807,6 +870,8 @@ void AvSession::uplinkLoop(Listener *l)
 
     SDL_PauseAudioDevice(dev, 1);
     SDL_CloseAudioDevice(dev);
+    if (enc)
+        opus_encoder_destroy(enc);
     _captureBusy.store(false);
     log_i("[cp-av] uplink loop stopped (stream %lld, %zu frames sent)", (long long)l->streamId, sent);
 }
@@ -968,8 +1033,9 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
     // ── audio formats (PCM/OPUS/AAC-LC at 44.1k) ──
     const int64_t PCM = 0x3fc | 0xc00;      // voice + media 44.1k mono+stereo
     const int64_t PCM_MONO = 0x154 | 0x400; // voice mono + media mono
-    const int64_t OPUS = 0x70000000;        // OPUS 16/24/48k mono
-    const int64_t AAC_LC = 0x400000;        // AAC-LC 44.1k (media / type 102)
+    const int64_t OPUS = 0x70000000;        // OPUS 16/24/48k mono (output)
+    const int64_t OPUS_VOICE = 0x30000000;  // OPUS 16k+24k mono (uplink input; SILK, no 48k hybrid)
+    const int64_t AAC48 = 0x800000;         // AAC-LC 48k (media / type 102)
     auto af = [&](int type, const char *at, int64_t out, int64_t in, bool hasIn) {
         V d = V::map();
         d.set("type", V::integer(type));
@@ -979,23 +1045,31 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
         return d;
     };
     V audioFormats = arr({
-        // Advertise the FULL mono-PCM+OPUS voice set (as LIVI / the baseline
-        // do). The phone validates the WHOLE audioFormats array: dropping OPUS
-        // -- or narrowing the PCM inputs to one rate -- makes it refuse to open
-        // the media stream (type 102) AND telephony, so music reverts to the
-        // phone and calls get no audio. OPUS must therefore be advertised even
-        // though this FPU-less core can only DECODE it (no encoder); the mic
-        // uplink adapts to whatever rate the phone negotiates. Media stays
-        // AAC-LC.
+        // OUTPUT advertises the full mono-PCM+OPUS voice set (as LIVI / the
+        // baseline do): the phone validates the WHOLE audioFormats array, and
+        // dropping OPUS -- or narrowing the PCM set -- makes it refuse the media
+        // stream (type 102) AND telephony. INPUT (the mic uplink) offers OPUS at
+        // 16k+24k only: both are SILK (cheap on this FPU-less core), telephony
+        // tends to pick 16k (cellular wideband) and Siri 24k, while the heavy
+        // 48k hybrid (SILK+CELT/MDCT) is excluded. Restricting it to 24k-only
+        // stopped telephony negotiating at all (no call stream set up); PCM
+        // stays broad so the array is still valid.
         af(100, "compatibility", PCM, PCM_MONO, true),
         af(101, "compatibility", PCM, 0, false),
-        af(100, "default", PCM | OPUS, PCM_MONO | OPUS, true),
+        af(100, "default", PCM | OPUS, PCM_MONO | OPUS_VOICE, true),
         af(100, "alert", PCM | OPUS, 0, false),
         af(100, "media", PCM, 0, false),
-        af(100, "telephony", PCM_MONO | OPUS, PCM_MONO | OPUS, true),
-        af(100, "speechRecognition", PCM_MONO | OPUS, PCM_MONO | OPUS, true),
+        af(100, "telephony", PCM_MONO | OPUS, PCM_MONO | OPUS_VOICE, true),
+        af(100, "speechRecognition", PCM_MONO | OPUS, PCM_MONO | OPUS_VOICE, true),
         af(101, "default", PCM | OPUS, 0, false),
-        af(102, "media", AAC_LC, 0, false),
+        // Media: advertise 48k AAC ONLY. The F1C codec is 48k-native and does
+        // NOT support 44.1k, so when the phone streamed 44.1k AAC (it picked
+        // 44.1k even when both were offered) SDL float-resampled 44.1k->48k on
+        // this FPU-less core -- CPU burn + ALSA underruns + dropped video
+        // frames. Forcing 48k makes music hit the codec rate directly (no
+        // resample) and matches the 48k dmix. iOS resamples its content to 48k
+        // before encoding; LIVI advertises one AAC rate the same way.
+        af(102, "media", AAC48, 0, false),
     });
 
     // ── audio latencies (informational) ──
@@ -1209,9 +1283,21 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
                     wantUplink = wantUplink && (usage.empty() ? isMonoPcm(fmt) : inputCapable(usage));
                 Listener *lp = l.get();
                 lp->streamId = streamId;
-                // Capture the mic at whatever PCM rate the phone negotiated (we
-                // advertise the full mono set now); fall back to 16 kHz.
-                lp->rate = pcmRate(fmt) > 0 ? pcmRate(fmt) : 16000;
+                // Uplink codec + rate from the negotiated input format. Wired
+                // CarPlay picks PCM (sent as-is at the chosen mono rate); wireless
+                // voice (telephony/Siri) picks OPUS, which we encode with libopus
+                // at the negotiated 16/24/48k mono rate. Fall back to 16 kHz PCM.
+                if (fmt & OPUS)
+                {
+                    lp->uplinkCodec = cp_audio::Codec::Opus;
+                    lp->rate = (fmt & 0x40000000) ? 48000
+                             : (fmt & 0x20000000) ? 24000 : 16000;
+                }
+                else
+                {
+                    lp->uplinkCodec = cp_audio::Codec::Pcm;
+                    lp->rate = pcmRate(fmt) > 0 ? pcmRate(fmt) : 16000;
+                }
                 // Register for /feedback so the phone keeps this stream alive
                 // (an unreported media stream is torn down every few seconds).
                 markAudioStream(type, arate, streamId);
@@ -1249,16 +1335,16 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
                 if (wantUplink)
                 {
                     lp->uplinkThread = std::thread([this, lp] { uplinkLoop(lp); });
-                    log_i("[cp-av] audio %d uplink enabled (mic -> phone, %d Hz mono PCM)", type,
-                          lp->rate);
+                    log_i("[cp-av] audio %d uplink enabled (mic -> phone, %d Hz mono %s)", type,
+                          lp->rate, lp->uplinkCodec == cp_audio::Codec::Opus ? "Opus" : "PCM");
                 }
                 port = dataPort;
                 entry.set("dataPort", cp_plist::Value::integer(dataPort));
                 entry.set("controlPort", cp_plist::Value::integer(ctrlPort));
                 entry.set("streamConnectionID", cp_plist::Value::integer(streamId));
-                log_i("[cp-av] SETUP audio (type %d) fmt=0x%llx codec=%d dataPort=%u ctrlPort=%u id=%lld uplink=%d",
-                      type, (unsigned long long)fmt, (int)codec, dataPort, ctrlPort, (long long)streamId,
-                      (int)wantUplink);
+                log_i("[cp-av] SETUP audio (type %d usage=%s) fmt=0x%llx codec=%d dataPort=%u ctrlPort=%u id=%lld uplink=%d",
+                      type, usage.empty() ? "?" : usage.c_str(), (unsigned long long)fmt, (int)codec, dataPort,
+                      ctrlPort, (long long)streamId, (int)wantUplink);
             }
             else if (type == STREAM_DATA)
             {
