@@ -16,6 +16,7 @@ const ChannelConfig PcmAudio::_configTable[] = {
     {16000, 1, 2}, // type = 5  voice
     {24000, 1, 2}, // type = 6  voice
     {16000, 2, 2}, // type = 7
+    {48000, 1, 2}, // type = 8  voice (wired 48k mono PCM)
 };
 
 PcmAudio::PcmAudio(const char *name) : _name("default"),
@@ -68,7 +69,7 @@ ChannelConfig PcmAudio::getConfig(const Message *msg)
         type = msg->getInt(OFFSET_AUDIO_FORMAT);
     }
 
-    if (type >= 3 && type <= 7)
+    if (type >= 3 && type <= 8)
         return _configTable[type - 3];
     // Default: 44100Hz, stereo, 4096 samples
     return {44100, 2, 4};
@@ -132,6 +133,7 @@ void PcmAudio::play(SDL_AudioDeviceID device, ChannelConfig config, int32_t segm
 {
     uint8_t zeroSegments = 0;
     bool nonZero = false;
+    int overCap = 0;
 
     int prefill = config.channels == 1 ? Settings::audioDelayCall : Settings::audioDelay;
     int segmentTimeMs = 1000.0 * segmentSize / (config.rate * config.channels * 2.0);
@@ -177,15 +179,28 @@ void PcmAudio::play(SDL_AudioDeviceID device, ChannelConfig config, int32_t segm
         SDL_QueueAudio(device, segment->data(), segment->length());
 
         // Voice: keep the queue near the live edge so a call is not heard late.
-        // Bursty wireless delivery (and an initial lead) build the queue and the
-        // dry-exit logic never drains it; if it passes the latency cap, flush to
-        // resync -- a brief gap beats a persistent ~1 s lag. Media is not capped.
+        // Only a SUSTAINED overshoot of the latency cap is a real lag worth a
+        // flush -- a delivery burst overshoots briefly and drains on its own,
+        // and flushing per overshoot discarded most of the call audio. After
+        // the flush, re-queue the current segment so playback resumes at the
+        // live edge with no silence gap. Media is not capped.
         if (_fader && _playing)
         {
             const Uint32 cap = (Uint32)((int64_t)config.rate * config.channels * 2 *
                                         Settings::audioMaxLatencyMs / 1000);
             if (SDL_GetQueuedAudioSize(device) > cap)
-                SDL_ClearQueuedAudio(device);
+            {
+                if (++overCap >= VOICE_OVER_CAP_SEGMENTS)
+                {
+                    log_d("Audio %s over %dms for %d segments, flush to live edge",
+                          _name.c_str(), (int)Settings::audioMaxLatencyMs, overCap);
+                    SDL_ClearQueuedAudio(device);
+                    SDL_QueueAudio(device, segment->data(), segment->length());
+                    overCap = 0;
+                }
+            }
+            else
+                overCap = 0;
         }
 
         if (!_playing && prefill-- <= 0)
@@ -243,6 +258,12 @@ void PcmAudio::loop()
 {
     std::string threadName = "audio-" + _name;
     setThreadName(threadName.c_str());
+    // Elevate playback above the SCHED_OTHER video decode (same level as the mic
+    // capture/uplink thread): on this single-CPU board the H.264 decoder would
+    // otherwise starve the DAC-refill loop for tens of ms, underrunning the
+    // caller/music audio. Both audio threads at FIFO 10 coexist above video and
+    // below the USB transport's realtime (FIFO 50). Tiny CPU, so video is fine.
+    setThreadPriority(ThreadPriority::High);
 
     log_d("Started thread %s", _name.c_str());
 
