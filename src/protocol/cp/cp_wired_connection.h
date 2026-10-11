@@ -67,6 +67,7 @@ private:
     void onVideoCodec(bool hevc);
     void onVideo(const uint8_t *annexB, size_t len);
     void onAudio(int type, int rate, int channels, const uint8_t *pcm, size_t bytes);
+    void onCallState(bool active);
     void onSessionConnect();
     void onSessionDisconnect();
     void writerLoop();
@@ -99,6 +100,7 @@ private:
 
     std::atomic<AVCodecID> _codec{AV_CODEC_ID_HEVC};
     std::atomic<bool> _videoFocused{true}; // false = handed back to FastCarPlay
+    std::atomic<bool> _callActive{false};  // telephony-priority: gate media/alt audio
     std::atomic<uint32_t> _frames{0};
     std::string _mfiInfo = "no chip";
     bool _started = false;

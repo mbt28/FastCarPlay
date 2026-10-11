@@ -161,15 +161,20 @@ void CpConnection::onAudio(int type, int rate, int channels, const uint8_t *pcm,
 {
     if (!pcm || bytes == 0)
         return;
+    // Telephony-priority: during a call only the voice stream reaches the
+    // mixer (belt-and-braces behind the AvSession ingress drop).
+    if (type != 100 && _callActive.load(std::memory_order_relaxed))
+        return;
     // The app's PcmAudio reads a format-type u32 at offset 0 (its _configTable:
-    // 4 = 48k stereo, 3/5/6/7 = 8k/16k/24k/16k mono/stereo, anything else =
-    // 44.1k stereo) and S16 interleaved PCM from offset 12.
+    // 4 = 48k stereo, 3/5/6/7/8 = 8k/16k/24k/16k/48k mono/stereo, anything else
+    // = 44.1k stereo) and S16 interleaved PCM from offset 12.
     auto fmtType = [](int r, int ch) -> uint32_t {
         if (r == 8000 && ch == 1) return 3;
         if (r == 48000 && ch == 2) return 4;
         if (r == 16000 && ch == 1) return 5;
         if (r == 24000 && ch == 1) return 6;
         if (r == 16000 && ch == 2) return 7;
+        if (r == 48000 && ch == 1) return 8; // wired 48k mono PCM voice
         return 0; // -> PcmAudio default (44.1k stereo)
     }(rate, channels);
 
@@ -190,6 +195,21 @@ void CpConnection::onAudio(int type, int rate, int channels, const uint8_t *pcm,
     (type == 102 ? audioStreamMain : audioStreamAux).pushDropOldest(std::move(m));
 }
 
+void CpConnection::onCallState(bool active)
+{
+    // Rising edge only: on the phone's mid-call re-SETUP churn the aux queue
+    // already carries live call audio and must not be wiped. SETUP fires this
+    // before the data-port reply, so no call PCM can predate the clears.
+    if (active && !_callActive.exchange(true))
+    {
+        log_i("CarPlay: call mode on -- media/alt audio muted");
+        audioStreamMain.clear(); // parked music drains; PcmAudio idle-releases
+        audioStreamAux.clear();  // stale navi remnants
+    }
+    else if (!active && _callActive.exchange(false))
+        log_i("CarPlay: call mode off -- media/alt audio resumes");
+}
+
 void CpConnection::onSessionConnect()
 {
     log_i("CarPlay: phone connected the :7000 control channel");
@@ -202,6 +222,7 @@ void CpConnection::onSessionDisconnect()
 {
     log_i("CarPlay: control channel closed");
     clearInput();
+    _callActive.store(false); // a phone that drops mid-call must not mute media forever
     _state.store(PROTOCOL_STATUS_LINKING); // back to waiting for the phone
 }
 
@@ -405,6 +426,7 @@ void CpConnection::start()
     sinks.onVideoCodec = [this](bool hevc) { onVideoCodec(hevc); };
     sinks.onVideo = [this](const uint8_t *b, size_t n) { onVideo(b, n); };
     sinks.onAudio = [this](int t, int r, int c, const uint8_t *p, size_t n) { onAudio(t, r, c, p, n); };
+    sinks.onCallState = [this](bool a) { onCallState(a); };
     // The CarPlay dock's car icon (requestUI) hands the screen back to us.
     sinks.onRequestNativeUI = [this] {
         log_i("CarPlay: dock car icon -- backgrounding to FastCarPlay (resume to return)");
