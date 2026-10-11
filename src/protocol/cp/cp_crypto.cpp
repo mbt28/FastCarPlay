@@ -227,6 +227,61 @@ bool chachaSeal(const uint8_t *key32, const uint8_t nonce12[12],
     return ok;
 }
 
+ChachaStream::~ChachaStream()
+{
+    if (_ctx)
+        EVP_CIPHER_CTX_free((EVP_CIPHER_CTX *)_ctx);
+}
+
+bool ChachaStream::initOpen(const uint8_t *key32)
+{
+    if (!_ctx)
+        _ctx = (struct evp_cipher_ctx_st *)EVP_CIPHER_CTX_new();
+    return _ctx && EVP_DecryptInit_ex((EVP_CIPHER_CTX *)_ctx, EVP_chacha20_poly1305(), nullptr,
+                                      key32, nullptr) == 1;
+}
+
+bool ChachaStream::initSeal(const uint8_t *key32)
+{
+    if (!_ctx)
+        _ctx = (struct evp_cipher_ctx_st *)EVP_CIPHER_CTX_new();
+    return _ctx && EVP_EncryptInit_ex((EVP_CIPHER_CTX *)_ctx, EVP_chacha20_poly1305(), nullptr,
+                                      key32, nullptr) == 1;
+}
+
+bool ChachaStream::open(const uint8_t nonce12[12], const uint8_t *ctAndTag, size_t ctAndTagLen,
+                        const uint8_t *aad, size_t aadLen, uint8_t *out)
+{
+    if (!_ctx || ctAndTagLen < 16)
+        return false;
+    EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX *)_ctx;
+    const size_t ctLen = ctAndTagLen - 16;
+    uint8_t tag[16];
+    memcpy(tag, ctAndTag + ctLen, 16); // out may alias the ciphertext
+    int outLen = 0, finalLen = 0, tmp = 0;
+    bool ok = EVP_DecryptInit_ex(ctx, nullptr, nullptr, nullptr, nonce12) == 1; // nonce only
+    if (ok && aadLen)
+        ok = EVP_DecryptUpdate(ctx, nullptr, &tmp, aad, (int)aadLen) == 1;
+    return ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, 16, tag) == 1 &&
+           EVP_DecryptUpdate(ctx, out, &outLen, ctAndTag, (int)ctLen) == 1 &&
+           EVP_DecryptFinal_ex(ctx, out + outLen, &finalLen) == 1;
+}
+
+bool ChachaStream::seal(const uint8_t nonce12[12], const uint8_t *plain, size_t plainLen,
+                        const uint8_t *aad, size_t aadLen, uint8_t *out)
+{
+    if (!_ctx)
+        return false;
+    EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX *)_ctx;
+    int outLen = 0, finalLen = 0, tmp = 0;
+    bool ok = EVP_EncryptInit_ex(ctx, nullptr, nullptr, nullptr, nonce12) == 1; // nonce only
+    if (ok && aadLen)
+        ok = EVP_EncryptUpdate(ctx, nullptr, &tmp, aad, (int)aadLen) == 1;
+    return ok && EVP_EncryptUpdate(ctx, out, &outLen, plain, (int)plainLen) == 1 &&
+           EVP_EncryptFinal_ex(ctx, out + outLen, &finalLen) == 1 &&
+           EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, 16, out + plainLen) == 1;
+}
+
 Bytes chachaSeal(const Bytes &key32, const Bytes &nonce12, const Bytes &plaintext, const Bytes &aad)
 {
     Bytes out(plaintext.size() + 16);
