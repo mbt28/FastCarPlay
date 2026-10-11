@@ -228,15 +228,9 @@ void CpWiredConnection::onAudio(int type, int rate, int channels, const uint8_t 
     // mixer (belt-and-braces behind the AvSession ingress drop).
     if (type != 100 && _callActive.load(std::memory_order_relaxed))
         return;
-    auto fmtType = [](int r, int ch) -> uint32_t {
-        if (r == 8000 && ch == 1) return 3;
-        if (r == 48000 && ch == 2) return 4;
-        if (r == 16000 && ch == 1) return 5;
-        if (r == 24000 && ch == 1) return 6;
-        if (r == 16000 && ch == 2) return 7;
-        if (r == 48000 && ch == 1) return 8; // wired 48k mono PCM voice
-        return 0;
-    }(rate, channels);
+    // (rate << 4) | channels -- see CpConnection::onAudio: exact shape, always
+    // distinguishable from the legacy small enum values by being > 0xFFFF.
+    const uint32_t fmtType = ((uint32_t)rate << 4) | (uint32_t)channels;
 
     auto m = Message::Payload(CMD_AUDIO_DATA, (int32_t)(12 + bytes));
     uint8_t *p = m->data();

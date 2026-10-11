@@ -165,18 +165,13 @@ void CpConnection::onAudio(int type, int rate, int channels, const uint8_t *pcm,
     // mixer (belt-and-braces behind the AvSession ingress drop).
     if (type != 100 && _callActive.load(std::memory_order_relaxed))
         return;
-    // The app's PcmAudio reads a format-type u32 at offset 0 (its _configTable:
-    // 4 = 48k stereo, 3/5/6/7/8 = 8k/16k/24k/16k/48k mono/stereo, anything else
-    // = 44.1k stereo) and S16 interleaved PCM from offset 12.
-    auto fmtType = [](int r, int ch) -> uint32_t {
-        if (r == 8000 && ch == 1) return 3;
-        if (r == 48000 && ch == 2) return 4;
-        if (r == 16000 && ch == 1) return 5;
-        if (r == 24000 && ch == 1) return 6;
-        if (r == 16000 && ch == 2) return 7;
-        if (r == 48000 && ch == 1) return 8; // wired 48k mono PCM voice
-        return 0; // -> PcmAudio default (44.1k stereo)
-    }(rate, channels);
+    // Audio segment header: u32 format word at offset 0, PCM from offset 12.
+    // CarPlay knows the exact negotiated shape, so encode it directly as
+    // (rate << 4) | channels -- always > 0xFFFF, which is how the mixer tells
+    // it from the legacy small enum values the carlinkit/AA paths still use.
+    // (The old enum map silently defaulted unlisted combos like the phone's
+    // 8 kHz STEREO alerts to 44.1k, playing nav prompts 5.5x too fast.)
+    const uint32_t fmtType = ((uint32_t)rate << 4) | (uint32_t)channels;
 
     auto m = Message::Payload(CMD_AUDIO_DATA, (int32_t)(12 + bytes));
     uint8_t *p = m->data();
