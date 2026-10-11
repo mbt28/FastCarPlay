@@ -17,7 +17,8 @@ extern "C"
 #include <libavcodec/avcodec.h> // AV_INPUT_BUFFER_PADDING_SIZE
 }
 
-#include <SDL2/SDL.h> // mic capture for the uplink (iscapture=1, ALSA backend)
+#include <SDL2/SDL.h> // SDL_Delay only; audio I/O is direct ALSA
+#include <alsa/asoundlib.h> // blocking mic capture for the uplink
 #include <opus/opus.h> // fixed-point Opus encoder for the wireless voice uplink
 
 #include "common/logger.h"
@@ -430,6 +431,10 @@ void AvSession::screenLoop(int fd, int64_t streamId)
 
     // Per-stream key: HKDF-SHA512(shared, "DataStream-Salt"<id>, "…-Output-…").
     const Bytes key = streamKey(streamId, "DataStream-Output-Encryption-Key");
+    // Reusable AEAD context: key scheduled once, per-packet nonce re-init only
+    // (the one-shot helper paid a full EVP setup on every single packet/frame).
+    cp_crypto::ChachaStream aead;
+    aead.initOpen(key.data());
     uint64_t counter = 0;
     bool codecReported = false;
 
@@ -505,8 +510,7 @@ void AvSession::screenLoop(int fd, int64_t streamId)
                     // is fully read before the first output byte lands.
                     uint8_t nonce[12];
                     cp_crypto::nonce64(counter, nonce);
-                    if (!cp_crypto::chachaOpen(key.data(), nonce, body, bodySize,
-                                               hdr, HEADER_LEN, body))
+                    if (!aead.open(nonce, body, bodySize, hdr, HEADER_LEN, body))
                     {
                         log_w("[cp-av] screen frame %llu decrypt FAILED (bodySize=%u) -- "
                               "key/nonce mismatch, stream unrecoverable",
@@ -578,6 +582,10 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
     setThreadPriority(ThreadPriority::High); // SCHED_FIFO 10
 
     const Bytes key = streamKey(streamId, "DataStream-Output-Encryption-Key");
+    // Reusable AEAD context: key scheduled once, per-packet nonce re-init only
+    // (the one-shot helper paid a full EVP setup on every single packet/frame).
+    cp_crypto::ChachaStream aead;
+    aead.initOpen(key.data());
     cp_audio::Decoder dec;
     if (!dec.init(codec, rate, channels, upmix))
         log_w("[cp-av] audio %d decoder init failed -- draining only", type);
@@ -694,8 +702,7 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
             continue;
         const size_t auLen = ctTagLen - 16;
         au.assign(auLen + AV_INPUT_BUFFER_PADDING_SIZE, 0);
-        if (!cp_crypto::chachaOpen(key.data(), nonce, buf + 12, ctTagLen,
-                                   buf + 4, 8, au.data()))
+        if (!aead.open(nonce, buf + 12, ctTagLen, buf + 4, 8, au.data()))
         {
             if (decFails++ == 0) // log once, not per packet
                 log_w("[cp-av] audio %d decrypt failed (key/nonce mismatch)", type);
@@ -777,32 +784,10 @@ void AvSession::uplinkLoop(Listener *l)
     }
 
     const int rate = l->rate > 0 ? l->rate : 16000;
-    SDL_AudioSpec want{}, got{};
-    want.freq = rate;
-    want.format = AUDIO_S16LSB;
-    want.channels = 1;              // the ADC is mono; a stereo open dups L/R
-    // Capture period: a balance between ADC IRQ rate (competes with the DAC
-    // refill thread on the single CPU -> starvation/underruns) and latency (the
-    // period is a floor on mic delay). 1024 @ 48k ~= 21ms; in call-priority
-    // mode media is dropped, so the CPU headroom lets us run this tighter than
-    // the old 2048 (~43ms) for noticeably less call latency. Frames are
-    // re-sliced from the queue (frameSamples above), independent of this.
-    want.samples = 1024;
-    want.callback = nullptr;        // queued capture: pull with SDL_DequeueAudio
-    SDL_AudioDeviceID dev = SDL_OpenAudioDevice(nullptr, SDL_TRUE, &want, &got, 0);
-    if (dev == 0)
-    {
-        log_e("[cp-av] uplink: SDL capture open failed > %s", SDL_GetError());
-        _captureBusy.store(false);
-        return;
-    }
-    if (const char *drv = SDL_GetCurrentAudioDriver())
-        if (std::strcmp(drv, "dummy") == 0)
-            log_w("[cp-av] uplink: SDL audio driver is 'dummy' -- mic will be silent");
-    SDL_PauseAudioDevice(dev, 0); // start capturing
-
     const bool useOpus = (l->uplinkCodec == cp_audio::Codec::Opus);
     const Bytes key = streamKey(l->streamId, "DataStream-Input-Encryption-Key");
+    cp_crypto::ChachaStream aead; // key scheduled once; per-frame nonce re-init
+    aead.initSeal(key.data());
     // PCM must be framed at the phone's packet cadence, NOT a fixed 20 ms: the
     // phone sends/expects LPCM in fixed-size packets of 7.5 ms (360 samples at
     // 48 kHz, 180 at 24 kHz -- confirmed on the wire; the SETUP dict carries no
@@ -813,6 +798,53 @@ void AvSession::uplinkLoop(Listener *l)
                                      : rate * 3 / 400;      // 7.5 ms LPCM
     const size_t frameBytes = (size_t)frameSamples * 2;  // mono S16 capture frame
     const uint32_t ssrc = 0;                             // CarPlay input streams use SSRC 0 (LIVI ref)
+
+    // Direct blocking ALSA capture (no SDL): snd_pcm_readi() sleeps until one
+    // RTP frame of samples exists, so this thread wakes exactly once per frame
+    // instead of polling an intermediate queue (the old SDL path burned ~half
+    // the core in GetQueuedAudioSize/Delay churn). The driver ring is the only
+    // buffer; it cannot build a stale backlog, and an overrun surfaces as
+    // -EPIPE -> snd_pcm_recover. Capture mono at the negotiated rate; fall back
+    // to stereo (take the left channel) if the hw insists.
+    snd_pcm_t *cap = nullptr;
+    unsigned capChannels = 1;
+    int err = snd_pcm_open(&cap, Settings::alsaDevice.value.c_str(), SND_PCM_STREAM_CAPTURE, 0);
+    if (err < 0)
+    {
+        log_e("[cp-av] uplink: capture open %s failed: %s -- no mic",
+              Settings::alsaDevice.value.c_str(), snd_strerror(err));
+        _captureBusy.store(false);
+        return;
+    }
+    {
+        snd_pcm_hw_params_t *hw;
+        snd_pcm_hw_params_alloca(&hw);
+        snd_pcm_hw_params_any(cap, hw);
+        snd_pcm_hw_params_set_access(cap, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
+        snd_pcm_hw_params_set_format(cap, hw, SND_PCM_FORMAT_S16_LE);
+        if (snd_pcm_hw_params_set_channels(cap, hw, 1) < 0)
+        {
+            capChannels = 2;
+            snd_pcm_hw_params_set_channels(cap, hw, 2);
+        }
+        unsigned gotRate = (unsigned)rate;
+        snd_pcm_hw_params_set_rate_near(cap, hw, &gotRate, nullptr);
+        snd_pcm_uframes_t period = (snd_pcm_uframes_t)frameSamples;
+        snd_pcm_uframes_t ring = (snd_pcm_uframes_t)frameSamples * 8;
+        snd_pcm_hw_params_set_period_size_near(cap, hw, &period, nullptr);
+        snd_pcm_hw_params_set_buffer_size_near(cap, hw, &ring);
+        err = snd_pcm_hw_params(cap, hw);
+        if (err < 0 || gotRate != (unsigned)rate)
+        {
+            log_e("[cp-av] uplink: capture params failed (%s, rate %u want %d) -- no mic",
+                  snd_strerror(err), gotRate, rate);
+            snd_pcm_close(cap);
+            _captureBusy.store(false);
+            return;
+        }
+        log_i("[cp-av] uplink: ALSA capture %u Hz %uch, period %lu, ring %lu",
+              gotRate, capChannels, (unsigned long)period, (unsigned long)ring);
+    }
 
     // The phone picks OPUS for wireless voice (telephony/Siri). This core has no
     // FPU, but libopus here is built fixed-point, so we encode on the uplink.
@@ -827,8 +859,7 @@ void AvSession::uplinkLoop(Listener *l)
         if (!enc || err != OPUS_OK)
         {
             log_e("[cp-av] uplink: opus_encoder_create(%d) failed (%d) -- no mic", rate, err);
-            SDL_PauseAudioDevice(dev, 1);
-            SDL_CloseAudioDevice(dev);
+            snd_pcm_close(cap);
             _captureBusy.store(false);
             return;
         }
@@ -850,18 +881,13 @@ void AvSession::uplinkLoop(Listener *l)
     const size_t kMaxOpus = 1500;
     const size_t payloadCap = useOpus ? kMaxOpus : frameBytes;
     std::vector<uint8_t> pcm(frameBytes);
+    std::vector<int16_t> capBuf((size_t)frameSamples * capChannels); // readi target
     std::vector<uint8_t> encOut(useOpus ? kMaxOpus : 0);
     std::vector<uint8_t> pkt(12 + payloadCap + 16 + 8);
     uint16_t seq = 0;
     uint32_t ts = 0;
     uint64_t nonceCtr = 0;
     size_t sent = 0;
-    // Capture backlog cap (~100ms mono S16). Capture fills in exact realtime,
-    // so a backlog only means this thread fell behind (CPU starvation) or the
-    // peer wasn't latched yet: ship fresh mic audio, not a growing stale tail
-    // that the far end hears late. 100ms keeps call latency tight while leaving
-    // slack for a brief CPU spike before a flush (a flush costs a small glitch).
-    const Uint32 micCapBytes = (Uint32)(rate * 2 * 100 / 1000);
     // DC blocker (one-pole high-pass, ~8Hz @48k): the F1C ADC has a large fixed
     // DC bias (~-2300 LSB measured) that shifts the whole waveform off-centre;
     // the phone's AGC then amplifies that offset into audible distortion. y[n] =
@@ -870,55 +896,47 @@ void AvSession::uplinkLoop(Listener *l)
     constexpr int32_t DC_R_Q15 = 32735; // ~0.99902
     int32_t dcX1 = 0, dcY1 = 0;
 
-    log_i("[cp-av] uplink loop started (stream %lld, %d Hz mono %s, %d-sample frames, got %d Hz)",
-          (long long)l->streamId, rate, useOpus ? "Opus" : "PCM", frameSamples, got.freq);
+    log_i("[cp-av] uplink loop started (stream %lld, %d Hz mono %s, %d-sample frames)",
+          (long long)l->streamId, rate, useOpus ? "Opus" : "PCM", frameSamples);
     // Runs until the session stops OR a newer input stream supersedes us (the
     // phone re-SETUPs telephony repeatedly) -- then we release the mic for it.
     while (_running.load() && _uplinkGen.load() == myGen)
     {
-        // If we fell behind (a CPU spike let the capture queue build past the
-        // cap), drop only the STALE OLDEST excess and keep ~30ms of recent
-        // audio. A full SDL_ClearQueuedAudio() dropped ~100ms at once and was
-        // heard as periodic "sync loss"; trimming resyncs with a far smaller gap.
+        // Block until exactly one RTP frame of samples exists (the readi sleep
+        // IS the loop pacing -- no polling, no backlog: the small driver ring
+        // overruns instead, which recover() clears with a tiny gap).
+        snd_pcm_sframes_t got = snd_pcm_readi(cap, capBuf.data(), (snd_pcm_uframes_t)frameSamples);
+        if (got < 0)
         {
-            const Uint32 q = SDL_GetQueuedAudioSize(dev);
-            if (q > micCapBytes)
+            got = snd_pcm_recover(cap, (int)got, 1);
+            if (got < 0)
             {
-                const Uint32 keep = (Uint32)(rate * 2 * 30 / 1000); // ~30ms
-                Uint32 drop = ((q - keep) / (Uint32)frameBytes) * (Uint32)frameBytes;
-                while (drop >= frameBytes)
-                {
-                    SDL_DequeueAudio(dev, pcm.data(), (Uint32)frameBytes);
-                    drop -= (Uint32)frameBytes;
-                }
+                log_w("[cp-av] uplink: capture failed: %s", snd_strerror((int)got));
+                SDL_Delay(100);
             }
+            continue;
         }
-        // Wait until the downlink has latched where to send.
+        if (got < frameSamples)
+            continue; // short read around a recover: resync on the next frame
+
+        // Drop frames until the downlink has latched where to send (keeps the
+        // ring drained so no stale audio accumulates while waiting).
         if (!l->havePeer.load())
-        {
-            SDL_Delay(10);
-            continue;
-        }
-        // Drain EVERY complete frame now queued before sleeping, so the send
-        // rate tracks realtime capture (133 pkt/s @7.5ms) and the queue does not
-        // creep up to the cap. A short poll only when nothing is ready yet.
-        if (SDL_GetQueuedAudioSize(dev) < frameBytes)
-        {
-            SDL_Delay(3);
-            continue;
-        }
-        if (SDL_DequeueAudio(dev, pcm.data(), (Uint32)frameBytes) != frameBytes)
             continue;
 
-        // Apply software gain with saturation (the F1C ADC + fixed mixer boost
-        // run quiet), then produce the payload. Opus takes native-endian int16
-        // and is encoded here; raw PCM is byte-swapped to big-endian (the
-        // CarPlay wire order, as the downlink is decoded BE->native) -- a
-        // byte-swap that must NOT be applied to Opus. Mirrors LIVI swap16().
+        // Produce the payload: DC-block + gain, then Opus-encode (wireless) or
+        // byte-swap to big-endian (the CarPlay LPCM wire order, mirroring the
+        // downlink decode) -- a swap that must NOT be applied to Opus.
         const uint8_t *payload;
         size_t payloadLen;
         {
             int16_t *s16 = reinterpret_cast<int16_t *>(pcm.data());
+            // Mono frame from the capture: direct, or left channel of stereo.
+            if (capChannels == 1)
+                std::memcpy(s16, capBuf.data(), frameBytes);
+            else
+                for (int i = 0; i < frameSamples; i++)
+                    s16[i] = capBuf[(size_t)i * 2];
             // DC blocker (removes the ADC's fixed bias) then software gain, both
             // with saturation. Do the high-pass FIRST so gain acts on centred
             // audio and does not amplify the offset into clipping.
@@ -969,7 +987,7 @@ void AvSession::uplinkLoop(Listener *l)
         for (int i = 0; i < 8; i++)
             nonce[4 + i] = (uint8_t)(nonceCtr >> (8 * i));
 
-        if (!cp_crypto::chachaSeal(key.data(), nonce, payload, payloadLen, p + 4, 8, p + 12))
+        if (!aead.seal(nonce, payload, payloadLen, p + 4, 8, p + 12))
         {
             log_w("[cp-av] uplink: seal failed");
             continue;
@@ -989,8 +1007,7 @@ void AvSession::uplinkLoop(Listener *l)
                   (long long)l->streamId);
     }
 
-    SDL_PauseAudioDevice(dev, 1);
-    SDL_CloseAudioDevice(dev);
+    snd_pcm_close(cap);
     if (enc)
         opus_encoder_destroy(enc);
     _captureBusy.store(false);
