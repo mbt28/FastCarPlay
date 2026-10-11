@@ -21,6 +21,7 @@ extern "C"
 #include <opus/opus.h> // fixed-point Opus encoder for the wireless voice uplink
 
 #include "common/logger.h"
+#include "common/threading.h" // uplink thread priority
 #include "settings.h" // mic-gain
 #include "cp_control_cipher.h"
 #include "cp_crypto.h"
@@ -135,19 +136,20 @@ void put32be(uint8_t *p, uint32_t v)
 // is output-only media. Mirrors the PCM/PCM_MONO masks in handleInfo.
 bool isMonoPcm(int64_t fmt)
 {
-    constexpr int64_t MONO = 0x4 | 0x10 | 0x40 | 0x100 | 0x400;   // 8/16/24/32/44.1k mono
-    constexpr int64_t STEREO = 0x8 | 0x20 | 0x80 | 0x200 | 0x800; // same rates, stereo
+    constexpr int64_t MONO = 0x4 | 0x10 | 0x40 | 0x100 | 0x400 | 0x4000;   // 8/16/24/32/44.1/48k mono
+    constexpr int64_t STEREO = 0x8 | 0x20 | 0x80 | 0x200 | 0x800 | 0x8000; // same rates, stereo
     return (fmt & MONO) != 0 && (fmt & STEREO) == 0;
 }
 // Sample rate of a 16-bit PCM audio-format bit (mono or stereo pair), or 0 if
 // the format is not one of the recognised PCM bits.
 int pcmRate(int64_t fmt)
 {
-    if (fmt & (0x4 | 0x8))     return 8000;
-    if (fmt & (0x10 | 0x20))   return 16000;
-    if (fmt & (0x40 | 0x80))   return 24000;
-    if (fmt & (0x100 | 0x200)) return 32000;
-    if (fmt & (0x400 | 0x800)) return 44100;
+    if (fmt & (0x4 | 0x8))       return 8000;
+    if (fmt & (0x10 | 0x20))     return 16000;
+    if (fmt & (0x40 | 0x80))     return 24000;
+    if (fmt & (0x100 | 0x200))   return 32000;
+    if (fmt & (0x400 | 0x800))   return 44100;
+    if (fmt & (0x4000 | 0x8000)) return 48000;
     return 0;
 }
 uint64_t getNtp(const uint8_t *p)
@@ -566,6 +568,15 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
                           cp_audio::Codec codec, int rate, int channels, bool upmix,
                           Listener *uplink)
 {
+    setThreadName("cp-audio-dl");
+    // Elevate above the SCHED_OTHER video decode (same level as the mic uplink
+    // and the PcmAudio playback): this thread receives, decrypts and decodes the
+    // caller/media audio and feeds the playback queue. Left at normal priority
+    // the H.264 decoder starved it, so caller audio arrived in bursts and the
+    // playback queue dried every ~0.5s (heard as heavy distortion). Tiny CPU
+    // (a call is a PCM byte-swap); stays below the USB transport (FIFO 50).
+    setThreadPriority(ThreadPriority::High); // SCHED_FIFO 10
+
     const Bytes key = streamKey(streamId, "DataStream-Output-Encryption-Key");
     cp_audio::Decoder dec;
     if (!dec.init(codec, rate, channels, upmix))
@@ -585,14 +596,36 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
     // slow/starved feed from a bursty-but-realtime one.
     struct timespec t0{};
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    int64_t lastLogMs = 0;
+    int64_t lastLogMs = 0, lastPktMs = 0;
     size_t lastSamples = 0, totalSamples = 0;
     while (_running)
     {
         struct pollfd pfds[2] = {{dataFd, POLLIN, 0}, {ctrlFd, POLLIN, 0}};
         int r = ::poll(pfds, 2, 300);
         if (r < 0) break;
-        if (r == 0) continue;
+        if (r == 0)
+        {
+            // Call-mode safety net: if we are the active telephony stream and
+            // the phone has gone silent for 3s, assume a missed TEARDOWN and
+            // release media/alt audio. Opus DTX still emits refresh frames
+            // every ~400ms, so a live call never trips this.
+            if (type == STREAM_MAIN_AUDIO && _callActive.load() &&
+                _callStreamId.load() == streamId)
+            {
+                struct timespec now{};
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                const int64_t nowMs = (now.tv_sec - t0.tv_sec) * 1000 +
+                                      (now.tv_nsec - t0.tv_nsec) / 1000000;
+                if (nowMs - lastPktMs > 3000 && _callActive.exchange(false))
+                {
+                    _callStreamId.store(0);
+                    log_w("[cp-av] telephony silent >3s -- call mode off");
+                    if (_sinks.onCallState)
+                        _sinks.onCallState(false);
+                }
+            }
+            continue;
+        }
         if (pfds[1].revents & POLLIN)
             ::recvfrom(ctrlFd, buf, sizeof(buf), 0, nullptr, nullptr); // drain RTCP
         if (!(pfds[0].revents & POLLIN))
@@ -604,19 +637,51 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
                                uplink ? &srcLen : nullptr);
         if (n < 12 + 24) // RTP header + tail (16B tag + 8B nonce)
             continue;
+        // Telephony-priority: during a call, drain media/alt packets but skip
+        // their ChaCha + AAC/opus decode + sink -- the voice stream needs that
+        // CPU. markAudioActive keeps /feedback truthful for a stream whose
+        // FIRST packet lands mid-call (an unlisted stream gets torn down).
+        if (type != STREAM_MAIN_AUDIO && _callActive.load(std::memory_order_relaxed))
+        {
+            if (packets++ == 0)
+                markAudioActive(streamId);
+            continue;
+        }
         const size_t len = (size_t)n;
 
-        // Latch the phone's data address (and its RTP payload type) from the
-        // first packet it sends us, so the mic uplink knows where to send and
-        // can mirror the payload type the phone uses on this stream.
-        if (uplink && !uplink->havePeer.load())
+        // Latch the phone's reply address from the first downlink packet. The
+        // address+scope here is authoritative (where audio really comes from);
+        // a SETUP seed may have given only the mic PORT plus a provisional
+        // (control-channel) address that doesn't route for UDP on wired. So:
+        // - seeded (peerLen set): refresh address+scope, KEEP the seeded port.
+        // - unseeded: take the whole source (address+port).
+        if (uplink && !uplink->peerAddrLatched.load())
         {
-            std::memcpy(&uplink->peer, &src, srcLen);
-            uplink->peerLen = srcLen;
+            char before[INET6_ADDRSTRLEN] = "?", after[INET6_ADDRSTRLEN] = "?";
+            if (uplink->peerLen && uplink->peer.ss_family == AF_INET6)
+                inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&uplink->peer)->sin6_addr, before, sizeof(before));
+            if (uplink->peerLen != 0 && src.ss_family == AF_INET6)
+            {
+                struct sockaddr_in6 *d = (struct sockaddr_in6 *)&uplink->peer;
+                struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&src;
+                d->sin6_addr = s6->sin6_addr;          // authoritative address
+                d->sin6_scope_id = s6->sin6_scope_id;  // and the routing scope
+                // d->sin6_port stays the seeded mic port.
+            }
+            else
+            {
+                std::memcpy(&uplink->peer, &src, srcLen);
+                uplink->peerLen = srcLen;
+            }
             uplink->payloadType.store(buf[1] & 0x7f); // drop the marker bit, keep the PT
             uplink->havePeer.store(true);
-            log_i("[cp-av] audio %d uplink: latched phone data address (RTP PT=0x%02x)", type,
-                  buf[1] & 0x7f);
+            uplink->peerAddrLatched.store(true);
+            if (uplink->peer.ss_family == AF_INET6)
+                inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&uplink->peer)->sin6_addr, after, sizeof(after));
+            log_i("[cp-av] audio %d uplink: peer addr seed=%s%%%u -> actual=%s%%%u port=%u PT=0x%02x", type,
+                  before, uplink->peerLen ? ((struct sockaddr_in6 *)&uplink->peer)->sin6_scope_id : 0,
+                  after, uplink->peer.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&uplink->peer)->sin6_scope_id : 0,
+                  ntohs(((struct sockaddr_in6 *)&uplink->peer)->sin6_port), buf[1] & 0x7f);
         }
 
         // AAD = RTP timestamp+SSRC (bytes 4..12); nonce = 4 zero + last 8 bytes;
@@ -654,6 +719,7 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
             struct timespec now{};
             clock_gettime(CLOCK_MONOTONIC, &now);
             int64_t elapsedMs = (now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+            lastPktMs = elapsedMs; // liveness for the call-mode safety net
             if (elapsedMs - lastLogMs >= 2000)
             {
                 const int rate = dec.outRate() > 0 ? dec.outRate() : 44100;
@@ -684,6 +750,14 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
 void AvSession::uplinkLoop(Listener *l)
 {
     const uint64_t myGen = l->uplinkGen;
+    setThreadName("cp-uplink");
+    // Elevate above the SCHED_OTHER video decode + playback: during a call the
+    // H.264 decoder periodically monopolised the single CPU for 60-150ms, which
+    // starved this thread so the capture queue backed up and had to be trimmed
+    // (heard as periodic "sync loss"). This thread is almost always asleep and
+    // drains only a few 7.5ms frames per wake, so a brief preemption of the
+    // decoder costs nothing. Stays below the USB transport's realtime (FIFO 50).
+    setThreadPriority(ThreadPriority::High); // SCHED_FIFO 10
 
     // Claim the single ALSA capture, waiting out any OLDER input stream's
     // uplink (which releases as soon as it notices it was superseded). Bail if
@@ -707,13 +781,13 @@ void AvSession::uplinkLoop(Listener *l)
     want.freq = rate;
     want.format = AUDIO_S16LSB;
     want.channels = 1;              // the ADC is mono; a stereo open dups L/R
-    // Large capture period (not the 20ms opus frame): during a continuous call
-    // the ADC IRQ/wakeup rate competes with the DAC-refill thread on the single
-    // CPU, starving the DAC FIFO -> the driver emits zeros on underrun -> the
-    // caller is silent. A big capture period cuts that wakeup rate ~4x, handing
-    // CPU back to playback. Opus still ships 20ms frames: frameSamples below is
-    // rate/50 and is re-sliced from the queued capture, independent of this.
-    want.samples = 2048;
+    // Capture period: a balance between ADC IRQ rate (competes with the DAC
+    // refill thread on the single CPU -> starvation/underruns) and latency (the
+    // period is a floor on mic delay). 1024 @ 48k ~= 21ms; in call-priority
+    // mode media is dropped, so the CPU headroom lets us run this tighter than
+    // the old 2048 (~43ms) for noticeably less call latency. Frames are
+    // re-sliced from the queue (frameSamples above), independent of this.
+    want.samples = 1024;
     want.callback = nullptr;        // queued capture: pull with SDL_DequeueAudio
     SDL_AudioDeviceID dev = SDL_OpenAudioDevice(nullptr, SDL_TRUE, &want, &got, 0);
     if (dev == 0)
@@ -729,7 +803,14 @@ void AvSession::uplinkLoop(Listener *l)
 
     const bool useOpus = (l->uplinkCodec == cp_audio::Codec::Opus);
     const Bytes key = streamKey(l->streamId, "DataStream-Input-Encryption-Key");
-    const int frameSamples = rate / 50;                  // 320 @ 16 kHz = 20 ms
+    // PCM must be framed at the phone's packet cadence, NOT a fixed 20 ms: the
+    // phone sends/expects LPCM in fixed-size packets of 7.5 ms (360 samples at
+    // 48 kHz, 180 at 24 kHz -- confirmed on the wire; the SETUP dict carries no
+    // packet-size field). Sending 20 ms (960-sample) packets made the phone
+    // discard our mic entirely (the caller heard nothing). Opus keeps 20 ms:
+    // its frame must be a valid Opus duration and its packets self-size.
+    const int frameSamples = useOpus ? rate / 50            // 20 ms Opus
+                                     : rate * 3 / 400;      // 7.5 ms LPCM
     const size_t frameBytes = (size_t)frameSamples * 2;  // mono S16 capture frame
     const uint32_t ssrc = 0;                             // CarPlay input streams use SSRC 0 (LIVI ref)
 
@@ -775,6 +856,19 @@ void AvSession::uplinkLoop(Listener *l)
     uint32_t ts = 0;
     uint64_t nonceCtr = 0;
     size_t sent = 0;
+    // Capture backlog cap (~100ms mono S16). Capture fills in exact realtime,
+    // so a backlog only means this thread fell behind (CPU starvation) or the
+    // peer wasn't latched yet: ship fresh mic audio, not a growing stale tail
+    // that the far end hears late. 100ms keeps call latency tight while leaving
+    // slack for a brief CPU spike before a flush (a flush costs a small glitch).
+    const Uint32 micCapBytes = (Uint32)(rate * 2 * 100 / 1000);
+    // DC blocker (one-pole high-pass, ~8Hz @48k): the F1C ADC has a large fixed
+    // DC bias (~-2300 LSB measured) that shifts the whole waveform off-centre;
+    // the phone's AGC then amplifies that offset into audible distortion. y[n] =
+    // x[n] - x[n-1] + R*y[n-1], R=0.999 in Q15 -- integer-only, removes DC/rumble
+    // without touching the voice band. State persists across frames.
+    constexpr int32_t DC_R_Q15 = 32735; // ~0.99902
+    int32_t dcX1 = 0, dcY1 = 0;
 
     log_i("[cp-av] uplink loop started (stream %lld, %d Hz mono %s, %d-sample frames, got %d Hz)",
           (long long)l->streamId, rate, useOpus ? "Opus" : "PCM", frameSamples, got.freq);
@@ -782,15 +876,35 @@ void AvSession::uplinkLoop(Listener *l)
     // phone re-SETUPs telephony repeatedly) -- then we release the mic for it.
     while (_running.load() && _uplinkGen.load() == myGen)
     {
+        // If we fell behind (a CPU spike let the capture queue build past the
+        // cap), drop only the STALE OLDEST excess and keep ~30ms of recent
+        // audio. A full SDL_ClearQueuedAudio() dropped ~100ms at once and was
+        // heard as periodic "sync loss"; trimming resyncs with a far smaller gap.
+        {
+            const Uint32 q = SDL_GetQueuedAudioSize(dev);
+            if (q > micCapBytes)
+            {
+                const Uint32 keep = (Uint32)(rate * 2 * 30 / 1000); // ~30ms
+                Uint32 drop = ((q - keep) / (Uint32)frameBytes) * (Uint32)frameBytes;
+                while (drop >= frameBytes)
+                {
+                    SDL_DequeueAudio(dev, pcm.data(), (Uint32)frameBytes);
+                    drop -= (Uint32)frameBytes;
+                }
+            }
+        }
         // Wait until the downlink has latched where to send.
         if (!l->havePeer.load())
         {
             SDL_Delay(10);
             continue;
         }
+        // Drain EVERY complete frame now queued before sleeping, so the send
+        // rate tracks realtime capture (133 pkt/s @7.5ms) and the queue does not
+        // creep up to the cap. A short poll only when nothing is ready yet.
         if (SDL_GetQueuedAudioSize(dev) < frameBytes)
         {
-            SDL_Delay(5);
+            SDL_Delay(3);
             continue;
         }
         if (SDL_DequeueAudio(dev, pcm.data(), (Uint32)frameBytes) != frameBytes)
@@ -805,13 +919,20 @@ void AvSession::uplinkLoop(Listener *l)
         size_t payloadLen;
         {
             int16_t *s16 = reinterpret_cast<int16_t *>(pcm.data());
+            // DC blocker (removes the ADC's fixed bias) then software gain, both
+            // with saturation. Do the high-pass FIRST so gain acts on centred
+            // audio and does not amplify the offset into clipping.
             const int g = Settings::micGain;
-            if (g > 1)
-                for (int i = 0; i < frameSamples; i++)
-                {
-                    int v = (int)s16[i] * g;
-                    s16[i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
-                }
+            for (int i = 0; i < frameSamples; i++)
+            {
+                const int32_t x = s16[i];
+                int32_t y = x - dcX1 + (int32_t)(((int64_t)DC_R_Q15 * dcY1) >> 15);
+                dcX1 = x;
+                dcY1 = y;
+                if (g > 1)
+                    y *= g;
+                s16[i] = (int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y));
+            }
 
             if (useOpus)
             {
@@ -959,7 +1080,33 @@ bool AvSession::handle(const cp_rtsp::Request &req, cp_rtsp::Response &res)
     if (m == "SETUP") { res = handleSetup(req); return true; }
     if (m == "RECORD") { log_i("[cp-av] RECORD -- session started"); return true; }
     if (m == "SET_PARAMETER" || m == "GET_PARAMETER" || m == "OPTIONS" || m == "FLUSH") return true;
-    if (m == "TEARDOWN") { log_i("[cp-av] TEARDOWN"); return true; }
+    if (m == "TEARDOWN")
+    {
+        // The body lists the streams being torn down (same shape as SETUP). End
+        // call mode when the active telephony stream goes -- matched by id so
+        // the phone's SETUP-new-then-TEARDOWN-old churn can't kill a live call.
+        // A bodyless/streamless TEARDOWN ends the whole AV session.
+        cp_plist::Value body = plistOf(req.body);
+        const cp_plist::Value *streams = body.find("streams");
+        bool endCall = !streams || streams->type != cp_plist::Value::Type::Array;
+        if (!endCall)
+            for (const cp_plist::Value &s : streams->array)
+                if ((int)s.intOr("type") == STREAM_MAIN_AUDIO)
+                {
+                    const int64_t sid = s.intOr("streamConnectionID");
+                    if (sid == 0 || sid == _callStreamId.load())
+                        endCall = true;
+                }
+        if (endCall && _callActive.exchange(false))
+        {
+            _callStreamId.store(0);
+            log_i("[cp-av] TEARDOWN telephony -- call mode off");
+            if (_sinks.onCallState)
+                _sinks.onCallState(false);
+        }
+        log_i("[cp-av] TEARDOWN");
+        return true;
+    }
     if (m == "POST" && endsWith("/feedback")) { res = handleFeedback(req); return true; }
     if (m == "POST" && endsWith("/command"))
     {
@@ -1030,9 +1177,14 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
         display.set("initialViewArea", V::integer(0));
     }
 
-    // ── audio formats (PCM/OPUS/AAC-LC at 44.1k) ──
-    const int64_t PCM = 0x3fc | 0xc00;      // voice + media 44.1k mono+stereo
-    const int64_t PCM_MONO = 0x154 | 0x400; // voice mono + media mono
+    // ── audio formats (PCM/OPUS/AAC-LC) ──
+    // NO 44.1k-family bits (0x400/0x800) anywhere: the F1C codec is 48k-native,
+    // and the phone PREFERS 44.1k when both are offered (seen with AAC, then
+    // again with wired LPCM media at 0x800) -- which forces a fractional
+    // resample AND a 44.1k mic capture that the driver must refuse against 48k
+    // playback (shared PLL). 8-32k + 48k are all integer-related to 48k.
+    const int64_t PCM = 0x3fc | 0xc000;      // 8-32k mono+stereo, 48k mono+stereo
+    const int64_t PCM_MONO = 0x154 | 0x4000; // 8/16/24/32k mono + 48k mono
     const int64_t OPUS = 0x70000000;        // OPUS 16/24/48k mono (output)
     const int64_t OPUS_VOICE = 0x30000000;  // OPUS 16k+24k mono (uplink input; SILK, no 48k hybrid)
     const int64_t AAC48 = 0x800000;         // AAC-LC 48k (media / type 102)
@@ -1301,6 +1453,19 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
                 // Register for /feedback so the phone keeps this stream alive
                 // (an unreported media stream is torn down every few seconds).
                 markAudioStream(type, arate, streamId);
+                // Telephony-priority: a call makes voice the ONLY active audio
+                // (Siri = "speechRecognition" keeps the normal duck instead).
+                // Order: id, then flag, then sink -- consumers that see the
+                // flag must be able to match the stream, and the sink clears
+                // the stale media/alt queues only after the gate is up.
+                if (type == STREAM_MAIN_AUDIO && usage == "telephony")
+                {
+                    _callStreamId.store(streamId);
+                    _callActive.store(true);
+                    log_i("[cp-av] telephony SETUP -- call mode on (id=%lld)", (long long)streamId);
+                    if (_sinks.onCallState)
+                        _sinks.onCallState(true);
+                }
                 if (wantUplink)
                 {
                     // The phone re-SETUPs a fresh input stream each time; tag
@@ -1327,9 +1492,17 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
                     }
                 }
 
-                l->thread = std::thread([this, dataFd, ctrlFd, streamId, type, codec, arate, achan,
-                                         upmix, lp, wantUplink] {
-                    audioLoop(dataFd, ctrlFd, streamId, type, codec, arate, achan, upmix,
+                // Wired CarPlay ships MUSIC as LPCM on the main-audio stream
+                // (type 100, usage=media). Downstream, type picks the sink
+                // channel: media must ride the deep-buffered main channel (the
+                // voice path's small buffer + latency cap chopped it to bits)
+                // and must be dropped in call mode like wireless media. So the
+                // loop runs under the MEDIA type; /feedback keeps the real one.
+                const int routeType = (type == STREAM_MAIN_AUDIO && usage == "media")
+                                          ? STREAM_MAIN_HIGH_AUDIO : type;
+                l->thread = std::thread([this, dataFd, ctrlFd, streamId, routeType, codec, arate,
+                                         achan, upmix, lp, wantUplink] {
+                    audioLoop(dataFd, ctrlFd, streamId, routeType, codec, arate, achan, upmix,
                               wantUplink ? lp : nullptr);
                 });
                 if (wantUplink)
@@ -1343,8 +1516,8 @@ cp_rtsp::Response AvSession::handleSetup(const cp_rtsp::Request &req)
                 entry.set("controlPort", cp_plist::Value::integer(ctrlPort));
                 entry.set("streamConnectionID", cp_plist::Value::integer(streamId));
                 log_i("[cp-av] SETUP audio (type %d usage=%s) fmt=0x%llx codec=%d dataPort=%u ctrlPort=%u id=%lld uplink=%d",
-                      type, usage.empty() ? "?" : usage.c_str(), (unsigned long long)fmt, (int)codec, dataPort,
-                      ctrlPort, (long long)streamId, (int)wantUplink);
+                      type, usage.empty() ? "?" : usage.c_str(), (unsigned long long)fmt, (int)codec,
+                      dataPort, ctrlPort, (long long)streamId, (int)wantUplink);
             }
             else if (type == STREAM_DATA)
             {
@@ -1476,6 +1649,8 @@ void AvSession::stop()
 {
     if (!_running.exchange(false))
         return;
+    _callActive.store(false); // no sink: the connection resets its own gate
+    _callStreamId.store(0);
     auto shut = [](Listener &l) {
         // Join the worker threads BEFORE closing the sockets. The loops all exit
         // on _running (already cleared above) within one poll/SDL_Delay cycle,

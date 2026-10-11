@@ -99,6 +99,9 @@ struct Sinks
     // foreground -- the CarPlay equivalent of Android Auto's host-ui-requested.
     // Optional; wired to the connection's video-focus release.
     std::function<void()> onRequestNativeUI;
+    // A telephony call started (true) / ended (false). The consumer silences
+    // media/alt audio for the call's duration (telephony-priority mode).
+    std::function<void(bool active)> onCallState;
 };
 
 class AvSession
@@ -139,6 +142,11 @@ private:
         // atomics never force a move/copy of the Listener itself.
         std::thread uplinkThread;
         std::atomic<bool> havePeer{false};
+        // Refresh the peer ADDRESS from the first downlink packet even when the
+        // port was seeded from SETUP: on wired CarPlay the authoritative phone
+        // address/scope is where downlink arrives from, not the control-channel
+        // TCP peer (sending mic to the latter succeeded but was never routed).
+        std::atomic<bool> peerAddrLatched{false};
         struct sockaddr_storage peer{};
         socklen_t peerLen = 0;
         std::atomic<uint8_t> payloadType{0};
@@ -220,6 +228,13 @@ private:
     // _captureBusy is the device token handed over during that supersede.
     std::atomic<bool> _captureBusy{false};
     std::atomic<uint64_t> _uplinkGen{0};
+    // Telephony-priority mode: while a call is active, media (102) and alt
+    // (101) packets are dropped before decrypt/decode so the voice stream has
+    // the CPU and the audio pipeline to itself. Set on SETUP usage=telephony,
+    // cleared on its TEARDOWN / 3s packet inactivity / stop(). _callStreamId
+    // guards against the phone's SETUP-new-then-TEARDOWN-old stream churn.
+    std::atomic<bool> _callActive{false};
+    std::atomic<int64_t> _callStreamId{0};
 
     Listener _event;
     std::vector<std::unique_ptr<Listener>> _streams;
