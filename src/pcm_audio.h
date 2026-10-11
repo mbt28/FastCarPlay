@@ -19,6 +19,11 @@
 #define FADE_IN_STEP_Q15 1
 #define FADE_OUT_STEP_Q15 3
 #define FADE_ZERO_SEGMENTS 10
+// Voice latency flush fires only after this many CONSECUTIVE over-cap
+// segments: one wireless burst (up to the 24-slot app queue, ~0.5s) overshoots
+// for a few segments and drains on its own; a sustained overshoot means a real
+// lag. Clearing on every overshoot discarded most of a call's audio.
+#define VOICE_OVER_CAP_SEGMENTS 15
 #define AUDIO_RESET_SECONDS 5
 
 struct ChannelConfig

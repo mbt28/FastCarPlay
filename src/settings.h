@@ -156,20 +156,23 @@ public:
     // scale one): calls/Siri are latency-sensitive, and the robust driver (hold-
     // last-sample + deep TX FIFO) tolerates the occasional underrun gracefully.
     static inline Setting<int> audioVoiceBuffer{"audio-voice-buffer-samples", 2048};
-    // Hard latency cap for the voice stream: if its SDL queue builds past this
-    // (bursty wireless delivery / an initial lead), flush to the live edge so the
-    // caller is not heard a second late. Media is not capped (smoothness wins).
-    static inline Setting<int> audioMaxLatencyMs{"audio-voice-max-latency-ms", 150};
+    // Latency cap for the voice stream: if its SDL queue stays past this for a
+    // SUSTAINED run of segments (not a mere delivery burst, which drains on its
+    // own), flush and resume at the current segment so the caller is not heard
+    // a second late. Media is not capped (smoothness wins).
+    static inline Setting<int> audioMaxLatencyMs{"audio-voice-max-latency-ms", 300};
     // A stream holds its (dmix) device open across gaps shorter than this to
     // avoid reopen churn, but releases it after this long idle so an idle stream
     // (e.g. paused music during a call) frees its dmix client + CPU -- the F1C
     // runs at ~0% idle during wireless full-duplex voice, so every idle client
     // costs over/underruns on the active ones.
     static inline Setting<int> audioIdleHoldMs{"audio-idle-hold-ms", 1500};
-    // Software gain applied to captured mic PCM before it is sent to the phone
-    // (the F1C ADC + fixed mixer boost give a low level). Integer multiplier
-    // with saturation; 1 = unchanged. Tune on-device via usersettings.txt.
-    static inline Setting<int> micGain{"mic-gain", 8};
+    // Software gain applied to captured mic PCM (after the DC blocker) before it
+    // is sent to the phone. Integer multiplier with saturation; 1 = unchanged.
+    // Measured on-board: raw speech already peaks ~70% FS, so >1 clips loud
+    // speech into an inaudible square wave (the phone AGCs the rest). Tune via
+    // usersettings.txt only for a genuinely quiet mic fitting.
+    static inline Setting<int> micGain{"mic-gain", 1};
     static inline Setting<std::string> audioDriver{"audio-driver", ""};
     static inline Setting<std::string> onConnect{"on-connect-script", ""};
     static inline Setting<std::string> onDisconnect{"on-disconnect-script", ""};
