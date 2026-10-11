@@ -804,8 +804,17 @@ void AvSession::uplinkLoop(Listener *l)
     // instead of polling an intermediate queue (the old SDL path burned ~half
     // the core in GetQueuedAudioSize/Delay churn). The driver ring is the only
     // buffer; it cannot build a stale backlog, and an overrun surfaces as
-    // -EPIPE -> snd_pcm_recover. Capture mono at the negotiated rate; fall back
-    // to stereo (take the left channel) if the hw insists.
+    // -EPIPE -> snd_pcm_recover. Fall back to stereo (take the left channel)
+    // if the hw refuses mono.
+    //
+    // ALWAYS capture at 48 kHz when the negotiated rate divides it: the sun4i
+    // codec shares one PLL between the DAC and ADC, and opening the hw capture
+    // at 16/24 kHz against the mixer's 48 kHz playback is refused with -EIO
+    // (wireless voice negotiates 16/24k opus; wired is 48k and never hit it --
+    // the old plug layer hid this by running the hw at 48k and resampling).
+    // The exact-integer decimation (x2/x3, averaged) happens below.
+    const int capRate = (48000 % rate == 0) ? 48000 : rate;
+    const int decim = capRate / rate;
     snd_pcm_t *cap = nullptr;
     unsigned capChannels = 1;
     int err = snd_pcm_open(&cap, Settings::alsaDevice.value.c_str(), SND_PCM_STREAM_CAPTURE, 0);
@@ -827,23 +836,23 @@ void AvSession::uplinkLoop(Listener *l)
             capChannels = 2;
             snd_pcm_hw_params_set_channels(cap, hw, 2);
         }
-        unsigned gotRate = (unsigned)rate;
+        unsigned gotRate = (unsigned)capRate;
         snd_pcm_hw_params_set_rate_near(cap, hw, &gotRate, nullptr);
-        snd_pcm_uframes_t period = (snd_pcm_uframes_t)frameSamples;
-        snd_pcm_uframes_t ring = (snd_pcm_uframes_t)frameSamples * 8;
+        snd_pcm_uframes_t period = (snd_pcm_uframes_t)(frameSamples * decim);
+        snd_pcm_uframes_t ring = (snd_pcm_uframes_t)(frameSamples * decim) * 8;
         snd_pcm_hw_params_set_period_size_near(cap, hw, &period, nullptr);
         snd_pcm_hw_params_set_buffer_size_near(cap, hw, &ring);
         err = snd_pcm_hw_params(cap, hw);
-        if (err < 0 || gotRate != (unsigned)rate)
+        if (err < 0 || gotRate != (unsigned)capRate)
         {
             log_e("[cp-av] uplink: capture params failed (%s, rate %u want %d) -- no mic",
-                  snd_strerror(err), gotRate, rate);
+                  snd_strerror(err), gotRate, capRate);
             snd_pcm_close(cap);
             _captureBusy.store(false);
             return;
         }
-        log_i("[cp-av] uplink: ALSA capture %u Hz %uch, period %lu, ring %lu",
-              gotRate, capChannels, (unsigned long)period, (unsigned long)ring);
+        log_i("[cp-av] uplink: ALSA capture %u Hz %uch /%d -> %d Hz, period %lu, ring %lu",
+              gotRate, capChannels, decim, rate, (unsigned long)period, (unsigned long)ring);
     }
 
     // The phone picks OPUS for wireless voice (telephony/Siri). This core has no
@@ -881,7 +890,7 @@ void AvSession::uplinkLoop(Listener *l)
     const size_t kMaxOpus = 1500;
     const size_t payloadCap = useOpus ? kMaxOpus : frameBytes;
     std::vector<uint8_t> pcm(frameBytes);
-    std::vector<int16_t> capBuf((size_t)frameSamples * capChannels); // readi target
+    std::vector<int16_t> capBuf((size_t)frameSamples * decim * capChannels); // readi target
     std::vector<uint8_t> encOut(useOpus ? kMaxOpus : 0);
     std::vector<uint8_t> pkt(12 + payloadCap + 16 + 8);
     uint16_t seq = 0;
@@ -902,21 +911,20 @@ void AvSession::uplinkLoop(Listener *l)
     // phone re-SETUPs telephony repeatedly) -- then we release the mic for it.
     while (_running.load() && _uplinkGen.load() == myGen)
     {
-        // Block until exactly one RTP frame of samples exists (the readi sleep
-        // IS the loop pacing -- no polling, no backlog: the small driver ring
-        // overruns instead, which recover() clears with a tiny gap).
-        snd_pcm_sframes_t got = snd_pcm_readi(cap, capBuf.data(), (snd_pcm_uframes_t)frameSamples);
+        // Block until one RTP frame's worth of hw samples exists (the readi
+        // sleep IS the loop pacing -- no polling, no backlog: the small driver
+        // ring overruns instead, which recover() clears with a tiny gap).
+        const int capFrames = frameSamples * decim;
+        snd_pcm_sframes_t got = snd_pcm_readi(cap, capBuf.data(), (snd_pcm_uframes_t)capFrames);
         if (got < 0)
         {
             got = snd_pcm_recover(cap, (int)got, 1);
             if (got < 0)
-            {
                 log_w("[cp-av] uplink: capture failed: %s", snd_strerror((int)got));
-                SDL_Delay(100);
-            }
+            SDL_Delay(50); // pace retries: an unhappy device must not spin a core
             continue;
         }
-        if (got < frameSamples)
+        if (got < capFrames)
             continue; // short read around a recover: resync on the next frame
 
         // Drop frames until the downlink has latched where to send (keeps the
@@ -931,12 +939,20 @@ void AvSession::uplinkLoop(Listener *l)
         size_t payloadLen;
         {
             int16_t *s16 = reinterpret_cast<int16_t *>(pcm.data());
-            // Mono frame from the capture: direct, or left channel of stereo.
-            if (capChannels == 1)
+            // Mono frame at the negotiated rate: average each group of `decim`
+            // 48k hw frames (crude but adequate anti-alias for voice) and take
+            // channel 0 when the hw insisted on stereo.
+            if (capChannels == 1 && decim == 1)
                 std::memcpy(s16, capBuf.data(), frameBytes);
             else
                 for (int i = 0; i < frameSamples; i++)
-                    s16[i] = capBuf[(size_t)i * 2];
+                {
+                    int32_t acc = 0;
+                    const int16_t *src = capBuf.data() + (size_t)i * decim * capChannels;
+                    for (int k = 0; k < decim; k++)
+                        acc += src[(size_t)k * capChannels];
+                    s16[i] = (int16_t)(acc / decim);
+                }
             // DC blocker (removes the ADC's fixed bias) then software gain, both
             // with saturation. Do the high-pass FIRST so gain acts on centred
             // audio and does not amplify the offset into clipping.
