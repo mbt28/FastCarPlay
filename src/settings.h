@@ -140,32 +140,23 @@ public:
     // the machine can stop responding to its own keyboard and mouse. Set
     // false when running FastCarPlay in a window alongside other work.
     static inline Setting<bool> realtimePriority{"realtime-priority", true};
+    // Prefill (in queued segments) before the mixer starts consuming a freshly
+    // started source: absorbs bursty delivery so the first words don't stutter.
+    // Voice (mono) tolerates a longer prefill than music start-up.
     static inline Setting<int> audioDelay{"audio-buffer-wait", 2};
     static inline Setting<int> audioDelayCall{"audio-buffer-wait-call", 6};
     static inline Setting<float> audioFade{"audio-fade", 0.3};
-    static inline Setting<int> audioAuxDelay{"audio-aux-delay", 200};
-    // SDL period size = audioBuffer * the per-format scale (see pcm_audio
-    // _configTable). The F1C arm926 runs at ~0% idle during wireless CarPlay
-    // (video decode + AAC + crypto + the esp-hosted Wi-Fi transport), so a small
-    // buffer underruns on every CPU spike. A larger buffer rides the spikes out
-    // and, with a longer period, also halves the audio interrupt rate (less sys
-    // CPU). 1024 keeps voice latency reasonable; music gets a bigger buffer via
-    // its larger scale since it tolerates latency.
-    static inline Setting<int> audioBuffer{"audio-buffer-samples", 1024};
-    // Voice (aux) opens a SMALL device buffer (media keeps the big audioBuffer*
-    // scale one): calls/Siri are latency-sensitive, and the robust driver (hold-
-    // last-sample + deep TX FIFO) tolerates the occasional underrun gracefully.
-    static inline Setting<int> audioVoiceBuffer{"audio-voice-buffer-samples", 2048};
-    // Latency cap for the voice stream: if its SDL queue stays past this for a
-    // SUSTAINED run of segments (not a mere delivery burst, which drains on its
-    // own), flush and resume at the current segment so the caller is not heard
-    // a second late. Media is not capped (smoothness wins).
+    // The ALSA PCM the in-app mixer and the mic capture open DIRECTLY (no SDL,
+    // no dmix -- the mixer sums main+aux itself). "hw:0,0" on the F1C avoids
+    // the plugin layer entirely; a desktop dev host can set "default".
+    static inline Setting<std::string> alsaDevice{"alsa-device", "hw:0,0"};
+    // Voice latency cap: the mixer drops the OLDEST queued aux segments once
+    // the backlog exceeds this, so the caller is never heard far behind the
+    // live edge. Media is not capped (smoothness wins).
     static inline Setting<int> audioMaxLatencyMs{"audio-voice-max-latency-ms", 300};
-    // A stream holds its (dmix) device open across gaps shorter than this to
-    // avoid reopen churn, but releases it after this long idle so an idle stream
-    // (e.g. paused music during a call) frees its dmix client + CPU -- the F1C
-    // runs at ~0% idle during wireless full-duplex voice, so every idle client
-    // costs over/underruns on the active ones.
+    // The mixer holds the codec open across gaps shorter than this (no reopen
+    // churn mid-call) and releases it after this long of full silence, so an
+    // idle app leaves the codec free and spends no period wakeups.
     static inline Setting<int> audioIdleHoldMs{"audio-idle-hold-ms", 1500};
     // Software gain applied to captured mic PCM (after the DC blocker) before it
     // is sent to the phone. Integer multiplier with saturation; 1 = unchanged.

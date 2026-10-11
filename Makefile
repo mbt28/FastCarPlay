@@ -45,7 +45,7 @@ all: release
 # opus: the fixed-point Opus encoder for the wireless CarPlay mic uplink (decode
 # still rides libavcodec's libopus wrapper). <opus/opus.h> resolves via the
 # sysroot's default include path, so only the library (-lopus) is added here.
-LDOPTIONS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl opus) -pthread
+LDOPTIONS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl opus alsa) -pthread
 LDFLAGS :=
 CXXCOMMON := -Wall -std=c++17 -Isrc -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
 CCOMMON := -Wall -std=c99 -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
@@ -175,7 +175,7 @@ $(TARGET): $(OBJS)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXCOMMON) $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl) $(CXXFLAGS) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXCOMMON) $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl alsa) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 # C rule for nanopb + generated protobuf code (-fno-rtti is C++-only).
 $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
