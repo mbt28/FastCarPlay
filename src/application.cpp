@@ -30,7 +30,7 @@
 #ifdef __linux__
 #include "touch_input.h" // evdev touchscreen; used on the drm/headless render paths
 #endif
-#include "pcm_audio.h"
+#include "audio_mixer.h"
 #include "common/functions.h"
 
 static KeySetting<int> *keyMap[] = {
@@ -824,12 +824,11 @@ void Application::loopHeadless()
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
-    PcmAudio audioMain("main"), audioAux("aux");
+    AudioMixer audioMixer;
 
     startDecoder(*decoder, protocol, protocol.videoCodec());
     AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
-    audioMain.start(&protocol.audioStreamMain);
-    audioAux.start(&protocol.audioStreamAux, &audioMain);
+    audioMixer.start(&protocol.audioStreamMain, &protocol.audioStreamAux);
     protocol.start();
 
 #ifdef __linux__
@@ -942,12 +941,11 @@ void Application::loopDrm()
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
-    PcmAudio audioMain("main"), audioAux("aux");
+    AudioMixer audioMixer;
 
     startDecoder(*decoder, protocol, protocol.videoCodec());
     AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
-    audioMain.start(&protocol.audioStreamMain);
-    audioAux.start(&protocol.audioStreamAux, &audioMain);
+    audioMixer.start(&protocol.audioStreamMain, &protocol.audioStreamAux);
     protocol.start();
 
 #ifdef __linux__
@@ -1209,15 +1207,14 @@ void Application::loop()
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
-    PcmAudio audioMain("main"), audioAux("aux");
+    AudioMixer audioMixer;
 
     if (Settings::keyPipe.value.length() > 2)
         _keyListener = new PipeListener(Settings::keyPipe.value.c_str());
 
     startDecoder(*decoder, protocol, protocol.videoCodec());
     AVCodecID startedCodec = protocol.videoCodec(); // reopened if the phone picks another
-    audioMain.start(&protocol.audioStreamMain);
-    audioAux.start(&protocol.audioStreamAux, &audioMain);
+    audioMixer.start(&protocol.audioStreamMain, &protocol.audioStreamAux);
     protocol.start();
 
     // The SDL loop has an event pump, but a signal must still stop it: with a
