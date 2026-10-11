@@ -70,6 +70,35 @@ bool chachaSeal(const uint8_t *key32, const uint8_t nonce12[12],
                 const uint8_t *plain, size_t plainLen,
                 const uint8_t *aad, size_t aadLen, uint8_t *out);
 
+// Reusable AEAD context for the per-packet A/V hot paths. The one-shot
+// functions above pay an EVP context allocation + provider fetch + key
+// schedule on EVERY call -- at 133 RTP packets/s each way plus every video
+// frame that setup dwarfs the actual cipher work on this core. A stream's key
+// never changes, so this schedules it once; each packet re-initialises only
+// the 12-byte nonce. Same wire semantics as the one-shot forms (out may alias
+// the input).
+class ChachaStream
+{
+public:
+    ChachaStream() = default;
+    ~ChachaStream();
+    ChachaStream(const ChachaStream &) = delete;
+    ChachaStream &operator=(const ChachaStream &) = delete;
+
+    // Set direction + key (once per stream). Returns false on setup failure;
+    // open()/seal() then also return false, so callers need no extra guard.
+    bool initOpen(const uint8_t *key32);
+    bool initSeal(const uint8_t *key32);
+
+    bool open(const uint8_t nonce12[12], const uint8_t *ctAndTag, size_t ctAndTagLen,
+              const uint8_t *aad, size_t aadLen, uint8_t *out);
+    bool seal(const uint8_t nonce12[12], const uint8_t *plain, size_t plainLen,
+              const uint8_t *aad, size_t aadLen, uint8_t *out);
+
+private:
+    struct evp_cipher_ctx_st *_ctx = nullptr;
+};
+
 // 12-byte nonce: 4 zero bytes + 8-byte little-endian counter (AirPlay style).
 Bytes nonce64(uint64_t counter);
 void nonce64(uint64_t counter, uint8_t out[12]);
