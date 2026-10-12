@@ -633,7 +633,7 @@ void AaConnection::emitAudio(uint8_t channel, const uint8_t *data, size_t length
 void AaConnection::queueFrame(uint8_t channel, uint16_t msgId, const std::vector<uint8_t> &body,
                               uint8_t flagClass)
 {
-    std::unique_ptr<Message> message(new Message(CMD_AA_FRAME, AA_FRAME_HEAD + body.size()));
+    std::unique_ptr<Message> message(new Message(CMD_AA_FRAME, (int32_t)(AA_FRAME_HEAD + body.size())));
     uint8_t *data = message->data();
     if (!data)
         return;

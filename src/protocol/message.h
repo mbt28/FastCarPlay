@@ -45,12 +45,6 @@ public:
         _size = size;
     }
 
-    Message(uint32_t cmd, uint32_t value)
-        : Message(cmd, 4)
-    {
-        write_uint32_le(_data, value);
-    }
-
     Message(const Message &) = delete;
     Message &operator=(const Message &) = delete;
 
@@ -100,7 +94,10 @@ public:
 
     static std::unique_ptr<Message> Control(uint32_t value)
     {
-        return std::unique_ptr<Message>(new Message(CMD_CONTROL, value));
+        std::unique_ptr<Message> result(new Message(CMD_CONTROL, 4));
+        if (result->_data)
+            write_uint32_le(result->_data, value);
+        return result;
     }
 
     static std::unique_ptr<Message> Touch(uint32_t action, float x, float y)
@@ -129,7 +126,7 @@ public:
         if (count == 0)
             return nullptr;
 
-        std::unique_ptr<Message> result(new Message(CMD_MULTI_TOUCH, sizeof(Multitouch::Touch) * count));
+        std::unique_ptr<Message> result(new Message(CMD_MULTI_TOUCH, (int32_t)(sizeof(Multitouch::Touch) * count)));
         uint8_t *buf = result->_data;
         for (int i = 0; i < count; ++i)
         {
