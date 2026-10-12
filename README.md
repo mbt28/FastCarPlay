@@ -1,12 +1,10 @@
 # FastCarPlay
-This is C++ implementation of Carplay receiver and Android Auto receiver for "Autobox" dongles. 
-The purpose of the project is to make application lightweight to run on Raspberry PI Zero 2W using hardware decoding.
+A lightweight C++ CarPlay and Android Auto receiver for small embedded Linux
+boards (primary target: Allwinner F1C200s). It speaks the native protocols
+directly -- wireless/wired CarPlay and wireless/wired (AOAP) Android Auto --
+with hardware H.264 decoding; no interposer dongle is involved.
 
 ![Logo](docs/images/screenshot.png)
-
-## Dongles
-The dongles are readily available from Amazon or Aliexpress labeled by Carlinkit or CPC200-CCPM. They also seems to have official web site https://www.carlinkit.com/.
-Devices might have different vendor and product id's. Check your with lsusb and update settings if necessary.
 
 ## Setup
 
@@ -15,35 +13,15 @@ Devices might have different vendor and product id's. Check your with lsusb and 
 
 
 ### Dependencies
-The project is based on SDL2, FFMPEG, LIBUSB. It use XXD for resource embedding.
+The project is based on SDL2, FFMPEG, LIBUSB (wired Android Auto / AOAP).
 ```
-sudo apt install build-essential xxd libsdl2-dev libsdl2-ttf-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libusb-1.0-0-dev libssl-dev
-```
-To run the application you also need to install runtime
-```
-sudo apt install ffmpeg libsdl2-2.0-0 libsdl2-ttf-2.0-0 libusb-1.0-0 libssl3
+sudo apt install build-essential libsdl2-dev libsdl2-ttf-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libusb-1.0-0-dev libssl-dev libasound2-dev libopus-dev
 ```
 
-### USB Permissions and device id
-On linux app may not have permissions to read USB device. You need to create udev rule to grant permissions for dongle.
-First you need to figure out your idVendor and idProduct. 
-```
-lsusb
-```
-You will see list of devices, try to find the one that looks like dongle. Also you might need to run lsusb several time, cause my dongle seems to be disconnecting all the time. You need to find line like
-```
-Bus 003 Device 066: ID 1314:1520 Magic Communication Tec. Auto Box
-```
-So in my case ID 1314:1520 shows idVendor 1314 and idProduct 1520. We need to use those to create udev rules. If yours are different you also need to put them in settings.txt and run application with settings.txt as argument. Remember that in settings.txt values are in decimal, so you need to convert hex values to base 10 first. 
-Create udev rules and add user to plugdev group, replace <__Vendor__> <__Product__> and <__Your user name__> with your informations
-```
-echo 'SUBSYSTEMS=="usb", ATTRS{idVendor}=="<Vendor>", ATTRS{idProduct}=="<Product>", GROUP="plugdev", MODE="0660"' | sudo tee /etc/udev/rules.d/50-carlinkit.rules
-## example: SUBSYSTEM=="usb", ATTRS{idVendor}=="1314", ATTRS{idProduct}=="1520", GROUP="plugdev", MODE="0660"
-sudo usermod -aG plugdev <Your user name>
-## example: sudo usermod -aG plugdev linux
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
+### USB permissions (wired Android Auto)
+Wired Android Auto talks to the phone directly over USB (AOAP accessory mode),
+which may need a udev rule granting access to the phone's USB device for your
+user (match your phone's idVendor with `lsusb`).
 
 ### Build and run
 The application can be started with settings file. Sample of the settings file can be found in settings.txt. Make sure that you put proper device id in settings and app have access to usb (see previous step)
@@ -104,9 +82,7 @@ Done
 - [x] Control audio buffers better (now system use 3 decoding threads but in reality only 2 required)
 - [x] Reduce music volume when there is navigation messages
 - [x] Add abilities to run script on device connect and device disconnect
-- [x] Add encrypted USB communication option with magic code 0x55bb55bb for new firmware
 - [x] Improve touch responsiveness
-- [x] Protocol debugging option + python script to decode usb dumps
 - [x] Android Auto (have not tested much, but seems to work for me)
 - [x] Microphone support (Calls, Siri)
 

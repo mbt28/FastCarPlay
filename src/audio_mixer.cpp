@@ -34,9 +34,9 @@ struct Fmt
     int channels;
 };
 // Format word at segment offset 0 -> rate/channels. CarPlay encodes the exact
-// negotiated shape as (rate << 4) | channels (always > 0xFFFF); the carlinkit
-// dongle and AA paths still use the legacy small enum, where anything unknown
-// is the dongle default of 44.1k stereo.
+// negotiated shape as (rate << 4) | channels (always > 0xFFFF); Android Auto
+// uses the legacy small enum values 4 (48k stereo media) and 5 (16k mono
+// speech), matching what it advertises to the phone.
 Fmt fmtOf(const Message *m)
 {
     const uint32_t v = m ? (uint32_t)m->getInt(OFFSET_AUDIO_FORMAT) : 0;
@@ -45,15 +45,7 @@ Fmt fmtOf(const Message *m)
         const int ch = (int)(v & 0xF);
         return {(int)(v >> 4), (ch == 1 || ch == 2) ? ch : 2};
     }
-    switch (v)
-    {
-        case 3: return {8000, 1};
-        case 4: return {48000, 2};
-        case 5: return {16000, 1};
-        case 6: return {24000, 1};
-        case 7: return {16000, 2};
-        default: return {44100, 2};
-    }
+    return (v == 5) ? Fmt{16000, 1} : Fmt{48000, 2};
 }
 } // namespace
 

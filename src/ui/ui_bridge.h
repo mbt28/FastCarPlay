@@ -5,7 +5,7 @@
 //
 // Screens reference a small, stable set of names:
 //   native variables  protocol (int), status (string)   -- app -> UI
-//   native actions    use_aa_usb / use_aa_wireless / use_dongle  -- UI -> app
+//   native actions    use_aa_usb / use_aa_wireless              -- UI -> app
 //
 // EEZ generates the declarations into src/ui/generated/vars.h and wires them
 // into native_vars[] / actions[]; this file is the only place they are
@@ -30,16 +30,13 @@ extern "C"
 
     void action_use_aa_usb(lv_event_t *e);
     void action_use_aa_wireless(lv_event_t *e);
-    void action_use_dongle(lv_event_t *e);
 }
 
 namespace ui_bridge
 {
-// Protocol ids as referenced by the designed screens. 3/4 are reserved for
-// CarPlay so adding it later does not renumber the existing entries.
+// Protocol ids as referenced by the screens.
 enum Protocol
 {
-    PROTOCOL_CARLINKIT = 0,
     PROTOCOL_AA_USB = 1,
     PROTOCOL_AA_WIRELESS = 2,
     PROTOCOL_CARPLAY_WIRED = 3,    // wired CarPlay over USB (config-6 / carkit)

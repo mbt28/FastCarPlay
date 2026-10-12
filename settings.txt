@@ -2,20 +2,13 @@
 # 1.General settings
 ##############################################################################
 
-# Protocol backend: "carlinkit" (dongle, default) or "aa-usb" (native wired
-# Android Auto -- plug the phone straight into the USB port, no dongle).
-#protocol = carlinkit
-
-# Dongle configuration. The Carlinkit dongle is auto-detected (vendor 0x1314 +
-# a known product id 0x1520/0x1521), so these are optional -- uncomment to pin
-# a specific device. Values in decimal, not hex (use lsusb to find yours).
-#vendor-id = 4884 # 0x1314
-#product-id = 5408 # 0x1520
+# Protocol backend: "carplay-wireless" (default), "carplay-wired",
+# "aa-wireless" or "aa-usb" (native wired Android Auto over AOAP).
+#protocol = carplay-wireless
 
 # Native wired Android Auto settings (only used when protocol = aa-usb).
 # aa-vendor-id/aa-product-id = 0 auto-scans for an AOAP-capable phone; set
-# both to pin one device. Resolution 1 = 800x480, 2 = 1280x720, 3 = 1920x1080 --
-# also used by the Carlinkit backend, where it was called android-resolution.
+# both to pin one device. Resolution 1 = 800x480, 2 = 1280x720, 3 = 1920x1080.
 #aa-vendor-id = 0
 #aa-product-id = 0
 #aa-resolution = 1
@@ -60,44 +53,17 @@
 # 2.Device configurations
 ##############################################################################
 
-# USB communication protocol encryption
-# From 2024 Carlinkit has an optinal USB protocol encryption
-# It can happened that it will become mandatory and device will not work withou it
-# So if you have updated your device and it stop working try to enable encryption
-#encryption = false
-
-# Enable automatic connection to wireless devices
-#autoconnect = true
-
-# Eanble weak charging current (standart usb 0.5A).
-# If you have a powerfull poswer supply you can try to disable this.
-# If you have troubles with wired connection try to enable this, cause it might be cause of power lack.
-#weak-charge = true
-
 # Driving position, true for left hand drive, false for right hand drive
 #left-hand-drive = true
 
 # Nigh mode. 0 for day mode, 1 for night mode, 2 for automatic
 #night-mode = 2
 
-# Enable 5Ghz wifi. Otherwise will use 2,4Ghz
-#wifi-5 = true
-
-# Enable bluetooth audio. If enables the audio will be played not through the dongle but through bluetooth connection
-#bluetooth-audio = false
-
-# Microphone in use. Copied directly from carlinkit app.
-# 1 - Car
-# 2 - Box
-# 3 - Phone
-#mic-type = 1
-
 # Requested image DPI (Android auto scale)
 #android-dpi = 120
 
 # Android auto resolution mode. RENAMED to aa-resolution (see above) -- the old
-# name still works and now drives both the native backend and the Carlinkit
-# dongle, so set it in one place only.
+# name still works as an alias, so set it in one place only.
 # Android is always streaming one of fixed resolutions
 # Unlike CarPlay, the AA protocol carries an enum of standard modes rather than
 # a pixel size, so this cannot follow the display: pick the mode nearest your
@@ -109,9 +75,6 @@
 # 2 - 720p => 1280x720
 # 3 - 1080p => 1920x1080
 #android-resolution = 1
-
-# Media delay for android auto
-#android-media-delay = 300
 
 ##############################################################################
 # 3.Application configuration

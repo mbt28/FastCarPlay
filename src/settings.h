@@ -12,16 +12,11 @@ class Settings
 {
 public:
     // General section
-    // Protocol backend. "carlinkit" (default) = the Carlinkit dongle protocol.
-    // "aa-usb" = native wired Android Auto: the phone is plugged straight into
-    // the USB host port, switched to accessory mode (AOAP) and spoken to
-    // directly -- no dongle.
-    static inline Setting<std::string> protocol{"protocol", "carlinkit"};
+    // Protocol backend: "carplay-wireless" (default), "carplay-wired",
+    // "aa-wireless", or "aa-usb" (native wired Android Auto: the phone is
+    // switched to accessory mode via AOAP and spoken to directly).
+    static inline Setting<std::string> protocol{"protocol", "carplay-wireless"};
     static inline bool aaUsb() { return protocol.value == "aa-usb"; }
-    static inline Setting<int> vendorid{"vendor-id", 4884};
-    // 0 = auto-detect the Carlinkit dongle (scan for vendor-id + a known
-    // product id, 0x1520/0x1521). Set a specific product id to pin one device.
-    static inline Setting<int> productid{"product-id", 0};
     // Native AA device selection: 0 = scan all devices for AOAP support;
     // set both to pin a specific phone.
     static inline Setting<int> aaVendorid{"aa-vendor-id", 0};
@@ -30,8 +25,7 @@ public:
     // fps. Unlike CarPlay -- which takes literal pixel dimensions, so it is
     // asked for the display's exact size -- the AA protocol only carries an
     // enum of standard modes, so this stays an explicit setting. Used by both
-    // the native backend and the Carlinkit dongle; `android-resolution` is the
-    // old Carlinkit-only name for it.
+    // the native backend; `android-resolution` is the legacy alias.
     static inline Setting<int> aaResolution{"aa-resolution", 1, "android-resolution"};
     static inline Setting<int> aaFps{"aa-video-fps", 30};
     // Wireless Android Auto (protocol = aa-wireless): the head unit runs a
@@ -85,18 +79,9 @@ public:
     static inline Setting<int> loglevel{"log-level", 2};
 
     // Device configurations section
-    static inline Setting<bool> encryption{"encryption", false};
-    static inline Setting<bool> autoconnect{"autoconnect", true};
-    static inline Setting<bool> weakCharge{"weak-charge", true};
     static inline Setting<bool> leftDrive{"left-hand-drive", true};
     static inline Setting<int> nightMode{"night-mode", 2};
-    static inline Setting<bool> wifi5{"wifi-5", true};
-    static inline Setting<bool> bluetoothAudio{"bluetooth-audio", false};
-    static inline Setting<int> micType{"mic-type", 1};
     static inline Setting<int> dpi{"android-dpi", 120};
-    // android-resolution now aliases aa-resolution above -- one Android Auto
-    // resolution for both the native backend and the Carlinkit dongle.
-    static inline Setting<int> mediaDelay{"android-media-delay", 300};
 
     // Application configuration section
     static inline Setting<int> fontSize{"font-size", 40};
@@ -234,10 +219,6 @@ public:
     // Scripted encoder input for the harness: comma list where a number is
     // that many detents (negative = left) and "p" is a push. e.g. "1,1,p".
     static inline Setting<std::string> lvglTestEncoder{"lvgl-test-encoder", ""};
-    // Which screens to show: "picker" = the built-in source picker (works with
-    // no EEZ project); "generated" = the screens designed in EEZ Studio and
-    // built into src/ui/generated. Both drive the same ui_bridge contract.
-    static inline Setting<std::string> lvglScreen{"lvgl-screen", "picker"};
     // Icon set: "builtin" = LVGL's bundled symbols (always available);
     // "material" = Material Symbols, once tools/make-icon-font.sh has
     // generated it. Screens name icon slots, so this only changes how they

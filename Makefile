@@ -87,10 +87,6 @@ endif
 
 # On-device UI: LVGL 9.3.0 (MIT), vendored source in third_party/lvgl (see
 # its VENDORING.md), compiled in. Screens live in src/ui. Enable USE_LVGL=1.
-# By default only the hand-written picker screens are built. The EEZ Studio
-# generated flow engine (src/ui/generated, ~320 KB of .text + 12 KB .bss) is
-# dead unless lvgl-screen=generated is selected at runtime, so it is compiled
-# in only with USE_EEZ=1 -- a UI-less-of-it build pays nothing for it.
 ifeq ($(USE_LVGL),1)
 LVGL_DIR := ./third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -type f -name '*.c')
@@ -98,21 +94,8 @@ LVGL_OBJS := $(patsubst $(LVGL_DIR)/%.c,$(BUILD_DIR)/lvgl/%.c.o,$(LVGL_SRCS))
 OBJS += $(LVGL_OBJS)
 # LV_CONF_INCLUDE_SIMPLE: LVGL picks up src/ui/lv_conf.h from the include path.
 UI_FLAGS := -DUSE_LVGL -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -Ithird_party
-ifeq ($(USE_EEZ),1)
-# The whole src/ui tree, including the generated EEZ flow screens.
-SRCS += $(shell find $(SRC_DIR)/ui -type f -name '*.cpp')
-SRCS_C += $(shell find $(SRC_DIR)/ui -type f -name '*.c')
-# -Ithird_party already added; the generated code includes <lvgl/lvgl.h>.
-UI_FLAGS += -DUSE_EEZ -I$(SRC_DIR)/ui/generated
-# The EEZ flow engine is a generic LVGL runtime that references the full
-# widget set, so lv_conf.h must enable them -- and the vendored LVGL TUs below
-# need the same define to actually compile those widgets in.
-LVGL_CONF_FLAGS := -DUSE_EEZ
-else
-# Only the hand-written UI (everything under src/ui except generated/).
 SRCS += $(shell find $(SRC_DIR)/ui -maxdepth 1 -type f -name '*.cpp')
 SRCS_C += $(shell find $(SRC_DIR)/ui -maxdepth 1 -type f -name '*.c')
-endif
 CXXCOMMON += $(UI_FLAGS)
 CCOMMON += $(UI_FLAGS)
 endif
@@ -164,9 +147,11 @@ version-h:
 # sit in a dirty-able RW mapping.
 $(GEN_DIR)/%.cpp: $(RES_DIR)/%
 	@mkdir -p $(GEN_DIR)
-	$(HOST_XXD) -i -n $(basename $(notdir $<)) $< | \
-	  sed -e 's/^unsigned char /extern const unsigned char /' \
-	      -e 's/^unsigned int /extern const unsigned int /' > $@
+	python3 -c 'import sys; n=sys.argv[1]; d=open(sys.argv[2],"rb").read(); \
+	  o=open(sys.argv[3],"w"); o.write("extern const unsigned char %s[] = {" % n); \
+	  o.write(",".join(str(b) for b in d)); \
+	  o.write("};\nextern const unsigned int %s_len = %d;\n" % (n, len(d)))' \
+	  $(basename $(notdir $<)) $< $@
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(OUT_DIR)
@@ -183,12 +168,10 @@ $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
 	$(CC) $(CCOMMON) $(filter-out -fno-rtti,$(CXXFLAGS)) -MMD -MP -c $< -o $@
 
 # Vendored LVGL. Third-party: warnings off, and it never sees our -Wall/-Werror.
-# LVGL_CONF_FLAGS carries only the lv_conf.h feature toggles it must agree with
-# the rest of the build on (e.g. -DUSE_EEZ, which enables the full widget set).
 $(BUILD_DIR)/lvgl/%.c.o: $(LVGL_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu99 -w -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -I$(LVGL_DIR) \
-		$(LVGL_CONF_FLAGS) $(filter-out -fno-rtti,$(CXXFLAGS)) -c $< -o $@
+		$(filter-out -fno-rtti,$(CXXFLAGS)) -c $< -o $@
 
 # Header dependencies (-MMD): editing a header now rebuilds what includes it.
 # NOTE: this does NOT cover changing the feature flags themselves -- toggling

@@ -149,8 +149,6 @@ int switchCandidates(libusb_context *context)
 
         if (desc.bDeviceClass == LIBUSB_CLASS_HUB)
             continue;
-        if (desc.idVendor == CARLINKIT_VID)
-            continue;
         if (desc.idVendor == AOAP_VID_GOOGLE &&
             (desc.idProduct == AOAP_PID_ACCESSORY || desc.idProduct == AOAP_PID_ACCESSORY_ADB))
             continue; // already switched

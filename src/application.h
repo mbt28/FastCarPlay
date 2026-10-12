@@ -6,7 +6,7 @@
 
 #include "protocol/protocol_const.h"
 
-#include "protocol/connection.h"
+#include "protocol/message.h"
 #include "protocol/aa/aa_connection.h"
 #ifdef USE_AA_WIRELESS
 #include "protocol/aa/aa_wireless.h"

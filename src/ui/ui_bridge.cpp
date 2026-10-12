@@ -28,7 +28,6 @@ struct ProtocolEntry
 };
 
 const ProtocolEntry PROTOCOLS[] = {
-    {ui_bridge::PROTOCOL_CARLINKIT, "carlinkit", "Dongle"},
     {ui_bridge::PROTOCOL_AA_USB, "aa-usb", "AA Wired"},
     {ui_bridge::PROTOCOL_AA_WIRELESS, "aa-wireless", "AA Wireless"},
     {ui_bridge::PROTOCOL_CARPLAY_WIRED, "carplay-wired", "CarPlay Wired"},
@@ -133,7 +132,7 @@ extern "C" int32_t get_var_protocol()
     for (const ProtocolEntry &entry : PROTOCOLS)
         if (Settings::protocol.value == entry.name)
             return entry.id;
-    return ui_bridge::PROTOCOL_CARLINKIT;
+    return ui_bridge::PROTOCOL_CARPLAY_WIRELESS;
 }
 
 extern "C" void set_var_protocol(int32_t value)
@@ -166,12 +165,6 @@ extern "C" void action_use_aa_wireless(lv_event_t *e)
 {
     (void)e;
     selectProtocol(ui_bridge::PROTOCOL_AA_WIRELESS);
-}
-
-extern "C" void action_use_dongle(lv_event_t *e)
-{
-    (void)e;
-    selectProtocol(ui_bridge::PROTOCOL_CARLINKIT);
 }
 
 #endif /* USE_LVGL */

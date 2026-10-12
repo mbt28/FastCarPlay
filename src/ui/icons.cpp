@@ -18,7 +18,7 @@ bool g_material = false;
 
 // Slot -> glyph for the builtin theme. LVGL bundles a FontAwesome subset in
 // the Montserrat fonts, so these cost nothing extra. Coverage is coarse (no
-// distinct "dongle"), which is exactly why the Material theme exists.
+// distinct glyphs), which is exactly why the Material theme exists.
 const char *const BUILTIN[icons::ICON_COUNT] = {
     LV_SYMBOL_USB,       // ICON_USB
     LV_SYMBOL_WIFI,      // ICON_WIRELESS
