@@ -16,7 +16,7 @@ typedef struct _snd_pcm snd_pcm_t;
 // audio queues (main = buffered media/music, aux = voice/nav) in software.
 //
 // This replaces the former pair of SDL queued-audio devices summed by an ALSA
-// dmix: SDL's per-device pump threads and the app's polling burned most of the
+// dmix: the per-device pump threads and the app's polling burned most of the
 // CPU during a call (measured ~84% + ~57% of the core) while the actual DSP is
 // trivial integer work. A blocking snd_pcm_writei() sleeps on the codec clock,
 // so this thread wakes exactly once per period and idles at ~0%.

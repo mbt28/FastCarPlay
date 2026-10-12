@@ -86,8 +86,6 @@ DumbFb ubuf;
 bool ui_ready = false;
 bool ui_visible = false;
 int band_y0 = 0, band_y1 = 0; // rows the plane currently covers
-SDL_Surface *usurface = nullptr;
-SDL_Renderer *urenderer = nullptr;
 
 // black fallback fb for the video plane: some drivers refuse a CRTC with no
 // primary plane, so a UI-only modeset (home screen before any video) may need
@@ -267,7 +265,7 @@ bool session_try_card(const char *path, const char *tag)
     // Becoming DRM master is what allows modesetting and plane commits. It fails
     // when something else already owns KMS (a desktop compositor), or when we are
     // not on an active VT -- not an error, just "this display is not ours", so
-    // the caller can fall back to SDL/headless. Some drivers report an error even
+    // the caller can fall back to headless. Some drivers report an error even
     // though the fd is already master, hence the drmIsMaster() confirmation.
     if (drmSetMaster(fd) != 0 && !drmIsMaster(fd))
     {
@@ -425,8 +423,6 @@ void flush_video_fbs()
 
 void session_close()
 {
-    if (urenderer) { SDL_DestroyRenderer(urenderer); urenderer = nullptr; }
-    if (usurface) { SDL_FreeSurface(usurface); usurface = nullptr; }
     destroy_dumb(ubuf);
     destroy_dumb(blackfb);
     blackfb_live = 0;
@@ -704,54 +700,6 @@ bool uiShow(int y0, int y1)
     return ui_show_locked(y0, y1);
 }
 
-SDL_Renderer *uiRenderer()
-{
-    std::lock_guard<std::mutex> lock(mtx);
-    if (!ui_begin_locked())
-        return nullptr;
-    if (urenderer)
-        return urenderer;
-
-    // Offscreen composition surface in the plane's own format, so the copy
-    // into the dumb buffer is a straight row memcpy.
-    const uint32_t sdlFmt = ufmt == DRM_FORMAT_RGB565 ? SDL_PIXELFORMAT_RGB565
-                                                      : SDL_PIXELFORMAT_ARGB8888;
-    usurface = SDL_CreateRGBSurfaceWithFormat(0, cw, ch, ubpp * 8, sdlFmt);
-    if (!usurface) { fprintf(stderr, "[Drm] ui surface: %s\n", SDL_GetError()); return nullptr; }
-    urenderer = SDL_CreateSoftwareRenderer(usurface);
-    if (!urenderer) { fprintf(stderr, "[Drm] ui renderer: %s\n", SDL_GetError()); return nullptr; }
-    SDL_SetRenderDrawBlendMode(urenderer, SDL_BLENDMODE_BLEND);
-    return urenderer;
-}
-
-static bool uiPresentRange(int y0, int y1)
-{
-    std::lock_guard<std::mutex> lock(mtx);
-    if (!ui_ready || !usurface)
-        return false;
-    if (y0 < 0) y0 = 0;
-    if (y1 > (int)ch) y1 = (int)ch;
-    if (y1 <= y0)
-        return false;
-
-    // Copy the changed rows of the composed surface into the dumb buffer
-    // (row-wise: pitches may differ), then put the plane over them.
-    const uint8_t *src = (const uint8_t *)usurface->pixels;
-    for (int y = y0; y < y1; y++)
-        memcpy(ubuf.map + (size_t)y * ubuf.pitch, src + (size_t)y * usurface->pitch,
-               (size_t)cw * ubpp);
-    return ui_show_locked(y0, y1);
-}
-
-bool uiPresent()
-{
-    return uiPresentRange(0, (int)ch);
-}
-
-bool uiPresentRows(int y0, int y1)
-{
-    return uiPresentRange(y0, y1);
-}
 
 void uiHide()
 {

@@ -1,7 +1,6 @@
 #ifndef SRC_APPLICATION
 #define SRC_APPLICATION
 
-#include <SDL2/SDL.h>
 #include <memory>
 
 #include "protocol/protocol_const.h"
