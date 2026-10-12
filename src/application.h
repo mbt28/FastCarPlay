@@ -43,8 +43,6 @@ private:
         std::string toast = "";
     };
 
-    bool setAudioDriver();
-
     void loopHeadless(); // no-renderer path: decoder presents to fb itself
     void loopDrm();      // DRM path: decoder presents video, UI on the overlay plane
     // Set once a hardware decoder has given up, so we stop choosing it.

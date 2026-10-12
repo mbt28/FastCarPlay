@@ -1,5 +1,7 @@
 #include "lvgl_osd.h"
 
+#include "common/clock.h"
+
 #ifdef USE_LVGL
 
 #include <cstdlib>
@@ -88,7 +90,7 @@ bool LvglOsd::beginCommon(int width, int height, int bpp)
     }
 
     lv_init();
-    lv_tick_set_cb(SDL_GetTicks);
+    lv_tick_set_cb(mono_ms);
 
     lv_display_t *disp = lv_display_create(_width, _height);
     if (disp == nullptr)

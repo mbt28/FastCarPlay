@@ -11,6 +11,7 @@
 #include <csignal>
 
 #include "struct/video_buffer.h"
+#include "common/clock.h"
 #include "common/logger.h"
 
 #include "settings.h"
@@ -40,10 +41,10 @@ Application::Application(/* args */) : _active(true)
 
     _debug = Settings::debugOverlay;
 
-    if (!setAudioDriver())
-        throw std::runtime_error("Unsupported audio driver " + std::string(Settings::audioDriver.value));
-
-    if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_AUDIO) != 0)
+    // SDL remains only for the legacy Interface fallback (SDL_ttf text); the
+    // timer/audio subsystems are no longer used -- audio is direct ALSA and
+    // timing comes from common/clock.h.
+    if (SDL_Init(0) != 0)
         throw std::runtime_error(std::string("SDL initialisation failed > ") + SDL_GetError());
 
     if (video_path::detect().mode != video_path::Mode::Headless)
@@ -56,7 +57,6 @@ Application::Application(/* args */) : _active(true)
         }
     }
 
-    log_i("Audio driver %s", SDL_GetCurrentAudioDriver());
 }
 
 Application::~Application()
@@ -153,21 +153,6 @@ static const char *uiStatusText(int state)
 // Head units frequently have only a 3-way rotary encoder, so every screen has
 // to be reachable without a touchscreen. On the desktop the encoder is
 // emulated by the mouse wheel and the arrow keys, with Enter as the push.
-bool Application::setAudioDriver()
-{
-    if (Settings::audioDriver.value.length() < 2)
-        return true;
-
-    for (int i = 0; i < SDL_GetNumAudioDrivers(); ++i)
-    {
-        if (SDL_GetAudioDriver(i) == Settings::audioDriver.value)
-        {
-            SDL_setenv("SDL_AUDIODRIVER", Settings::audioDriver.value.c_str(), 1);
-            return true;
-        }
-    }
-    return false;
-}
 
 namespace
 {
@@ -496,7 +481,7 @@ void Application::loopDrm()
         if (decoderRunning)
             syncDecoderCodec(decoder, protocol, startedCodec);
         publishStatus(protocol);
-        Uint32 now = SDL_GetTicks();
+        uint32_t now = mono_ms();
         auto state = protocol.state();
         uint32_t frames = drm_display::videoFrames();
         // "Video flowing" = connected and at least one frame was presented
