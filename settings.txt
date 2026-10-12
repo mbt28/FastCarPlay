@@ -156,12 +156,6 @@
 # Preferably use power of 2 for the values or check your audio driver documentation
 #audio-buffer-samples = 512
 
-# Force application to use following audio driver as audio output, if empty use default driver
-# See SDL documentation for options. Some of them are
-# alsa - Not supporting multiple channels, navigation over music will not work
-# pulseaudio
-# pipewire
-#audio-driver = 
 
 # Run script or app on phone connected and disconnected.
 # This script/app should be fast, otherwise it will block system.

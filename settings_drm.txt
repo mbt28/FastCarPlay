@@ -30,7 +30,6 @@ android-dpi = 135
 # frees two pinned decoder frames vs the default 5.
 rendering-buffer = 3
 
-audio-driver = dummy
 
 # The ARM926 has no AES instructions, so ChaCha20-Poly1305 is far cheaper for
 # the AA/CarPlay session ciphers than the AES-GCM a phone would otherwise pick.

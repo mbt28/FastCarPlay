@@ -17,10 +17,10 @@ extern "C"
 #include <libavcodec/avcodec.h> // AV_INPUT_BUFFER_PADDING_SIZE
 }
 
-#include <SDL2/SDL.h> // SDL_Delay only; audio I/O is direct ALSA
 #include <alsa/asoundlib.h> // blocking mic capture for the uplink
 #include <opus/opus.h> // fixed-point Opus encoder for the wireless voice uplink
 
+#include "common/clock.h"
 #include "common/logger.h"
 #include "common/threading.h" // uplink thread priority
 #include "settings.h" // mic-gain
@@ -773,7 +773,7 @@ void AvSession::uplinkLoop(Listener *l)
     while (_running.load() && _uplinkGen.load() == myGen)
     {
         if (!_captureBusy.exchange(true)) { claimed = true; break; }
-        SDL_Delay(10);
+        sleep_ms(10);
     }
     if (!claimed)
         return; // superseded before we got the device, or shutting down
@@ -921,7 +921,7 @@ void AvSession::uplinkLoop(Listener *l)
             got = snd_pcm_recover(cap, (int)got, 1);
             if (got < 0)
                 log_w("[cp-av] uplink: capture failed: %s", snd_strerror((int)got));
-            SDL_Delay(50); // pace retries: an unhappy device must not spin a core
+            sleep_ms(50); // pace retries: an unhappy device must not spin a core
             continue;
         }
         if (got < capFrames)
@@ -1686,7 +1686,7 @@ void AvSession::stop()
     _callStreamId.store(0);
     auto shut = [](Listener &l) {
         // Join the worker threads BEFORE closing the sockets. The loops all exit
-        // on _running (already cleared above) within one poll/SDL_Delay cycle,
+        // on _running (already cleared above) within one poll/sleep cycle,
         // and the uplink thread sends on l.fd every ~20 ms -- closing the fd
         // first would race a sendto/recvfrom against close() on the same fd
         // (use-after-close, and a cross-stream write if the number were reused).

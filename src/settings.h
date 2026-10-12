@@ -136,7 +136,6 @@ public:
     // speech into an inaudible square wave (the phone AGCs the rest). Tune via
     // usersettings.txt only for a genuinely quiet mic fitting.
     static inline Setting<int> micGain{"mic-gain", 1};
-    static inline Setting<std::string> audioDriver{"audio-driver", ""};
     static inline Setting<std::string> onConnect{"on-connect-script", ""};
     static inline Setting<std::string> onDisconnect{"on-disconnect-script", ""};
 
