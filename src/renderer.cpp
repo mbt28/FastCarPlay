@@ -237,7 +237,7 @@ bool Renderer::prepare(AVFrame *frame, int targetWidth, int targetHeight)
     if (!prepareTexture(SDL_PIXELFORMAT_IYUV, frame->width, frame->height))
         return false;
 
-    int swsFlags = Settings::fastScale ? SWS_FAST_BILINEAR : SWS_BILINEAR;
+    int swsFlags = SWS_BILINEAR;
     _sws = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format,
                           frame->width, frame->height, AV_PIX_FMT_YUV420P,
                           swsFlags, nullptr, nullptr, nullptr);

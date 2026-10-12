@@ -137,7 +137,7 @@ int main(int argc, char **argv)
         // process reads it back from usersettings.txt on the way up.
         // Not in the UI harness: it exists to iterate on screens, and with a
         // scripted click it would re-select and restart forever.
-        if (ui_bridge::restartRequested() && !Settings::lvglTest)
+        if (ui_bridge::restartRequested())
             restartSelf();
 #endif
     }
