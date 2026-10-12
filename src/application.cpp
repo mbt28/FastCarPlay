@@ -784,26 +784,41 @@ std::unique_ptr<IConnection> Application::makeConnection()
         connection = std::make_unique<AaWirelessConnection>();
 #else
     if (Settings::aaWireless())
-        log_w("protocol = aa-wireless needs a USE_AA_WIRELESS build, using carlinkit");
+        log_e("protocol = aa-wireless needs a USE_AA_WIRELESS build");
 #endif
 #ifdef USE_CP_WIRELESS
     if (!connection && Settings::carplayWireless())
         connection = std::make_unique<CpConnection>();
 #else
     if (Settings::carplayWireless())
-        log_w("protocol = carplay-wireless needs a USE_CP_WIRELESS build, using carlinkit");
+        log_e("protocol = carplay-wireless needs a USE_CP_WIRELESS build");
 #endif
 #ifdef USE_CP_WIRED
     if (!connection && Settings::carplayWired())
         connection = std::make_unique<CpWiredConnection>();
 #else
     if (Settings::carplayWired())
-        log_w("protocol = carplay-wired needs a USE_CP_WIRED build, using carlinkit");
+        log_e("protocol = carplay-wired needs a USE_CP_WIRED build");
 #endif
     if (!connection && Settings::aaUsb())
         connection = std::make_unique<AaConnection>();
+    // Unknown protocol string or a backend compiled out: fall back to the
+    // first native backend this build carries rather than failing to start.
     if (!connection)
-        connection = std::make_unique<Connection>();
+    {
+        if (!Settings::aaWireless() && !Settings::carplayWireless() &&
+            !Settings::carplayWired() && !Settings::aaUsb())
+            log_e("unknown protocol '%s' -- using default", Settings::protocol.value.c_str());
+#ifdef USE_CP_WIRELESS
+        connection = std::make_unique<CpConnection>();
+#elif defined(USE_CP_WIRED)
+        connection = std::make_unique<CpWiredConnection>();
+#elif defined(USE_AA_WIRELESS)
+        connection = std::make_unique<AaWirelessConnection>();
+#else
+        connection = std::make_unique<AaConnection>();
+#endif
+    }
 
     // Every loop has its display up by the time it builds the connection, so
     // this is where the phone's stream size is decided. Logged because a wrong

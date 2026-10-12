@@ -15,13 +15,6 @@
 #include <drm_fourcc.h>
 #endif
 
-#ifdef USE_EEZ
-// EEZ Studio generated entry points (ui_init/ui_tick). Not wrapped in
-// extern "C": ui.h guards its own declarations and pulls in eez-flow.h,
-// which is C++ (templates, overloads, namespaces).
-#include "ui.h"
-#endif
-
 // Partial render: LVGL draws into this fraction of the screen at a time and
 // flushes each rectangle. A tenth of the panel keeps the buffer small and
 // lets LVGL redraw only what changed, which matters on the 408 MHz arm926
@@ -149,25 +142,14 @@ bool LvglOsd::beginCommon(int width, int height, int bpp)
     }
     _encoder = encoder;
 
-    _generated = Settings::lvglScreen.value == "generated";
-#ifdef USE_EEZ
-    if (_generated)
-        ui_init(); // EEZ Studio screens (and the flow)
-    else
-        ui_screens::begin(_width, _height); // built-in screens
-#else
-    if (_generated)
-        log_w("LVGL: lvgl-screen=generated needs a USE_EEZ build, using the picker");
-    _generated = false;
-    ui_screens::begin(_width, _height); // built-in screens
-#endif
+    ui_screens::begin(_width, _height);
 
     // The screens own the focus group, so it only exists once they are built.
     if (encoder != nullptr && ui_screens::group() != nullptr)
         lv_indev_set_group(encoder, ui_screens::group());
 
-    log_v("LVGL: started %dx%d (%s, %d bpp, partial buffer %zu bytes)", _width, _height,
-          _generated ? "generated" : "picker", _bpp, bufferSize);
+    log_v("LVGL: started %dx%d (%d bpp, partial buffer %zu bytes)", _width, _height,
+          _bpp, bufferSize);
     return true;
 }
 
@@ -267,14 +249,7 @@ bool LvglOsd::tick()
     if (_disp == nullptr)
         return false;
 
-#ifdef USE_EEZ
-    if (_generated)
-        ui_tick(); // flow tick + screen tick (EEZ generated)
-    else
-        ui_screens::tick();
-#else
     ui_screens::tick();
-#endif
     lv_timer_handler();
     if (_drm)
     {

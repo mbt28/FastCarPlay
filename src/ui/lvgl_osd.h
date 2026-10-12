@@ -86,7 +86,6 @@ private:
     bool _flushed = true; // output changed since the last blit()/tick()
     SDL_Rect _dirty{0, 0, 0, 0}; // union of flushed areas since the last blit()
     bool _pressed = false;
-    bool _generated = false; // EEZ screens vs the built-in picker
 };
 
 #endif /* USE_LVGL */

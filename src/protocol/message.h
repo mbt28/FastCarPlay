@@ -5,18 +5,18 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
+#include <memory>
 
-#include "protocol/aes_cipher.h"
 #include "protocol/protocol_const.h"
 #include "struct/multitouch.h"
 
-#define MESSAGE_MAX_PAYLOAD_SIZE (2 * 1024 * 1024)
-
+// The app's internal media/input container: a type + length header and a heap
+// payload. Originally the carlinkit dongle's wire format; the native backends
+// kept the shape as their common currency for the video/audio/input queues.
 #pragma pack(push, 1)
 struct Header
 {
-    uint32_t magic;
+    uint32_t magic; // unused legacy field, always 0
     int32_t length;
     uint32_t type;
     uint32_t typecheck;
@@ -26,17 +26,11 @@ struct Header
 class Message
 {
 public:
-    Message()
-        : _header({0, 0, 0, 0}), _data(nullptr), _offset(0), _size(0), _encrypt(false)
-    {
-    }
-
-    Message(uint32_t cmd, bool encrypt = true, int32_t size = 0, uint8_t *buffer = nullptr)
-        : _header({static_cast<uint32_t>(MAGIC), size, cmd, ~cmd}),
+    Message(uint32_t cmd, int32_t size = 0, uint8_t *buffer = nullptr)
+        : _header({0, size, cmd, ~cmd}),
           _data(nullptr),
           _offset(0),
-          _size(0),
-          _encrypt(encrypt)
+          _size(0)
     {
         if (size <= 0)
             return;
@@ -51,8 +45,8 @@ public:
         _size = size;
     }
 
-    Message(uint32_t cmd, uint32_t value, bool encrypt = true)
-        : Message(cmd, encrypt, 4)
+    Message(uint32_t cmd, uint32_t value)
+        : Message(cmd, 4)
     {
         write_uint32_le(_data, value);
     }
@@ -99,135 +93,19 @@ public:
         return true;
     }
 
-    bool encrypt(AESCipher *cipher, char *err = nullptr)
-    {
-        if (!_encrypt || _header.magic == MAGIC_ENC)
-            return true;
-
-        if (!cipher)
-            return AESCipher::error(err, "Cipher is not initialised");
-
-        if (!allocated())
-            return AESCipher::error(err, "Message data is not allocated");
-
-        if (!cipher->encrypt(_data, _header.length, err))
-            return false;
-
-        _header.magic = MAGIC_ENC;
-        return true;
-    }
-
-    bool decrypt(AESCipher *cipher, char *err = nullptr)
-    {
-        if (_header.magic != MAGIC_ENC)
-            return true;
-
-        if (!cipher)
-            return AESCipher::error(err, "Cipher is not initialised");
-
-        if (!allocated())
-            return AESCipher::error(err, "Message data is not allocated");
-
-        if (!cipher->decrypt(_data, _header.length, err))
-            return false;
-
-        _header.magic = MAGIC;
-        return true;
-    }
-
     bool isMotion() const
     {
         return _header.type == CMD_TOUCH && getInt(0) == 15;
     }
 
-    static std::unique_ptr<Message> Init(int width, int height, int fps)
+    static std::unique_ptr<Message> Control(uint32_t value)
     {
-        std::unique_ptr<Message> result(new Message(CMD_OPEN, true, 28));
-        write_uint32_le(result->_data + 0, width);
-        write_uint32_le(result->_data + 4, height);
-        write_uint32_le(result->_data + 8, fps);
-        write_uint32_le(result->_data + 12, 5);
-        write_uint32_le(result->_data + 16, 49152);
-        write_uint32_le(result->_data + 20, 2);
-        write_uint32_le(result->_data + 24, 2);
-        return result;
-    }
-
-    static std::unique_ptr<Message> File(const char *filename, const uint8_t *data, uint32_t length)
-    {
-        // filename is assumed null‑terminated, so strlen + 1 to include the '\0'
-        uint32_t fn_len = strlen(filename) + 1;
-
-        // Total buffer size: 4 (fn_len) + fn_len + 4 (content_len) + content_len
-        std::unique_ptr<Message> result(new Message(CMD_SEND_FILE, true, 4 + fn_len + 4 + length));
-        uint8_t *buf = result->_data;
-
-        // 1) filename length (LE)
-        write_uint32_le(buf, fn_len);
-        buf += 4;
-
-        // 2) filename bytes (including the '\0')
-        std::memcpy(buf, filename, fn_len);
-        buf += fn_len;
-
-        // 3) content length (LE)
-        write_uint32_le(buf, length);
-        buf += 4;
-
-        // 4) content bytes
-        if (length > 0 && data)
-            std::memcpy(buf, data, length);
-
-        return result;
-    }
-
-    static std::unique_ptr<Message> File(const char *filename, const char *value)
-    {
-        uint32_t len = std::strlen(value);
-        if (len > 16)
-            throw std::invalid_argument("String too long (max 16 bytes)");
-        // note: we send only the ASCII bytes, no trailing '\0'
-        return File(filename, reinterpret_cast<const uint8_t *>(value), len);
-    }
-
-    // overload for a single 32‑bit integer
-    static std::unique_ptr<Message> File(const char *filename, int value)
-    {
-        uint8_t buffer[4];
-        write_uint32_le(buffer, value);
-        return File(filename, buffer, 4);
-    }
-
-    static std::unique_ptr<Message> Control(uint32_t value, bool encrypt = false)
-    {
-        return std::unique_ptr<Message>(new Message(CMD_CONTROL, value, encrypt));
-    }
-
-    static std::unique_ptr<Message> Encryption(uint32_t seed)
-    {
-        return std::unique_ptr<Message>(new Message(CMD_ENCRYPTION, seed, false));
-    }
-
-    static std::unique_ptr<Message> String(uint32_t cmd, const char *str, bool encrypt = true)
-    {
-        uint32_t length = std::strlen(str);
-        std::unique_ptr<Message> result(new Message(cmd, encrypt, length));
-        if (length > 0)
-            std::memcpy(result->_data, str, length);
-        return result;
-    }
-
-    template <typename... Args>
-    static std::unique_ptr<Message> String(uint32_t cmd, const char *format, Args... args)
-    {
-        char buffer[512];
-        std::snprintf(buffer, sizeof(buffer), format, args...);
-        return String(cmd, buffer);
+        return std::unique_ptr<Message>(new Message(CMD_CONTROL, value));
     }
 
     static std::unique_ptr<Message> Touch(uint32_t action, float x, float y)
     {
-        std::unique_ptr<Message> result(new Message(CMD_TOUCH, false, 16));
+        std::unique_ptr<Message> result(new Message(CMD_TOUCH, 16));
         write_uint32_le(result->_data, action);
         write_uint32_le(result->_data + 4, int(10000 * x));
         write_uint32_le(result->_data + 8, int(10000 * y));
@@ -245,23 +123,13 @@ public:
         return Touch(15, x, y);
     }
 
-    static std::unique_ptr<Message> Audio(int length)
-    {
-        std::unique_ptr<Message> result(new Message(CMD_AUDIO_DATA, false, length + AUDIO_BUFFER_OFFSET));
-        write_uint32_le(result->_data, 5);
-        write_uint32_le(result->_data + 4, 0);
-        write_uint32_le(result->_data + 8, 3);
-        result->setOffset(AUDIO_BUFFER_OFFSET);
-        return result;
-    }
-
     static std::unique_ptr<Message> MultiTouch(const Multitouch &touches)
     {
         int count = touches.size();
         if (count == 0)
             return nullptr;
 
-        std::unique_ptr<Message> result(new Message(CMD_MULTI_TOUCH, false, sizeof(Multitouch::Touch) * count));
+        std::unique_ptr<Message> result(new Message(CMD_MULTI_TOUCH, sizeof(Multitouch::Touch) * count));
         uint8_t *buf = result->_data;
         for (int i = 0; i < count; ++i)
         {
@@ -277,7 +145,7 @@ public:
 
     static std::unique_ptr<Message> HeartBeat()
     {
-        return std::unique_ptr<Message>(new Message(CMD_HEARTBEAT, false));
+        return std::unique_ptr<Message>(new Message(CMD_HEARTBEAT));
     }
 
     // Allocate-then-fill: a `cmd` message with an uninitialised `length`-byte
@@ -287,73 +155,16 @@ public:
     // Check data() != nullptr before filling (allocation can fail).
     static std::unique_ptr<Message> Payload(uint32_t cmd, int32_t length, uint32_t padding = 0)
     {
-        std::unique_ptr<Message> result(new Message(cmd, false, 0));
+        std::unique_ptr<Message> result(new Message(cmd, 0));
         result->_header.length = length;
         result->allocate(padding);
         return result;
     }
 
     bool allocated() const { return _header.length <= 0 || static_cast<uint32_t>(_header.length) <= _size; }
-    bool encrypted() const { return _header.magic == MAGIC_ENC; }
-    uint8_t *header() { return reinterpret_cast<uint8_t *>(&_header); }
-    uint32_t headerSize() const { return sizeof(Header); }
     uint32_t type() const { return _header.type; }
     int32_t length() const { return _header.length - _offset; }
     uint8_t *data() const { return _data ? _data + _offset : nullptr; }
-
-    bool invalidMagic() const { return _header.magic != MAGIC_ENC && _header.magic != MAGIC; }
-    bool invalidChecksum() const { return _header.typecheck != ~_header.type; }
-    bool invalidLength() const { return _header.length < 0 || _header.length > MESSAGE_MAX_PAYLOAD_SIZE; }
-
-    const std::string toString(int count) const
-    {
-        const char *cmds = "Unknown";
-        for (size_t i = 0; i < sizeof(protocolCmdList) / sizeof(protocolCmdList[0]); ++i)
-        {
-            if (protocolCmdList[i].cmd == static_cast<int>(_header.type))
-            {
-                cmds = protocolCmdList[i].name;
-                break;
-            }
-        }
-
-        char len[32];
-        std::snprintf(len, sizeof(len), "[%d]", _header.length);
-
-        char magic = '!';
-        if (_header.magic == MAGIC)
-            magic = ' ';
-        else if (_header.magic == MAGIC_ENC)
-            magic = '*';
-
-        char check = _header.typecheck == ~_header.type ? '+' : 'x';
-
-        char prefix[64];
-        std::snprintf(prefix, sizeof(prefix), ">%c%c%3u%-8s%-15s",
-                      magic,
-                      check,
-                      static_cast<unsigned>(_header.type),
-                      len,
-                      cmds);
-
-        std::string result(prefix);
-        uint8_t *payload = data();
-        int32_t payloadLength = length();
-
-        if (payload && payloadLength > 0 && count > 0)
-        {
-            int limit = std::min(count, payloadLength);
-            result.reserve(result.size() + static_cast<size_t>(limit));
-
-            for (int i = 0; i < limit; ++i)
-            {
-                char ch = static_cast<char>(payload[i]);
-                result += (ch == '\n' || ch == '\r' || ch < 32 || ch > 126) ? '.' : ch;
-            }
-        }
-
-        return result;
-    }
 
 private:
     static inline void write_uint32_le(uint8_t *dst, uint32_t value)
@@ -375,7 +186,6 @@ private:
     uint8_t *_data;
     uint32_t _offset;
     uint32_t _size;
-    bool _encrypt;
 };
 
 #endif /* SRC_PROTOCOL_MESSAGE */

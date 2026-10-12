@@ -4,7 +4,7 @@
 
 #include <linux/input.h>
 // linux/input.h defines BTN_LEFT/RIGHT/BACK as evdev codes that collide with
-// the Carlinkit button ids in protocol_const.h. We only use BTN_TOUCH here, so
+// the app button ids in protocol_const.h. We only use BTN_TOUCH here, so
 // drop the evdev aliases before the protocol headers define their versions.
 #undef BTN_LEFT
 #undef BTN_RIGHT
