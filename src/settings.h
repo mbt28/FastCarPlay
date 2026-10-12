@@ -3,10 +3,6 @@
 
 #include "common/settings_base.h"
 
-#define SCREEN_MODE_WINDOW 0
-#define SCREEN_MODE_FULLSCREEN 1
-#define SCREEN_MODE_HEADLESS 2
-
 // The singleton “Settings” namespace
 class Settings
 {
@@ -74,8 +70,6 @@ public:
     static inline Setting<int> width{"width", 1024};
     static inline Setting<int> height{"height", 576};
     static inline Setting<int> sourceFps{"source-fps", 60};
-    static inline Setting<int> screenMode{"window-mode", 0};
-    static inline Setting<bool> cursor{"cursor", false};
     static inline Setting<int> loglevel{"log-level", 2};
 
     // Device configurations section
@@ -85,13 +79,10 @@ public:
 
     // Application configuration section
     static inline Setting<int> fontSize{"font-size", 40};
-    static inline Setting<bool> vsync{"vsync", false};
-    // How video is decoded and shown. "auto" (default) probes the board: a
-    // desktop session -> an SDL window with software decode; otherwise, if we
-    // can become DRM master, video goes on a DRM plane (hardware decode when
-    // the chip has a block for the codec, software otherwise) with the UI on an
-    // overlay plane above it; failing both, headless. Override with "hw", "sw"
-    // or "headless" for bring-up or a board that misreports. See video_path.h.
+    // How video is decoded and shown. "auto" (default) probes the board: if
+    // we can become DRM master, video goes on a DRM plane with the UI on an
+    // overlay plane above it; otherwise headless. Override with "hw" or
+    // "headless" for bring-up or a board that misreports. See video_path.h.
     static inline Setting<std::string> videoPath{"video-path", "auto"};
     // Touchscreen for the headless DRM/DEFE path (read directly from evdev).
     // Empty device = auto-detect the first node with an absolute-position axis
@@ -101,12 +92,8 @@ public:
     static inline Setting<bool> touchInvertX{"touch-invert-x", false};
     static inline Setting<bool> touchInvertY{"touch-invert-y", false};
     static inline Setting<int> renderingBuffer{"rendering-buffer", 5};
-    static inline Setting<int> eventsSkip{"draw-skip-events", 3};
-    static inline Setting<int> forceRedraw{"force-redraw", 0};
     static inline Setting<float> aspectCorrection{"aspect-correction", 1};
-    static inline Setting<std::string> renderDriver{"renderer-driver", ""};
     static inline Setting<bool> alternativeRendering{"alternative-rendering", false};
-    static inline Setting<bool> fastScale{"fast-render-scale", false};
     static inline Setting<int> usbQueue{"async-usb-calls", 32};
     static inline Setting<int> usbTransferSize{"usb-buffer-size", 2048};
     static inline Setting<int> usbBuffer{"usb-buffer", 128};
@@ -153,72 +140,14 @@ public:
     static inline Setting<std::string> onConnect{"on-connect-script", ""};
     static inline Setting<std::string> onDisconnect{"on-disconnect-script", ""};
 
-    // Key mapping section
-    static inline Setting<std::string> keyPipe{"key-pipe-path", ""};
-    static inline KeySetting<int> keySiri{"key-siri", 115, 5};
-    static inline KeySetting<int> keyNightOn{"key-nightmode-on", 122, 16};
-    static inline KeySetting<int> keyNightOff{"key-nightmode-off", 120, 17};
-    static inline KeySetting<int> keyLeft{"key-left", 1073741904, 100};
-    static inline KeySetting<int> keyLeftExtra{"key-left-extra", 39, 100};
-    static inline KeySetting<int> keyRight{"key-right", 1073741903, 101};
-    static inline KeySetting<int> keyRightExtra{"key-right-extra", 92, 101};
-    static inline KeySetting<int> keyEnter{"key-enter", 13, 104};
-    static inline KeySetting<int> keyEnterUp{"key-enterup", 0, 105};
-    static inline KeySetting<int> keyBack{"key-back", 8, 106};
-    static inline KeySetting<int> keyUp{"key-up", 1073741906, 113};
-    static inline KeySetting<int> keyDown{"key-down", 1073741905, 114};
-    static inline KeySetting<int> keyHome{"key-home", 104, 200};
-    static inline KeySetting<int> keyPlay{"key-play", 93, 201};
-    static inline KeySetting<int> keyPause{"key-pause", 91, 202};
-    static inline KeySetting<int> keyPlayPause{"key-play-toggle", 112, 203};
-    static inline KeySetting<int> keyNext{"key-next", 46, 204};
-    static inline KeySetting<int> keyPrev{"key-previous", 44, 205};
-    static inline KeySetting<int> keyAccept{"key-call-accept", 97, 300};
-    static inline KeySetting<int> keyReject{"key-call-reject", 115, 301};
-    static inline KeySetting<int> keyVideoFocus{"key-video-focus", 118, 500};
-    static inline KeySetting<int> keyVideoRelease{"key-video-release", 98, 501};
-    static inline KeySetting<int> keyNavFocus{"key-nav-focus", 110, 508};
-    static inline KeySetting<int> keyNavRelease{"key-nav-release", 109, 509};
-
-    // Custom scripts
-    static inline Setting<std::string> script1{"custom-script-1", ""};
-    static inline Setting<int> scriptKey1{"key-custom-script-1", 49};
-    static inline Setting<std::string> scriptName1{"custom-script-name-1", ""};
-    static inline Setting<std::string> script2{"custom-script-2", ""};
-    static inline Setting<int> scriptKey2{"key-custom-script-2", 50};
-    static inline Setting<std::string> scriptName2{"custom-script-name-2", ""};
-    static inline Setting<std::string> script3{"custom-script-3", ""};
-    static inline Setting<int> scriptKey3{"key-custom-script-3", 51};
-    static inline Setting<std::string> scriptName3{"custom-script-name-3", ""};
-    static inline Setting<std::string> script4{"custom-script-4", ""};
-    static inline Setting<int> scriptKey4{"key-custom-script-4", 52};
-    static inline Setting<std::string> scriptName4{"custom-script-name-4", ""};
-
     // Debug section
     static inline Setting<bool> codecLowDelay{"decode-low-delay", true};
     static inline Setting<bool> codecFast{"decode-fast", true};
     static inline Setting<bool> debugOverlay{"debug-overlay", false};
-    // Render the EEZ Studio / LVGL screens standalone instead of the normal
-    // loop -- a bring-up harness for the UI, no protocol or decoder involved.
-    // Needs a USE_LVGL=1 build. The display is sized from width/height above.
-    static inline Setting<bool> lvglTest{"lvgl-test", false};
     // Use the LVGL screens as the home screen in the normal loop (instead of
     // the plain status text), so a source can be picked on the head unit.
     // Selecting one persists it and restarts into that protocol.
     static inline Setting<bool> lvglUi{"lvgl-ui", false};
-    // With lvgl-test: render a few frames, write the result to this path as a
-    // BMP and exit. Drives tools/ui-sweep.sh, which checks every supported
-    // panel size without hardware -- the capture is read back from the
-    // renderer, so it is pixel-exact and needs no compositor/screenshot tool.
-    static inline Setting<std::string> lvglTestShot{"lvgl-test-shot", ""};
-    // With lvgl-test: inject a click at "x,y" before capturing, so screen
-    // navigation can be exercised without a human (and in CI). Mainly this
-    // guards the async screen switch, where getting the teardown wrong would
-    // free a screen while its own click handler is still running.
-    static inline Setting<std::string> lvglTestClick{"lvgl-test-click", ""};
-    // Scripted encoder input for the harness: comma list where a number is
-    // that many detents (negative = left) and "p" is a push. e.g. "1,1,p".
-    static inline Setting<std::string> lvglTestEncoder{"lvgl-test-encoder", ""};
     // Icon set: "builtin" = LVGL's bundled symbols (always available);
     // "material" = Material Symbols, once tools/make-icon-font.sh has
     // generated it. Screens name icon slots, so this only changes how they
@@ -246,8 +175,6 @@ public:
     // Applies the value now and persists it, leaving other overrides intact.
     static bool setUser(const std::string &key, const std::string &value);
 
-    static inline bool isFullscreen() { return screenMode == SCREEN_MODE_FULLSCREEN; };
-    static inline bool isHeadless() { return screenMode == SCREEN_MODE_HEADLESS; };
 
 private:
     static void trim(std::string &s);

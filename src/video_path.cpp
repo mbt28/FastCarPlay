@@ -130,13 +130,6 @@ bool ffmpegCanHw(AVCodecID id)
 #endif
 }
 
-bool haveDesktop()
-{
-    const char *w = getenv("WAYLAND_DISPLAY");
-    const char *x = getenv("DISPLAY");
-    return (w && *w) || (x && *x);
-}
-
 // Can we become DRM master? Open and immediately release: this only answers the
 // question, the real session is opened later by the render loop.
 bool canDriveDrm()
@@ -154,8 +147,6 @@ bool canDriveDrm()
 Caps probe()
 {
     Caps caps;
-    caps.desktop = haveDesktop();
-
     scanDecoders(caps);
     caps.hwH264 = caps.hwH264 && ffmpegCanHw(AV_CODEC_ID_H264);
     caps.hwHevc = caps.hwHevc && ffmpegCanHw(AV_CODEC_ID_HEVC);
@@ -163,12 +154,6 @@ Caps probe()
 
     // An explicit choice always wins -- for bring-up and for boards that lie.
     const std::string &forced = Settings::videoPath.value;
-    if (forced == "sw")
-    {
-        caps.mode = Mode::Sdl;
-        caps.why = "forced by video-path=sw";
-        return caps;
-    }
     if (forced == "headless")
     {
         caps.mode = Mode::Headless;
@@ -178,17 +163,8 @@ Caps probe()
     if (forced == "hw")
     {
         caps.drm = canDriveDrm();
-        caps.mode = caps.drm ? Mode::Drm : Mode::Sdl;
+        caps.mode = caps.drm ? Mode::Drm : Mode::Headless;
         caps.why = caps.drm ? "forced by video-path=hw" : "video-path=hw but no DRM master";
-        return caps;
-    }
-
-    // Auto. A desktop session owns the screen, so draw into a window there and
-    // leave KMS alone -- that is also the developer's expectation.
-    if (caps.desktop)
-    {
-        caps.mode = Mode::Sdl;
-        caps.why = "desktop session present";
         return caps;
     }
 
@@ -252,7 +228,6 @@ const char *modeName(Mode m)
     switch (m)
     {
     case Mode::Drm: return "drm";
-    case Mode::Sdl: return "sdl";
     default: return "headless";
     }
 }

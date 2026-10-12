@@ -19,8 +19,6 @@
 #endif
 #include "common/status_file.h"
 #include "display_geometry.h"
-#include "pipe_listener.h"
-#include "renderer.h"
 
 #define TOAST_TIME 3
 
@@ -46,20 +44,9 @@ private:
     };
 
     bool setAudioDriver();
-    int processKey(SDL_Keysym key);
-    bool processSystemEvent(const SDL_Event &e);
-    bool processFrameEvents(AtomicQueue<Message> &queue, Renderer &renderer);
-    const std::string status() const;
 
-    void loop();
     void loopHeadless(); // no-renderer path: decoder presents to fb itself
     void loopDrm();      // DRM path: decoder presents video, UI on the overlay plane
-#ifdef USE_LVGL
-    void loopLvglTest(); // UI bring-up harness: LVGL screens only (lvgl-test)
-    // Routes an SDL event to the UI (touch/mouse, and the 3-way encoder as
-    // wheel or arrow keys). Returns true when the UI consumed it.
-    bool feedUiEvent(class LvglOsd &osd, const SDL_Event &e);
-#endif
     // Set once a hardware decoder has given up, so we stop choosing it.
     bool _hwDisabled = false;
     std::unique_ptr<class IDecoder> makeDecoder(AVCodecID codecId);
@@ -83,14 +70,8 @@ private:
     void publishStatus(class IConnection &protocol);
     StatusFile _statusFile;
 
-    SDL_Window *_window;
-    SDL_Renderer *_renderer;
-    PipeListener *_keyListener;
     bool _active;
-    SDL_DisplayMode _displayMode;
     State _state;
-    int _width;
-    int _height;
     bool _debug;
 };
 

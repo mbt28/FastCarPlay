@@ -39,10 +39,6 @@
 #define BTN_203 203 // pause/resume??
 #define BTN_NEXT_TRACK 204
 #define BTN_PREVIOUS_TRACK 205
-// Call accept/reject (desktop key mappings; die with the SDL path)
-#define BTN_300 300
-#define BTN_301 301
-
 // Multitouch per-point action (CMD_MULTI_TOUCH). Distinct from the
 // single-touch action codes (14/15/16); the AA backend maps these to its own
 // PointerAction enum.
