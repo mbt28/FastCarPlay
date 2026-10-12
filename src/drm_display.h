@@ -19,7 +19,6 @@
 #ifdef USE_CEDRUS
 
 #include <cstdint>
-#include <SDL2/SDL.h>
 
 namespace drm_display
 {
@@ -73,14 +72,6 @@ void uiWriteRect(int x, int y, int w, int h, const uint8_t *px, int pitch);
 // same band. uiHide() disables the plane.
 bool uiShow(int y0, int y1);
 void uiHide();
-
-// Legacy SDL path for Interface (home screen fallback, toasts, debug): a
-// software renderer targeting an offscreen surface in uiFormat().
-// uiPresent()/uiPresentRows() copy the surface (or just rows [y0, y1)) into
-// the dumb buffer and commit the plane over those rows.
-SDL_Renderer *uiRenderer();
-bool uiPresent();
-bool uiPresentRows(int y0, int y1);
 } // namespace drm_display
 
 #endif /* USE_CEDRUS */

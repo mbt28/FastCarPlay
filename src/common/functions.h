@@ -7,7 +7,6 @@
 #include <stdexcept>
 #include <string>
 
-#include <SDL2/SDL.h>
 
 #include "common/threading.h"
 
@@ -34,17 +33,6 @@ inline const std::string avErrorText(int code)
     return "Unknown error";
 }
 
-inline void pushEvent(Uint32 evt, int code)
-{
-    if (evt == (Uint32)-1)
-        return;
-    SDL_Event event;
-    SDL_memset(&event, 0, sizeof(event));
-    event.type = evt;
-    event.user.type = evt;
-    event.user.code = code;
-    SDL_PushEvent(&event);
-}
 
 #include <sstream>
 #include <iomanip>

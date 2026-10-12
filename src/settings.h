@@ -78,7 +78,6 @@ public:
     static inline Setting<int> dpi{"android-dpi", 120};
 
     // Application configuration section
-    static inline Setting<int> fontSize{"font-size", 40};
     // How video is decoded and shown. "auto" (default) probes the board: if
     // we can become DRM master, video goes on a DRM plane with the UI on an
     // overlay plane above it; otherwise headless. Override with "hw" or
@@ -92,8 +91,6 @@ public:
     static inline Setting<bool> touchInvertX{"touch-invert-x", false};
     static inline Setting<bool> touchInvertY{"touch-invert-y", false};
     static inline Setting<int> renderingBuffer{"rendering-buffer", 5};
-    static inline Setting<float> aspectCorrection{"aspect-correction", 1};
-    static inline Setting<bool> alternativeRendering{"alternative-rendering", false};
     static inline Setting<int> usbQueue{"async-usb-calls", 32};
     static inline Setting<int> usbTransferSize{"usb-buffer-size", 2048};
     static inline Setting<int> usbBuffer{"usb-buffer", 128};
@@ -118,8 +115,8 @@ public:
     static inline Setting<int> audioDelay{"audio-buffer-wait", 2};
     static inline Setting<int> audioDelayCall{"audio-buffer-wait-call", 6};
     static inline Setting<float> audioFade{"audio-fade", 0.3};
-    // The ALSA PCM the in-app mixer and the mic capture open DIRECTLY (no SDL,
-    // no dmix -- the mixer sums main+aux itself). "hw:0,0" on the F1C avoids
+    // The ALSA PCM the in-app mixer and the mic capture open DIRECTLY (no
+    // dmix -- the mixer sums main+aux itself). "hw:0,0" on the F1C avoids
     // the plugin layer entirely; a desktop dev host can set "default".
     static inline Setting<std::string> alsaDevice{"alsa-device", "hw:0,0"};
     // Voice latency cap: the mixer drops the OLDEST queued aux segments once

@@ -54,7 +54,7 @@ void start()
 }
 
 // Re-exec ourselves so a source/setting change takes effect. Done here, after
-// start() has returned and Application's destructor has released SDL, USB and
+// start() has returned and Application's destructor has released USB and
 // the DRM master -- exec does not unwind the stack, so tearing down first is
 // the difference between a clean restart and leaking the display.
 // Self-contained: no init script or supervisor needed, so it behaves the same

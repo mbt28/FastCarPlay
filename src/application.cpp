@@ -15,7 +15,6 @@
 #include "common/logger.h"
 
 #include "settings.h"
-#include "interface.h"
 #include "decoder.h"
 #include "video_path.h" // probes how video is decoded + shown on this board
 
@@ -41,29 +40,12 @@ Application::Application(/* args */) : _active(true)
 
     _debug = Settings::debugOverlay;
 
-    // SDL remains only for the legacy Interface fallback (SDL_ttf text); the
-    // timer/audio subsystems are no longer used -- audio is direct ALSA and
-    // timing comes from common/clock.h.
-    if (SDL_Init(0) != 0)
-        throw std::runtime_error(std::string("SDL initialisation failed > ") + SDL_GetError());
-
-    if (video_path::detect().mode != video_path::Mode::Headless)
-    {
-        // The DRM-UI fallback renders text too; TTF needs no SDL video driver.
-        if (TTF_Init() != 0)
-        {
-            SDL_Quit();
-            throw std::runtime_error(std::string("TTF initialisation failed > ") + TTF_GetError());
-        }
-    }
 
 }
 
 Application::~Application()
 {
     log_v("Destroying");
-    TTF_Quit();
-    SDL_Quit();
     log_d("Finished");
 }
 
@@ -361,12 +343,9 @@ void Application::loopHeadless()
 }
 
 // DRM path: the decoder presents video frames itself on the DRM/DEFE video
-// plane; the UI goes on the overlay plane above it. The LVGL screens write
-// straight into the plane's dumb framebuffer (no intermediate texture or
-// composition surface); the plain Interface home screen and the debug band
-// over live video draw through a lazily-created SDL software surface. No SDL
-// video driver is used; input comes from the touchscreen/serial listeners as
-// in the headless path.
+// plane; the UI goes on the overlay plane above it, writing straight into the
+// plane's dumb framebuffer (no intermediate texture or composition surface).
+// Input comes from the touchscreen/serial listeners as in the headless path.
 void Application::loopDrm()
 {
 #ifdef USE_CEDRUS
@@ -399,36 +378,6 @@ void Application::loopDrm()
     if (Settings::lvglUi && !osd.beginDrm(uiWidth, uiHeight))
         log_w("LVGL UI unavailable > using the plain home screen");
 #endif
-
-    // Interface (plain home screen, debug band over video) composes through
-    // an SDL software surface -- a full panel of pixels -- so it is created
-    // only if something actually draws with it.
-    std::unique_ptr<Interface> interface;
-    auto ensureInterface = [&]() -> Interface * {
-        if (!interface)
-        {
-            SDL_Renderer *r = drm_display::uiRenderer();
-            if (r)
-                interface = std::make_unique<Interface>(r, _geometry);
-        }
-        return interface.get();
-    };
-
-#ifdef USE_LVGL
-    const bool lvglUi = osd.active();
-#else
-    const bool lvglUi = false;
-#endif
-    if (!lvglUi)
-    {
-        // First paint before the connection comes up, so the screen is never
-        // blank. (LVGL paints on its first tick a few ms later.)
-        if (Interface *ui = ensureInterface())
-        {
-            ui->drawHome(true, PROTOCOL_STATUS_UNKNOWN, "");
-            drm_display::uiPresent();
-        }
-    }
 
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
@@ -467,9 +416,6 @@ void Application::loopDrm()
     bool uiShowsHome = true;
     bool osdShown = false;
     uint32_t framesAtConnect = drm_display::videoFrames();
-#ifndef NDEBUG
-    Uint32 debugTick = 0;
-#endif
     AVFrame *frame = nullptr;
     uint32_t frameId = 0;
 
@@ -481,7 +427,6 @@ void Application::loopDrm()
         if (decoderRunning)
             syncDecoderCodec(decoder, protocol, startedCodec);
         publishStatus(protocol);
-        uint32_t now = mono_ms();
         auto state = protocol.state();
         uint32_t frames = drm_display::videoFrames();
         // "Video flowing" = connected and at least one frame was presented
@@ -533,48 +478,6 @@ void Application::loopDrm()
             dirty = true;
         }
 
-        // Toast timing (parity with the SDL loop).
-        if (_state.showToast > 0)
-        {
-            if (_state.showToast == 1)
-            {
-                if (Interface *ui = ensureInterface())
-                    ui->showToast(_state.toast);
-                _state.showToast = now ? now : 1;
-                dirty = true;
-            }
-            else if (now - _state.showToast >= TOAST_TIME * 1000)
-            {
-                if (interface)
-                    interface->hideToast();
-                _state.showToast = 0;
-                dirty = true;
-            }
-        }
-
-#ifndef NDEBUG
-        if (_debug && now - debugTick >= 1000)
-        {
-            debugTick = now;
-            char debugBuffer[512];
-            std::snprintf(debugBuffer, sizeof(debugBuffer),
-                          "DRM overlay %dx%d\n"
-                          "FRAME: %u\n"
-                          "USB: %s\n"
-                          "BUFF: video [%u] audio[main %u aux %u] out [%u]",
-                          drm_display::width(), drm_display::height(),
-                          frames,
-                          protocol.status().c_str(),
-                          protocol.videoStream.count(),
-                          protocol.audioStreamMain.count(),
-                          protocol.audioStreamAux.count(),
-                          protocol.writeQueue.count());
-            if (Interface *ui = ensureInterface())
-                ui->debug(debugBuffer);
-            dirty = true;
-        }
-#endif
-
         if (!videoActive)
         {
 #ifdef USE_LVGL
@@ -613,12 +516,14 @@ void Application::loopDrm()
             else
 #endif
             {
-                // Home screen (opaque) on the overlay; also covers stale video.
-                Interface *ui = ensureInterface();
-                if (ui && ui->drawHome(dirty || !uiShowsHome, state, protocol.phoneName()))
-                    drm_display::uiPresent();
+                // No UI available (LVGL off or failed): the overlay stays
+                // hidden; video and the session still run.
+                if (uiShowsHome || osdShown)
+                {
+                    drm_display::uiHide();
+                    osdShown = false;
+                }
                 uiShowsHome = true;
-                osdShown = false;
             }
         }
         else
@@ -626,24 +531,13 @@ void Application::loopDrm()
 #if defined(USE_LVGL) && defined(__linux__)
             touchInput.routeToUi(false); // video is up: touch goes to the phone
 #endif
-            // Video plays below; the overlay carries only the toast/debug
-            // band -- committed over just those rows, so the video stays
-            // visible below it -- or hides entirely.
-            if (uiShowsHome || dirty)
+            // Video plays below; the overlay hides entirely.
+            if (uiShowsHome || osdShown)
             {
-                const int band = interface ? interface->drawOsd() : 0;
-                if (band > 0)
-                {
-                    drm_display::uiPresentRows(0, band);
-                    osdShown = true;
-                }
-                else if (uiShowsHome || osdShown)
-                {
-                    drm_display::uiHide();
-                    osdShown = false;
-                }
-                uiShowsHome = false;
+                drm_display::uiHide();
+                osdShown = false;
             }
+            uiShowsHome = false;
         }
 
         // Drain the buffer so a buffering (software) decoder can't stall; the

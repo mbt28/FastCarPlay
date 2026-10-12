@@ -2,14 +2,12 @@
 CXX ?= g++
 CC ?= gcc
 PKG_CONFIG ?= pkg-config
-HOST_XXD ?= xxd
 INSTALL ?= install
 STRIP ?= strip
 PREFIX ?= /usr
 SYSCONFDIR ?= /etc
 SRC_DIR := ./src
 OUT_DIR := ./out
-RES_DIR := $(SRC_DIR)/resource
 GEN_DIR := $(SRC_DIR)/autogen
 BUILD_DIR := $(OUT_DIR)/$(BUILD_TYPE)
 
@@ -21,9 +19,6 @@ OBJS=$(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 # C sources: the vendored nanopb runtime and the generated AA protobuf code.
 SRCS_C := $(shell find $(SRC_DIR) -type f -name '*.c' -not -path '$(SRC_DIR)/ui/*')
 OBJS += $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.c.o,$(SRCS_C))
-
-RES := $(shell find $(RES_DIR) -type f ! -name '*.h' ! -name '.*' -name '*.*')
-RES_SRC := $(patsubst $(RES_DIR)/%,$(GEN_DIR)/%.cpp,$(RES))
 
 # Version identity, compiled in so the running binary can be asked what it is --
 # which after a partial update is not the same as what /etc claims.
@@ -45,7 +40,7 @@ all: release
 # opus: the fixed-point Opus encoder for the wireless CarPlay mic uplink (decode
 # still rides libavcodec's libopus wrapper). <opus/opus.h> resolves via the
 # sysroot's default include path, so only the library (-lopus) is added here.
-LDOPTIONS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl opus alsa) -pthread
+LDOPTIONS := $(shell $(PKG_CONFIG) --libs libavformat libavcodec libavutil libswscale libusb-1.0 openssl opus alsa) -pthread
 LDFLAGS :=
 CXXCOMMON := -Wall -std=c++17 -Isrc -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
 CCOMMON := -Wall -std=c99 -Isrc/protocol/aa/nanopb -Isrc/protocol/aa/proto
@@ -126,7 +121,7 @@ release: LDFLAGS += -Os -flto -Wl,-O1 $(PLATFORM_LDFLAGS)
 release: TARGET := $(TARGET_NAME)
 release: prepare
 
-prepare: $(RES_SRC) version-h
+prepare: version-h
 	$(MAKE) BUILD_TYPE=$(BUILD_TYPE) TARGET=$(OUT_DIR)/$(TARGET) CXXFLAGS="$(CXXFLAGS)" LDFLAGS="$(LDFLAGS)" build
 
 build: $(TARGET)
@@ -141,18 +136,6 @@ version-h:
 	@if cmp -s $(VERSION_H).new $(VERSION_H) 2>/dev/null; then rm -f $(VERSION_H).new; \
 	else mv $(VERSION_H).new $(VERSION_H); echo "version: $(FCP_VERSION) build $(FCP_BUILD)"; fi
 
-# Embed resources as `const` arrays so they land in .rodata (shared, clean,
-# read-only) instead of the writable .data segment -- xxd -i emits a plain
-# `unsigned char`, which for the ~640 KB of background+font would otherwise
-# sit in a dirty-able RW mapping.
-$(GEN_DIR)/%.cpp: $(RES_DIR)/%
-	@mkdir -p $(GEN_DIR)
-	python3 -c 'import sys; n=sys.argv[1]; d=open(sys.argv[2],"rb").read(); \
-	  o=open(sys.argv[3],"w"); o.write("extern const unsigned char %s[] = {" % n); \
-	  o.write(",".join(str(b) for b in d)); \
-	  o.write("};\nextern const unsigned int %s_len = %d;\n" % (n, len(d)))' \
-	  $(basename $(notdir $<)) $< $@
-
 $(TARGET): $(OBJS)
 	@mkdir -p $(OUT_DIR)
 	$(CXX) $(LDFLAGS) $(OBJS) -o $(TARGET) $(LDOPTIONS)
@@ -160,7 +143,7 @@ $(TARGET): $(OBJS)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXCOMMON) $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf libavformat libavcodec libavutil libswscale libusb-1.0 openssl alsa) $(CXXFLAGS) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXCOMMON) $(shell $(PKG_CONFIG) --cflags libavformat libavcodec libavutil libswscale libusb-1.0 openssl alsa) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 # C rule for nanopb + generated protobuf code (-fno-rtti is C++-only).
 $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c

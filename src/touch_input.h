@@ -2,11 +2,11 @@
 #define SRC_TOUCH_INPUT
 
 // Touch input for the DRM/headless render paths (renderer = drm/none). Those
-// paths have no SDL video and therefore no SDL_FINGER events, so we read the
+// paths read the
 // touchscreen (e.g. GT911) directly from its Linux evdev device and feed touch
-// into the same protocol the SDL path uses. Gated on __linux__ (evdev is
+// into the protocol messages. Gated on __linux__ (evdev is
 // Linux-only), independent of the decoder; the app only instantiates it on the
-// non-SDL loops, so which renderer is selected decides when it runs.
+// board loops, so which renderer is selected decides when it runs.
 
 #ifdef __linux__
 
@@ -24,7 +24,7 @@ public:
     explicit TouchInput(IConnection &conn);
     ~TouchInput();
 
-    // On the DRM path there are no SDL events, so the on-device UI is fed from
+    // On the DRM path the on-device UI is fed from
     // here: the same calibrated evdev reader, routed to the UI instead of the
     // phone while a screen is up. The loop toggles routeToUi() each frame; the
     // sink receives the primary finger as normalized 0..1 coordinates.
