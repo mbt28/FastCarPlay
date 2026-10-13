@@ -118,6 +118,7 @@ void TouchInput::emit()
     float primaryX = 0, primaryY = 0;
     bool primaryPressed = false;
     bool havePrimary = false;
+    bool anyDown = false;
 
     for (int i = 0; i < MUTLITOUCH_MAX_TOUCH; i++)
     {
@@ -140,6 +141,7 @@ void TouchInput::emit()
         // Pointer id = the (stable) slot index, not the evdev tracking id which
         // changes on every touch-down.
         touches.add(nx, ny, action, i);
+        anyDown = anyDown || c.active;
 
         // The UI is single-pointer: the first (primary) finger drives it.
         if (!havePrimary) { primaryX = nx; primaryY = ny; primaryPressed = c.active; havePrimary = true; }
@@ -149,11 +151,58 @@ void TouchInput::emit()
             c.id = -1; // slot freed
     }
 
+    // A contact belongs to the route where it started. On a route flip the
+    // side that saw the press gets a terminal release/up (so no row stays
+    // pressed and no drag is left dangling on the phone), and the rest of the
+    // contact is swallowed so the new side never sees a press mid-gesture
+    // (e.g. projection ending under a finger must not click Resume).
+    if (toUi != _lastToUi)
+    {
+        if (_lastToUi && _uiDown && _uiSink)
+        {
+            _uiSink(_uiLastX, _uiLastY, false);
+            _uiDown = false;
+        }
+        if (!_lastToUi && connected && anyDown)
+        {
+            // Same calibration as the normal path, action forced to UP.
+            Multitouch lift;
+            for (int i = 0; i < MUTLITOUCH_MAX_TOUCH; i++)
+            {
+                if (!_slots[i].active)
+                    continue;
+                float nx = (float)(_slots[i].x - _xmin) / (_xmax - _xmin);
+                float ny = (float)(_slots[i].y - _ymin) / (_ymax - _ymin);
+                if (Settings::touchSwapXY) { float t = nx; nx = ny; ny = t; }
+                if (Settings::touchInvertX) nx = 1.0f - nx;
+                if (Settings::touchInvertY) ny = 1.0f - ny;
+                if (nx < 0) nx = 0; else if (nx > 1) nx = 1;
+                if (ny < 0) ny = 0; else if (ny > 1) ny = 1;
+                lift.add(nx, ny, MT_ACTION_UP, i);
+            }
+            if (lift.size() > 0)
+                _conn.send(Message::MultiTouch(lift));
+        }
+        _suppressContact = anyDown;
+        _lastToUi = toUi;
+    }
+    if (_suppressContact)
+    {
+        if (!anyDown)
+            _suppressContact = false; // contact over; next press flows again
+        return;
+    }
+
     if (toUi)
     {
         // UI is on screen: drive it, never the phone (which is not projecting).
         if (havePrimary)
+        {
             _uiSink(primaryX, primaryY, primaryPressed);
+            _uiDown = primaryPressed;
+            _uiLastX = primaryX;
+            _uiLastY = primaryY;
+        }
     }
     else if (connected && touches.size() > 0)
     {

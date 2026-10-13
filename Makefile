@@ -121,7 +121,7 @@ endif
 
 # -ffast-math is deliberately absent: the target is soft-float (no FPU), so
 # relaxing IEEE rules cannot speed up a libgcc call, and its -ffinite-math-only
-# would quietly break isnan/isinf across the ffmpeg/SDL headers inlined here.
+# would quietly break isnan/isinf across the ffmpeg headers inlined here.
 # -Os over -O2: .text is ~2 MB against a 16 KB I-cache, so smaller code wins
 # the cache more than -O2's inlining loses. -flto lets --gc-sections reach
 # cross-TU dead code.

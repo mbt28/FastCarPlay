@@ -1,13 +1,13 @@
 #ifndef SRC_DRM_DISPLAY
 #define SRC_DRM_DISPLAY
 
-// Shared DRM/KMS session for the F1C200s zero-copy display path (renderer =
-// drm). One process-wide DRM master owns the connector/CRTC/mode and two
+// Shared DRM/KMS session for the F1C200s zero-copy display path (video-path
+// auto/hw). One process-wide DRM master owns the connector/CRTC/mode and two
 // planes:
 //   - the video plane (primary, NV12 + ALLWINNER_TILED routed through the
 //     DEFE front-end: HW de-tile + BT.601 CSC + scale) fed by V4l2DrmDecoder
 //     from its decode thread, and
-//   - an overlay plane above it for the UI (home screen, toasts, debug).
+//   - an overlay plane above it for the built-in UI screens.
 //     Its pixel format comes from what the plane actually supports -- RGB565
 //     preferred (half the memory and copy bandwidth of 32-bit), ARGB8888 as
 //     the fallback -- and the UI writes straight into a single dumb
