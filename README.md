@@ -90,9 +90,9 @@ The project is inspired by and based on great work done by other developers:
 - [react-carplay by rhysmorgan134](https://github.com/rhysmorgan134/react-carplay)
 - [carplay-client by rayphee](https://github.com/rayphee/carplay-client)
 
-Licensed under GPL-3 (see LICENCE). The UI ships the
+Licensed under GPL-3 (see LICENSE). The UI ships the
 [Open Sans font](https://fonts.google.com/specimen/Open+Sans) (see
-FONT_LICENCE).
+FONT_LICENSE).
 
 ## Finally
 

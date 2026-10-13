@@ -36,7 +36,7 @@ enum Protocol
 void setStatus(const char *status);
 
 // Set when a change has been persisted and needs a restart to take effect;
-// the loops exit so the init script (S99carplay) respawns us.
+// the loops exit and main re-execs the binary (S99carplay does not respawn).
 bool restartRequested();
 
 // A connected-but-backgrounded session is waiting behind the UI, so the

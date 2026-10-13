@@ -10,8 +10,6 @@
 // setting (same reasoning as video_path: ask the kernel, don't configure it):
 //
 //   Drm       the panel, from the DRM connector/CRTC -- nothing to configure
-//   Sdl       the real window size *after* creation: a window manager is free
-//             to ignore the size we asked for, and the window is resizable
 //   Headless  width/height from settings -- there is no display to ask
 //
 // Physical millimetres come from the DRM connector when it reports them (EDID or

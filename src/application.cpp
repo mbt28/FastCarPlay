@@ -296,7 +296,7 @@ void Application::loopHeadless()
     protocol.start();
 
 #ifdef __linux__
-    TouchInput touchInput(protocol);   // evdev touchscreen (renderer = drm/none)
+    TouchInput touchInput(protocol);   // evdev touchscreen (board loops only)
 #endif
 #ifdef USE_CEDRUS
     SerialInput serialInput(protocol); // TEST-only serial-console navigation
@@ -380,7 +380,7 @@ void Application::loopDrm()
     protocol.start();
 
 #ifdef __linux__
-    TouchInput touchInput(protocol);   // evdev touchscreen (renderer = drm/none)
+    TouchInput touchInput(protocol);   // evdev touchscreen (board loops only)
 #ifdef USE_OSD_UI
     // Feed the primary finger to the UI (normalized -> panel pixels) while a
     // screen is up; routeToUi() below flips per frame based on what is shown.

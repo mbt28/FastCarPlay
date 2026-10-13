@@ -87,8 +87,8 @@ int main()
     check(slurp(path).find("sixty") == std::string::npos, "value absent from the file");
     check(!Settings::setUser("left-hand-drive", "yes"), "bad bool rejected");
     check(!Settings::setUser("aa-video-fps", "60fps"), "trailing junk rejected");
-    check(!Settings::setUser("aspect-correction", "1.0x"), "bad float rejected");
-    check(Settings::setUser("aspect-correction", "1.25"), "good float accepted");
+    check(!Settings::setUser("audio-fade", "1.0x"), "bad float rejected");
+    check(Settings::setUser("audio-fade", "0.25"), "good float accepted");
 
     printf("\nthe saved file still parses after a rejected write:\n");
     Settings::aaFps.value = 30;

@@ -374,11 +374,15 @@ void SlintOsd::end()
 
 void SlintOsd::pointer(int x, int y, bool pressed)
 {
+    // Order matters against tick(): position first, then _pressed, then the
+    // catch-up flag. tick() drains _pressSeen before it reads _pressed, so a
+    // press can never be seen by the catch-up branch while _pressed still
+    // reads false (which would dispatch the tap twice).
     _px = x;
     _py = y;
+    _pressed = pressed;
     if (pressed)
         _pressSeen = true;
-    _pressed = pressed;
 }
 
 bool SlintOsd::tick()
@@ -389,9 +393,11 @@ bool SlintOsd::tick()
 
     // Touch -> pointer events, on this thread as Slint requires. A tap that
     // fit entirely between two ticks still delivers a press + release pair.
+    // Drain the catch-up flag BEFORE reading _pressed (pointer() writes them
+    // in the opposite order), so seen && !down can only mean a completed tap.
     {
-        const bool down = _pressed;
         const bool seen = _pressSeen.exchange(false);
+        const bool down = _pressed;
         const slint::LogicalPosition pos({(float)_px.load(), (float)_py.load()});
         auto &window = impl.win->window();
         if (down && !impl.lastDown)

@@ -1,12 +1,10 @@
 #ifndef SRC_TOUCH_INPUT
 #define SRC_TOUCH_INPUT
 
-// Touch input for the DRM/headless render paths (renderer = drm/none). Those
-// paths read the
-// touchscreen (e.g. GT911) directly from its Linux evdev device and feed touch
-// into the protocol messages. Gated on __linux__ (evdev is
-// Linux-only), independent of the decoder; the app only instantiates it on the
-// board loops, so which renderer is selected decides when it runs.
+// Touch input for the DRM/headless paths: reads the touchscreen (e.g. GT911)
+// directly from its Linux evdev device and feeds touch into the protocol
+// messages, or into the on-device UI while a screen is up. Gated on __linux__
+// (evdev is Linux-only) and independent of the decoder.
 
 #ifdef __linux__
 
@@ -57,6 +55,15 @@ private:
     int _xmin = 0, _xmax = 1, _ymin = 0, _ymax = 1;
     bool _mt = false; // multitouch (protocol B, ABS_MT_*) vs single-touch (ABS_X/Y)
     Contact _slots[MUTLITOUCH_MAX_TOUCH];
+
+    // Route-transition state (touch thread only). A contact belongs to the
+    // route where it started: flipping routeToUi() mid-contact sends the old
+    // side a terminal release/up and swallows the rest of the contact, so the
+    // new side never sees a press it has no context for.
+    bool _lastToUi = false;
+    bool _suppressContact = false;
+    bool _uiDown = false;
+    float _uiLastX = 0, _uiLastY = 0;
 };
 
 #endif /* __linux__ */
