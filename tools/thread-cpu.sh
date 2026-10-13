@@ -9,7 +9,7 @@
 #   tools/thread-cpu.sh 10         # ...for 10s
 #   PID=1234 tools/thread-cpu.sh   # a specific process
 #
-# Run it once in AA USB mode and once with the Carlinkit dongle and compare:
+# Run it once per protocol backend and compare:
 # the thread whose share changes is the one to look at.
 set -e
 

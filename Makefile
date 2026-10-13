@@ -11,7 +11,7 @@ OUT_DIR := ./out
 GEN_DIR := $(SRC_DIR)/autogen
 BUILD_DIR := $(OUT_DIR)/$(BUILD_TYPE)
 
-# File lists. src/ui (LVGL backend + EEZ Studio generated screens) is added
+# File lists. src/ui (the LVGL UI) is added
 # back only when USE_LVGL=1, so a UI-less build pays no flash/RAM for it.
 SRCS := $(shell find $(SRC_DIR) -type f -name '*.cpp' -not -path '$(SRC_DIR)/ui/*')
 OBJS=$(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))

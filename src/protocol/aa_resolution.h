@@ -9,9 +9,8 @@
 // it takes literal pixel dimensions, which is why it is asked for the display's
 // exact size instead of a setting.)
 //
-// Both consumers need the pixels for their own reasons -- the native backend to
-// define the touch coordinate space, the Carlinkit backend to fit the display's
-// aspect inside the box -- so the table lives here rather than being copied.
+// The native backend needs the pixels to define the touch coordinate space,
+// so the table lives here rather than being copied per user.
 inline void aa_resolution(int setting, int &width, int &height)
 {
     switch (setting)

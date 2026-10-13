@@ -68,7 +68,7 @@ What is working:
 What is not working:
 - Multi touch - i have no means to test it and no idea how it should work
 - Some android keys are not mapped
-- No methods to edit autoconnect list or switch wireless devices
+- No methods to switch between multiple paired wireless devices
 
 ### Notes
 - Do not try to run debug builds if you do not need to debug application. They consume a lot of memory for address sanitising thats grow over time.

@@ -19,7 +19,7 @@
 #include "video_path.h" // probes how video is decoded + shown on this board
 
 #ifdef USE_LVGL
-#include "ui/lvgl_osd.h"  // LVGL bound to SDL_Renderer; EEZ Studio screens
+#include "ui/lvgl_osd.h"  // LVGL bound to the DRM overlay plane
 #include "ui/ui_bridge.h" // native vars/actions the screens are wired to
 #endif
 #ifdef USE_CEDRUS
