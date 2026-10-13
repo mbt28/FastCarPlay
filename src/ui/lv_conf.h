@@ -709,15 +709,10 @@
  * */
 #define LV_WIDGETS_HAS_DEFAULT_VALUE  1
 
-/* The hand-written picker UI (the default) creates only label, obj, button,
- * buttonmatrix (keyboard), keyboard and textarea, so every other widget is
- * dead ~200 KB of .text. The generated EEZ flow engine (USE_EEZ) is a generic
- * LVGL runtime that references the full widget set, so it keeps them all. */
-#ifdef USE_EEZ
-#define FCP_OPT_WIDGET 1
-#else
+/* The hand-written picker UI creates only label, obj, button, buttonmatrix
+ * (keyboard), keyboard and textarea, so every other widget is dead ~200 KB
+ * of .text and stays compiled out. */
 #define FCP_OPT_WIDGET 0
-#endif
 
 #define LV_USE_ANIMIMG    FCP_OPT_WIDGET
 

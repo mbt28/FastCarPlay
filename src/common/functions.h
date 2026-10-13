@@ -7,7 +7,6 @@
 #include <stdexcept>
 #include <string>
 
-
 #include "common/threading.h"
 
 extern "C"
@@ -33,7 +32,6 @@ inline const std::string avErrorText(int code)
     return "Unknown error";
 }
 
-
 #include <sstream>
 #include <iomanip>
 
@@ -51,7 +49,5 @@ inline std::string bytes(uint8_t *data, uint32_t length, uint16_t max)
 
     return oss.str();
 }
-
-
 
 #endif /* SRC_COMMON_FUNCTIONS */

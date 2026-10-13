@@ -54,7 +54,7 @@ int main()
     check(!Settings::loadUser(), "loadUser() returns false when absent");
 
     printf("\nwrite + apply:\n");
-    Settings::protocol.value = "carlinkit";
+    Settings::protocol.value = "carplay-wireless";
     check(Settings::setUser("protocol", "aa-usb"), "setUser(protocol, aa-usb)");
     check(Settings::protocol.value == "aa-usb", "applied to the live setting");
     check(!slurp(path).empty(), "file written");
@@ -73,7 +73,7 @@ int main()
     check(body.find("aa-usb") == std::string::npos, "old value replaced, not appended");
 
     printf("\noverride wins over the preset:\n");
-    Settings::protocol.value = "carlinkit"; // as if a preset had just loaded
+    Settings::protocol.value = "carplay-wireless"; // as if a preset had just loaded
     check(Settings::loadUser(), "loadUser() returns true");
     check(Settings::protocol.value == "aa-wireless", "override applied over preset");
 
@@ -85,7 +85,7 @@ int main()
     check(!Settings::setUser("aa-video-fps", "sixty"), "setUser() returns false");
     check(Settings::aaFps.value == 30, "live value left untouched");
     check(slurp(path).find("sixty") == std::string::npos, "value absent from the file");
-    check(!Settings::setUser("cursor", "yes"), "bad bool rejected");
+    check(!Settings::setUser("left-hand-drive", "yes"), "bad bool rejected");
     check(!Settings::setUser("aa-video-fps", "60fps"), "trailing junk rejected");
     check(!Settings::setUser("aspect-correction", "1.0x"), "bad float rejected");
     check(Settings::setUser("aspect-correction", "1.25"), "good float accepted");

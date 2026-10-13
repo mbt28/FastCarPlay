@@ -5,7 +5,7 @@ CXXFLAGS := -std=c++17 -O3 -Wall -Wextra -march=native -flto
 LDFLAGS := -flto
 OUT_DIR := ./../out
 
-all: keylistener emulator
+all: emulator
 
 # Round-trip self-test for the vendored nanopb + generated AA protobuf code.
 AA_DIR := ../src/protocol/aa
@@ -210,14 +210,11 @@ mfi_probe: mfi_probe.cpp
 	$(CXX) $(CXXFLAGS) -I../src mfi_probe.cpp \
 	  ../src/protocol/cp/mfi_auth.cpp -o $(OUT_DIR)/mfi_probe $(LDFLAGS)
 
-keylistener: keylistener.cpp
-	$(CXX) $(CXXFLAGS) keylistener.cpp -o $(OUT_DIR)/keylistener $(LDFLAGS)
-
 emulator: emulator.cpp
 	$(CXX) $(CXXFLAGS) emulator.cpp -o $(OUT_DIR)/emulator $(LDFLAGS) -llgpio
 
 clean:
-	rm -f $(OUT_DIR)/keylistener $(OUT_DIR)/emulator
+	rm -f $(OUT_DIR)/emulator
 # Binary plist codec (CarPlay AV payloads).
 cp_plist_test: cp_plist_test.cpp
 	$(CXX) $(CXXFLAGS) -I../src cp_plist_test.cpp \

@@ -21,7 +21,7 @@ public:
     // fps. Unlike CarPlay -- which takes literal pixel dimensions, so it is
     // asked for the display's exact size -- the AA protocol only carries an
     // enum of standard modes, so this stays an explicit setting. Used by both
-    // the native backend; `android-resolution` is the legacy alias.
+    // `android-resolution` is the legacy alias of aa-resolution.
     static inline Setting<int> aaResolution{"aa-resolution", 1, "android-resolution"};
     static inline Setting<int> aaFps{"aa-video-fps", 30};
     // Wireless Android Auto (protocol = aa-wireless): the head unit runs a
