@@ -186,9 +186,9 @@ private:
     // first inbound packet so the mic uplink knows where to send.
     void audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type, cp_audio::Codec codec,
                    int rate, int channels, bool upmix, Listener *uplink = nullptr);
-    // Microphone uplink: SDL-capture 16 kHz mono PCM, 20 ms frames, seal each
-    // with the per-stream Input key (RTP + ChaCha20-Poly1305, mirroring the
-    // downlink framing), and send to the phone's latched data address.
+    // Microphone uplink: ALSA-captured mono PCM frames, sealed with the
+    // per-stream Input key (RTP + ChaCha20-Poly1305, mirroring the downlink
+    // framing) and sent to the phone's latched data address.
     void uplinkLoop(Listener *l);
     // The iAP2-over-CarPlay tunnel (stream 130): the phone continues iAP2 here
     // after it drops Bluetooth. Receive-only (our replies ride the event channel).

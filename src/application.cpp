@@ -1,6 +1,5 @@
 #include "application.h"
 
-#include <SDL2/SDL_ttf.h>
 #include <cstdio>
 #include <sstream>
 #include <chrono>
@@ -127,13 +126,9 @@ static const char *uiStatusText(int state)
 #endif /* USE_OSD_UI */
 
 
-// Head units frequently have only a 3-way rotary encoder, so every screen has
-// to be reachable without a touchscreen. On the desktop the encoder is
-// emulated by the mouse wheel and the arrow keys, with Enter as the push.
-
 namespace
 {
-// The loops have no SDL event pump turning SIGINT into a quit event, so
+// The loops have no event pump turning SIGINT into a quit event, so
 // install our own handler for a clean Ctrl-C.
 volatile std::sig_atomic_t g_quit = 0;
 // First signal asks for a clean shutdown; a second one takes it. Teardown
@@ -285,9 +280,9 @@ std::unique_ptr<IConnection> Application::makeConnection()
     return connection;
 }
 
-// No-renderer path: no SDL window/renderer/fonts are created. The decoder
-// presents frames itself (cedrus -> DRM plane) and navigation comes from the
-// serial console. Keeps the process alive and drives the protocol state.
+// No-UI path: nothing draws on the overlay plane. The decoder presents
+// frames itself (cedrus -> DRM plane) and navigation comes from the serial
+// console. Keeps the process alive and drives the protocol state.
 void Application::loopHeadless()
 {
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
