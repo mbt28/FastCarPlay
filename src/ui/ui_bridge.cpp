@@ -1,11 +1,9 @@
 #include "ui_bridge.h"
 
-#ifdef USE_LVGL
+#if defined(USE_LVGL) || defined(USE_SLINT)
 
 #include <atomic>
 #include <string>
-
-#include <lvgl/lvgl.h>
 
 #include "common/logger.h"
 #include "settings.h"
@@ -123,7 +121,7 @@ void requestRestart()
 } // namespace ui_bridge
 
 // ---------------------------------------------------------------------------
-// Native variables. Signatures must match what EEZ generates into vars.h:
+// Plain-C variable surface shared by the UI toolkits:
 // integer -> int32_t, boolean -> bool, string -> const char *.
 // ---------------------------------------------------------------------------
 
@@ -150,21 +148,4 @@ extern "C" void set_var_status(const char *value)
     ui_bridge::setStatus(value);
 }
 
-// ---------------------------------------------------------------------------
-// Native actions. ActionExecFunc is void(lv_event_t *), so each source gets
-// its own action rather than one taking an id.
-// ---------------------------------------------------------------------------
-
-extern "C" void action_use_aa_usb(lv_event_t *e)
-{
-    (void)e;
-    selectProtocol(ui_bridge::PROTOCOL_AA_USB);
-}
-
-extern "C" void action_use_aa_wireless(lv_event_t *e)
-{
-    (void)e;
-    selectProtocol(ui_bridge::PROTOCOL_AA_WIRELESS);
-}
-
-#endif /* USE_LVGL */
+#endif /* USE_LVGL || USE_SLINT */

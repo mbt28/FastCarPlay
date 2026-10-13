@@ -95,6 +95,34 @@ CXXCOMMON += $(UI_FLAGS)
 CCOMMON += $(UI_FLAGS)
 endif
 
+# On-device UI, Slint flavor: links the static libslint_cpp built by the
+# buildroot slint-cpp package (software renderer, fonts embedded at compile
+# time). Screens are declarative (src/ui/slint/app.slint); the only C++20 TU
+# is the facade, src/ui/slint_osd.cpp. Enable USE_SLINT=1.
+ifeq ($(USE_SLINT),1)
+ifeq ($(USE_LVGL),1)
+$(error USE_LVGL and USE_SLINT are mutually exclusive)
+endif
+# Headers + libslint_cpp.a come from the cross sysroot (the slint-cpp package
+# installs into staging); slint-compiler from the buildroot host tools.
+SLINT_SYSROOT ?= $(shell $(CXX) -print-sysroot)
+SLINT_COMPILER ?= slint-compiler
+SLINT_GEN := $(GEN_DIR)/app_window.h
+UI_FLAGS := -DUSE_SLINT -I$(SRC_DIR)/ui -I$(GEN_DIR) -I$(SLINT_SYSROOT)/usr/include/slint
+SRCS += $(SRC_DIR)/ui/slint_osd.cpp $(SRC_DIR)/ui/ui_bridge.cpp
+CXXCOMMON += $(UI_FLAGS)
+LDOPTIONS += -lslint_cpp
+
+# Slint's C++ API needs C++20; only the facade sees those headers, the rest
+# of the tree stays C++17.
+$(BUILD_DIR)/ui/slint_osd.o: CXXCOMMON := $(filter-out -std=c++17,$(CXXCOMMON)) -std=c++20
+$(BUILD_DIR)/ui/slint_osd.o: $(SLINT_GEN)
+
+$(SLINT_GEN): $(SRC_DIR)/ui/slint/app.slint $(wildcard $(SRC_DIR)/ui/slint/fonts/*)
+	@mkdir -p $(GEN_DIR)
+	$(SLINT_COMPILER) -f cpp --embed-resources=embed-for-software-renderer -o $@ $<
+endif
+
 debug: BUILD_TYPE := debug
 debug: CXXFLAGS := -g -O0 -DPROTOCOL_DEBUG -fsanitize=address -fno-omit-frame-pointer
 debug: LDFLAGS += -fsanitize=address -fno-omit-frame-pointer
@@ -158,9 +186,9 @@ $(BUILD_DIR)/lvgl/%.c.o: $(LVGL_DIR)/%.c
 
 # Header dependencies (-MMD): editing a header now rebuilds what includes it.
 # NOTE: this does NOT cover changing the feature flags themselves -- toggling
-# USE_LVGL / USE_CEDRUS / USE_AA_WIRELESS changes the compile flags, not the
-# sources, so make cannot see it. Always `make clean` when switching a flag,
-# or you get a binary built from a mix of both configurations.
+# USE_LVGL / USE_SLINT / USE_CEDRUS / USE_AA_WIRELESS changes the compile
+# flags, not the sources, so make cannot see it. Always `make clean` when
+# switching a flag, or you get a binary built from a mix of both configurations.
 -include $(OBJS:.o=.d)
 
 install:
