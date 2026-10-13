@@ -1,35 +1,24 @@
 #ifndef SRC_UI_UI_BRIDGE
 #define SRC_UI_UI_BRIDGE
 
-// The contract between the EEZ Studio designed screens and the application.
-//
-// Screens reference a small, stable set of names:
-//   native variables  protocol (int), status (string)   -- app -> UI
-//   native actions    use_aa_usb / use_aa_wireless              -- UI -> app
-//
-// EEZ generates the declarations into src/ui/generated/vars.h and wires them
-// into native_vars[] / actions[]; this file is the only place they are
-// implemented. Anyone can restyle or relayout the screens without touching
-// C++, as long as they keep using these names.
+// The contract between the built-in screens and the application: a small,
+// stable set of names (protocol, status, resume/restart/backgrounded state)
+// that the UI toolkit of the day renders however it likes. The screens can
+// be restyled or relaid out without touching the application, as long as
+// they keep using these names.
 
-#ifdef USE_LVGL
+#if defined(USE_LVGL) || defined(USE_SLINT)
 
 #include <cstdint>
 
-#include <lvgl/lvgl.h>
-
-// The generated vars.h/actions.h declare these too; keeping one copy here
-// means the built-in picker and the EEZ screens cannot drift apart. Types
-// must match what EEZ emits: integer -> int32_t, string -> const char *.
+// Plain-C surface shared by both UI toolkits (and once by the EEZ screens):
+// integer -> int32_t, string -> const char *.
 extern "C"
 {
     int32_t get_var_protocol();
     void set_var_protocol(int32_t value);
     const char *get_var_status();
     void set_var_status(const char *value);
-
-    void action_use_aa_usb(lv_event_t *e);
-    void action_use_aa_wireless(lv_event_t *e);
 }
 
 namespace ui_bridge
@@ -68,5 +57,5 @@ const char *protocolName();
 void requestRestart();
 } // namespace ui_bridge
 
-#endif /* USE_LVGL */
+#endif /* USE_LVGL || USE_SLINT */
 #endif /* SRC_UI_UI_BRIDGE */

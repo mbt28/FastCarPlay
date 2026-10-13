@@ -1,0 +1,286 @@
+// FastCarPlay built-in screens (Slint, software renderer, RGB565 overlay).
+//
+// Pure declarative UI: every behavior goes through the Bridge global --
+// properties flow app -> UI (set from slint_osd.cpp on change only),
+// callbacks flow UI -> app. Validation and persistence stay in C++.
+//
+// Layout follows the LVGL screens it replaces (docs/ui.md): fixed-height
+// touch rows (never a fraction of the screen), 800x480 panel metrics
+// (row 80 px, gap 8 px, 20 px text), colors from the old ui_style.
+
+import "fonts/font.ttf";
+
+export global Bridge {
+    // app -> UI
+    in property <string> status;              // connection state line
+    in property <string> source-label;        // short label of the active source
+    in property <bool> session-waiting;       // backgrounded session behind the UI
+    in property <bool> restart-needed;        // a staged change awaits a restart
+    in property <int> protocol;               // active source id (radio list)
+    in property <string> night-label;         // "Day" / "Night" / "Auto"
+    in property <string> fps-label;           // "30 fps" / "60 fps"
+    in property <string> wifi-ssid;
+    in property <string> wifi-pass;
+    in property <string> bt-name;
+    in property <int> editing;                // field id being edited, -1 = none
+    in property <string> editor-label;        // what is being edited ("Name"...)
+    in property <string> editor-text;         // the edit buffer (owned by C++)
+    in property <string> editor-error;        // non-empty = red validation hint
+
+    // UI -> app
+    callback select-protocol(int);
+    callback resume();
+    callback restart-now();
+    callback cycle-night();
+    callback cycle-fps();
+    callback edit-field(int);                 // open the editor on a field
+    callback osk-key(string);                 // literal character
+    callback osk-backspace();
+    callback osk-ok();                        // validate + save (C++ closes)
+    callback osk-cancel();
+}
+
+// ── shared look ──────────────────────────────────────────────────────────
+global Style {
+    out property <color> bg: #101418;
+    out property <color> row: #1E262E;
+    out property <color> row-pressed: #2C3844;
+    out property <color> row-on: #1E88E5;
+    out property <color> edge: #64B5F6;
+    out property <color> dim: #8FA3B0;
+    out property <color> text: #E8Eef2;
+    out property <length> gap: 8px;
+    out property <length> row-h: 80px;
+    out property <length> font: 20px;
+}
+
+// A touch row: label, optional right-aligned value, pressed/selected states.
+component Row inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> selected;
+    callback clicked;
+
+    height: Style.row-h;
+    border-radius: Style.gap;
+    background: ta.pressed ? Style.row-pressed
+              : root.selected ? Style.row-on : Style.row;
+    border-width: root.selected ? 2px : 0px;
+    border-color: Style.edge;
+
+    ta := TouchArea { clicked => { root.clicked(); } }
+
+    HorizontalLayout {
+        padding-left: Style.gap * 3;
+        padding-right: Style.gap * 3;
+        spacing: Style.gap * 2;
+        Text {
+            text: root.label;
+            color: Style.text;
+            font-size: Style.font;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.value;
+            color: Style.dim;
+            font-size: Style.font;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Dim caption line at the top of a screen.
+component Header inherits Text {
+    color: Style.dim;
+    font-size: Style.font;
+    height: 34px;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// Full-screen scrollable column of rows.
+component ListScreen inherits Flickable {
+    viewport-height: col.preferred-height;
+    col := VerticalLayout {
+        padding: Style.gap;
+        spacing: Style.gap;
+        @children
+    }
+}
+
+// ── screens ──────────────────────────────────────────────────────────────
+// 0 home, 1 settings, 2 source, 3 wireless (navigation is UI-local state)
+
+component ScreenHome inherits ListScreen {
+    callback goto(int);
+    Header { text: Bridge.source-label + "  -  " + (Bridge.status == "" ? "ready" : Bridge.status); }
+    if Bridge.session-waiting: Row {
+        // The hero: twice a normal row, so it is unmistakable at a glance
+        // and an easy target on a moving vehicle.
+        height: Style.row-h * 2;
+        label: "Resume";
+        selected: true;
+        clicked => { Bridge.resume(); }
+    }
+    Row { label: "Settings"; clicked => { root.goto(1); } }
+}
+
+component ScreenSettings inherits ListScreen {
+    callback goto(int);
+    Header { text: Bridge.restart-needed ? "Settings  -  restart to apply" : "Settings"; }
+    // Back at the top (below the header) -- easier to reach on a car screen.
+    Row { label: "Back"; clicked => { root.goto(0); } }
+    Row { label: "Source"; value: Bridge.source-label; clicked => { root.goto(2); } }
+    Row { label: "Night"; value: Bridge.night-label; clicked => { Bridge.cycle-night(); } }
+    Row { label: "Video"; value: Bridge.fps-label; clicked => { Bridge.cycle-fps(); } }
+    Row { label: "Wireless"; clicked => { root.goto(3); } }
+    // Only meaningful once something needs it; hidden otherwise rather than
+    // inviting a pointless restart.
+    if Bridge.restart-needed: Row { label: "Restart now"; clicked => { Bridge.restart-now(); } }
+}
+
+component ScreenSource inherits ListScreen {
+    callback goto(int);
+    Header { text: "Source"; }
+    Row { label: "Back"; clicked => { root.goto(1); } }
+    // Protocol ids match ui_bridge::Protocol. Selecting stages the change
+    // (persist + "restart to apply"); it never drops a live session.
+    for src in [
+        { id: 1, label: "AA Wired" },
+        { id: 2, label: "AA Wireless" },
+        { id: 3, label: "CarPlay Wired" },
+        { id: 4, label: "CarPlay Wireless" },
+    ]: Row {
+        label: src.label;
+        selected: Bridge.protocol == src.id;
+        value: Bridge.protocol == src.id ? "Active" : "";
+        clicked => { Bridge.select-protocol(src.id); }
+    }
+}
+
+component ScreenWireless inherits ListScreen {
+    callback goto(int);
+    Header { text: Bridge.restart-needed ? "Wireless  -  restart to apply" : "Wireless"; }
+    Row { label: "Back"; clicked => { root.goto(1); } }
+    Row { label: "Name"; value: Bridge.wifi-ssid; clicked => { Bridge.edit-field(0); } }
+    Row { label: "Password"; value: Bridge.wifi-pass; clicked => { Bridge.edit-field(1); } }
+    Row { label: "Bluetooth"; value: Bridge.bt-name; clicked => { Bridge.edit-field(2); } }
+}
+
+// ── full-screen text editor with an on-screen keyboard ──────────────────
+component OskKey inherits Rectangle {
+    in property <string> label;
+    in property <float> weight: 1;
+    callback pressed;
+    horizontal-stretch: root.weight;
+    border-radius: 6px;
+    background: ta.pressed ? Style.row-pressed : Style.row;
+    ta := TouchArea { clicked => { root.pressed(); } }
+    Text {
+        text: root.label;
+        color: Style.text;
+        font-size: Style.font;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component Editor inherits Rectangle {
+    background: Style.bg;
+    property <bool> shift: false;
+    property <bool> symbols: false;
+    property <[string]> r1: root.symbols ? ["1","2","3","4","5","6","7","8","9","0"]
+        : root.shift ? ["Q","W","E","R","T","Y","U","I","O","P"]
+                     : ["q","w","e","r","t","y","u","i","o","p"];
+    property <[string]> r2: root.symbols ? ["!","@","#","$","%","^","&","*","(",")"]
+        : root.shift ? ["A","S","D","F","G","H","J","K","L"]
+                     : ["a","s","d","f","g","h","j","k","l"];
+    property <[string]> r3: root.symbols ? ["-","_","+","=",";",":","'","\"","/","?"]
+        : root.shift ? ["Z","X","C","V","B","N","M"]
+                     : ["z","x","c","v","b","n","m"];
+
+    VerticalLayout {
+        padding: Style.gap;
+        spacing: Style.gap;
+
+        // Title: what is being edited (or the red validation error), and an
+        // explicit way out -- text entry must always be abandonable.
+        HorizontalLayout {
+            height: 44px;
+            spacing: Style.gap;
+            Text {
+                text: Bridge.editor-error == "" ? Bridge.editor-label : Bridge.editor-error;
+                color: Bridge.editor-error == "" ? Style.dim : #EF5350;
+                font-size: Style.font;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            OskKey { label: "Cancel"; pressed => { Bridge.osk-cancel(); } }
+        }
+
+        // The value being edited, with a plain underscore caret.
+        Rectangle {
+            height: 52px;
+            border-radius: Style.gap;
+            background: #0B0E11;
+            border-width: 1px;
+            border-color: Style.edge;
+            Text {
+                x: Style.gap * 2;
+                width: parent.width - Style.gap * 4;
+                text: Bridge.editor-text + "_";
+                color: Style.text;
+                font-size: Style.font;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            for k in root.r1: OskKey { label: k; pressed => { Bridge.osk-key(k); } }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            for k in root.r2: OskKey { label: k; pressed => { Bridge.osk-key(k); } }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            if !root.symbols: OskKey {
+                label: "Shift"; weight: 1.5;
+                pressed => { root.shift = !root.shift; }
+            }
+            for k in root.r3: OskKey { label: k; pressed => { Bridge.osk-key(k); } }
+            OskKey { label: "Del"; weight: 1.5; pressed => { Bridge.osk-backspace(); } }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            OskKey {
+                label: root.symbols ? "abc" : "?123"; weight: 1.5;
+                pressed => { root.symbols = !root.symbols; root.shift = false; }
+            }
+            OskKey { label: ","; pressed => { Bridge.osk-key(","); } }
+            OskKey { label: "Space"; weight: 3; pressed => { Bridge.osk-key(" "); } }
+            OskKey { label: "."; pressed => { Bridge.osk-key("."); } }
+            OskKey { label: "OK"; weight: 1.5; pressed => { Bridge.osk-ok(); } }
+        }
+    }
+}
+
+// ── root ─────────────────────────────────────────────────────────────────
+export component AppWindow inherits Window {
+    width: 800px;
+    height: 480px;
+    background: Style.bg;
+    default-font-family: "Open Sans";
+
+    property <int> screen: 0;
+
+    if root.screen == 0 && Bridge.editing < 0: ScreenHome     { goto(s) => { root.screen = s; } }
+    if root.screen == 1 && Bridge.editing < 0: ScreenSettings { goto(s) => { root.screen = s; } }
+    if root.screen == 2 && Bridge.editing < 0: ScreenSource   { goto(s) => { root.screen = s; } }
+    if root.screen == 3 && Bridge.editing < 0: ScreenWireless { goto(s) => { root.screen = s; } }
+    if Bridge.editing >= 0: Editor {}
+}

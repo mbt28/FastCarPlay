@@ -18,8 +18,8 @@
 #include "decoder.h"
 #include "video_path.h" // probes how video is decoded + shown on this board
 
-#ifdef USE_LVGL
-#include "ui/lvgl_osd.h"  // LVGL bound to the DRM overlay plane
+#include "ui/osd.h" // the built-in UI toolkit (defines USE_OSD_UI when one is built)
+#ifdef USE_OSD_UI
 #include "ui/ui_bridge.h" // native vars/actions the screens are wired to
 #endif
 #ifdef USE_CEDRUS
@@ -102,9 +102,8 @@ void Application::syncDecoderCodec(std::unique_ptr<IDecoder> &decoder, IConnecti
     started = want;
 }
 
-#ifdef USE_LVGL
-// Short, user-facing connection state for the picker header. Mirrors the
-// wording of Interface::drawHome.
+#ifdef USE_OSD_UI
+// Short, user-facing connection state for the picker header.
 static const char *uiStatusText(int state)
 {
     // Wired CarPlay has no dongle -- while it waits for a phone, prompt to plug in.
@@ -129,7 +128,7 @@ static const char *uiStatusText(int state)
         return "Select source";
     }
 }
-#endif /* USE_LVGL */
+#endif /* USE_OSD_UI */
 
 
 // Head units frequently have only a 3-way rotary encoder, so every screen has
@@ -371,12 +370,12 @@ void Application::loopDrm()
     const int uiWidth = drm_display::width();
     const int uiHeight = drm_display::height();
 
-#ifdef USE_LVGL
-    // The LVGL screens own the overlay plane while idle, flushing straight
-    // into its dumb framebuffer in the plane's own format.
-    LvglOsd osd;
+#ifdef USE_OSD_UI
+    // The built-in screens own the overlay plane while idle, flushing
+    // straight into its dumb framebuffer in the plane's own format.
+    Osd osd;
     if (Settings::lvglUi && !osd.beginDrm(uiWidth, uiHeight))
-        log_w("LVGL UI unavailable > using the plain home screen");
+        log_w("UI unavailable > running without screens (video still works)");
 #endif
 
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
@@ -391,7 +390,7 @@ void Application::loopDrm()
 
 #ifdef __linux__
     TouchInput touchInput(protocol);   // evdev touchscreen (renderer = drm/none)
-#ifdef USE_LVGL
+#ifdef USE_OSD_UI
     // Feed the primary finger to the UI (normalized -> panel pixels) while a
     // screen is up; routeToUi() below flips per frame based on what is shown.
     if (osd.active())
@@ -480,10 +479,10 @@ void Application::loopDrm()
 
         if (!videoActive)
         {
-#ifdef USE_LVGL
+#ifdef USE_OSD_UI
             if (osd.active())
             {
-                // LVGL owns the home screen on the overlay plane: source
+                // The UI owns the home screen on the overlay plane: source
                 // picker + settings, driven by the touchscreen.
                 const bool backgrounded =
                     state == PROTOCOL_STATUS_CONNECTED && !protocol.videoFocused();
@@ -494,7 +493,7 @@ void Application::loopDrm()
 #ifdef __linux__
                 touchInput.routeToUi(true);
 #endif
-                // LVGL's flushes land straight in the dumb framebuffer, so
+                // UI flushes land straight in the dumb framebuffer, so
                 // presenting is just making sure the plane covers the panel.
                 // An unchanged screen costs one timer tick and nothing else.
                 bool uiChanged = osd.tick();
@@ -516,7 +515,7 @@ void Application::loopDrm()
             else
 #endif
             {
-                // No UI available (LVGL off or failed): the overlay stays
+                // No UI available (disabled or failed to start): the overlay stays
                 // hidden; video and the session still run.
                 if (uiShowsHome || osdShown)
                 {
@@ -528,7 +527,7 @@ void Application::loopDrm()
         }
         else
         {
-#if defined(USE_LVGL) && defined(__linux__)
+#if defined(USE_OSD_UI) && defined(__linux__)
             touchInput.routeToUi(false); // video is up: touch goes to the phone
 #endif
             // Video plays below; the overlay hides entirely.
@@ -543,8 +542,8 @@ void Application::loopDrm()
         // Drain the buffer so a buffering (software) decoder can't stall; the
         // HW decoders present directly and leave this empty.
         decoder->buffer.consume(&frame, &frameId);
-        // While our own UI is on screen, tick faster so LVGL's input and
-        // refresh timers (30/33 ms) run every period and touch feedback lands
+        // While our own UI is on screen, tick faster so the toolkit's input
+        // and refresh timers run every period and touch feedback lands
         // within one frame; this is cheap now that an unchanged screen costs
         // nothing. With video up the loop only shepherds the session.
         std::this_thread::sleep_for(std::chrono::milliseconds(videoActive ? 50 : 16));
