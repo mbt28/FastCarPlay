@@ -14,7 +14,8 @@
 #include "protocol/wifi_ap.h"
 #include "settings.h"
 
-#ifdef USE_LVGL
+#include "ui/osd.h" // defines USE_OSD_UI when a UI toolkit is built in
+#ifdef USE_OSD_UI
 #include "ui/ui_bridge.h"
 #endif
 
@@ -132,11 +133,9 @@ int main(int argc, char **argv)
 
         start();
 
-#ifdef USE_LVGL
+#ifdef USE_OSD_UI
         // The UI persisted the change before asking to restart, so the new
         // process reads it back from usersettings.txt on the way up.
-        // Not in the UI harness: it exists to iterate on screens, and with a
-        // scripted click it would re-select and restart forever.
         if (ui_bridge::restartRequested())
             restartSelf();
 #endif
