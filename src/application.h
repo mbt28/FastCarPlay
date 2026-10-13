@@ -30,18 +30,6 @@ public:
     void start(const char *title);
 
 private:
-    struct State
-    {
-        bool dirty = false;
-        bool frameRendered = false;
-        int requestFrame = 0;
-        bool fullscreen = false;
-        bool mouseDown = false;
-        int8_t latestState = PROTOCOL_STATUS_UNKNOWN;
-        uint32_t showToast = false;
-        std::string toast = "";
-    };
-
     void loopHeadless(); // no-renderer path: decoder presents to fb itself
     void loopDrm();      // DRM path: decoder presents video, UI on the overlay plane
     // Set once a hardware decoder has given up, so we stop choosing it.
@@ -68,7 +56,6 @@ private:
     StatusFile _statusFile;
 
     bool _active;
-    State _state;
 };
 
 #endif /* SRC_APPLICATION */

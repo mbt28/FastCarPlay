@@ -12,7 +12,7 @@ namespace aoap
 libusb_device_handle *openAccessory(libusb_context *context);
 
 // Scan the bus and try the AOAP switch on every candidate device (skips
-// hubs, the Carlinkit dongle and accessory-mode devices). Returns the number
+// hubs and devices already in accessory mode). Returns the number
 // of devices that accepted the switch; they re-enumerate shortly after.
 int switchCandidates(libusb_context *context);
 } // namespace aoap
