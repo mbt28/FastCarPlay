@@ -1,106 +1,100 @@
 # FastCarPlay
-A lightweight C++ CarPlay and Android Auto receiver for small embedded Linux
-boards (primary target: Allwinner F1C200s). It speaks the native protocols
-directly -- wireless/wired CarPlay and wireless/wired (AOAP) Android Auto --
-with hardware H.264 decoding; no interposer dongle is involved.
+
+A C++ CarPlay and Android Auto receiver for small embedded Linux boards,
+built for the Allwinner F1C200s (ARM926EJ-S @ 408 MHz, 64 MB RAM, no FPU).
+It speaks the native protocols directly -- wireless and wired CarPlay,
+wireless and wired (AOAP) Android Auto -- with hardware H.264 decoding.
+No interposer dongle is involved.
 
 ![Logo](docs/images/screenshot.png)
 
-## Setup
+## How it works
 
-> [!IMPORTANT]  
-> For detailed guide on set Raspberry Pi Zero 2W visit [Raspbery Pi Setup WIKI page](../../wiki/Raspbery-Pi-Setup)
+- **Video**: the phone's H.264 stream is decoded by the SoC's mainline
+  `cedrus` engine (ffmpeg V4L2-request hwaccel) and presented on a DRM video
+  plane. The app owns the display; there is no desktop, no X11/Wayland.
+- **UI**: the built-in screens (source picker, settings, wireless setup with
+  an on-screen keyboard) are [Slint](https://slint.dev), software-rendered
+  into an RGB565 overlay plane above the video, driven by evdev touch.
+- **Audio**: an in-app ALSA mixer plays music/navigation/voice directly on
+  `hw:0,0` (fixed-point Opus and AAC decode -- the chip has no FPU) and
+  captures the microphone for calls and Siri/Assistant.
+- **Wireless modes** need a system-run Wi-Fi access point (hostapd) and
+  BlueZ for the Bluetooth bootstrap. **CarPlay** (wired and wireless) needs
+  an MFi 3.0 authentication coprocessor on i2c.
 
+The complete board image (kernel, drivers, init, this app) is built by the
+companion Buildroot tree: [f1c200s-linux](https://github.com/mbt28/f1c200s-linux).
 
-### Dependencies
-The project is based on SDL2, FFMPEG, LIBUSB (wired Android Auto / AOAP).
+## Building
+
+This is a cross-compiled, board-only application. With the companion tree's
+toolchain and sysroot (staging must contain the `slint-cpp` package for the
+UI):
+
 ```
-sudo apt install build-essential libsdl2-dev libsdl2-ttf-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libusb-1.0-0-dev libssl-dev libasound2-dev libopus-dev
-```
-
-### USB permissions (wired Android Auto)
-Wired Android Auto talks to the phone directly over USB (AOAP accessory mode),
-which may need a udev rule granting access to the phone's USB device for your
-user (match your phone's idVendor with `lsusb`).
-
-### Build and run
-The application can be started with settings file. Sample of the settings file can be found in settings.txt. Make sure that you put proper device id in settings and app have access to usb (see previous step)
-The project is using make. You can edit ./conf/settings.txt after copy if needed. From the repository root run following
-```
-make clean
-make release
-mkdir ./conf
-cp ./settings.txt ./conf
-./out/app ./conf/settings.txt
-```
-
-### Customisation
-You can change font and background images by replacing files in ./src/resource
-- background.bmp for background image. Use BMP format only.
-- font.ttf for font. Use TTF format only
-- you can edit colours.h to modify text colours in RGBA format
-
-The names of the file need to be exactly same. Resources are embedded in executable, remake the project to regenerate resources
-```
-make clean
-make release
+BR=/path/to/f1c200s-linux/output/host
+make release \
+  USE_CEDRUS=1 USE_AA_WIRELESS=1 USE_CP_WIRELESS=1 USE_CP_WIRED=1 \
+  USE_SLINT=1 SLINT_COMPILER=$BR/bin/slint-compiler \
+  CXX=$BR/bin/arm-buildroot-linux-gnueabi-g++ \
+  CC=$BR/bin/arm-buildroot-linux-gnueabi-gcc \
+  PKG_CONFIG=$BR/bin/pkg-config
 ```
 
-### Keys
-The following keys have been mapped:
-- Left - navigate left
-- Right - navigate right
-- Enter - select active item
-- Backspace - Go back
-- f - toggle fullscreen mode
-- q - exit
-- r - force refresh
+Feature flags (compiled out entirely when unset):
+
+| Flag | Enables |
+|---|---|
+| `USE_CEDRUS=1` | hardware decode + DRM display path |
+| `USE_CP_WIRELESS=1` | wireless CarPlay (BlueZ/D-Bus + AP handoff) |
+| `USE_CP_WIRED=1` | wired CarPlay (USB config-6 + own usbmux, libimobiledevice) |
+| `USE_AA_WIRELESS=1` | wireless Android Auto (BlueZ/D-Bus + AP) |
+| `USE_SLINT=1` | the on-device UI (needs slint-cpp in the sysroot) |
+
+Without `USE_SLINT` the app builds UI-less (~630 KB stripped): video and the
+session still run, sources are switched with the `carplay-source` helper or
+by editing settings. Flags are not dependency-tracked -- `make clean` when
+switching them.
+
+## Configuration
+
+The device boots `/etc/fastcarplay/settings_drm.txt`; changes made from the
+on-device UI are persisted to `~/.fastcarplay/usersettings.txt`, which is
+applied on top and survives image updates. [settings.txt](settings.txt) is
+the full annotated reference of every key.
 
 ## Status
-What is working:
-- Carplay and Android Auto
-- Video
-- Audio (multiple channels)
-- Key navigation
-- Simple touch
-- Microphone (calls, siri)
 
-What is not working:
-- Multi touch - i have no means to test it and no idea how it should work
-- Some android keys are not mapped
-- No methods to switch between multiple paired wireless devices
+Working on the F1C200s, verified on-device:
 
-### Notes
-- Do not try to run debug builds if you do not need to debug application. They consume a lot of memory for address sanitising thats grow over time.
-- Increasing FPS above Source-FPS will cause app to run UI loop with less delays and do more event polling. This can increase responsivenes of the system, but also will make X11 to use more resources.
-- For multichannel audion (driving guidance over music) you need to have multichannel driver in the system (puslsaudio, pipewire). If you only have ALSA backend the second channel will not work
-- Android has it's own video resolution system which is fixed for 480p 720p 1080p. So set up resolution that is closest to what you want and adjust DPI for UI scale. If you do not have full screen Android Auto, you might need to enable resolution negotiation. Go to Android Auto app info and search for "Additional settings in the app" option. Scrol down and tap fast 5 times on version. Now you can use top right three dots menu to go to "Developer settings". Tap "Video Resolution" and select "Allow to car and phone to negotiate".
+- Wireless CarPlay: pairing, video + multitouch, music, calls both
+  directions, Siri, navigation prompts over music, reconnect.
+- Wired CarPlay (USB-NCM): session, video/touch, audio, replug.
+- Wired Android Auto (AOAP): video + touch, music, voice.
+- The Slint UI: source picker (persists + restart-to-apply), night/fps
+  settings, Wi-Fi/Bluetooth setup with validation.
 
-### Progress and plans
-Done
-- [x] Implement direct buffer transfer from video decoder to renderer (should reduce amount of memory copies and CPU load)
-- [x] Control audio buffers better (now system use 3 decoding threads but in reality only 2 required)
-- [x] Reduce music volume when there is navigation messages
-- [x] Add abilities to run script on device connect and device disconnect
-- [x] Improve touch responsiveness
-- [x] Android Auto (have not tested much, but seems to work for me)
-- [x] Microphone support (Calls, Siri)
+Known limits:
 
-Next 
-- [ ] Car menu with status, settings and options to run custom scripts
-- [ ] Canbus script communication or some sort of side key press handling
-- [ ] Better android navigation
-- [ ] Switch between wireless devices
+- Wireless Android Auto is blocked on the ESP32 (esp-hosted) SoftAP
+  association; the protocol side is implemented.
+- One phone at a time; no multi-device switching.
 
 ## Acknowledgement
-The project is inspired and based on great work done by other developers:
+
+The project is inspired by and based on great work done by other developers:
+
 - [pycarplay by electric-monk](https://github.com/electric-monk/pycarplay)
 - [carplay-receiver by harrylepotter](https://github.com/harrylepotter/carplay-receiver)
 - [react-carplay by rhysmorgan134](https://github.com/rhysmorgan134/react-carplay)
 - [carplay-client by rayphee](https://github.com/rayphee/carplay-client)
 
-The project is licenced under GPL-3 licence. See LICENCE for details.
-The project is using [Open Sans font](https://fonts.google.com/specimen/Open+Sans). See FONT_LICENCE for details.
+Licensed under GPL-3 (see LICENCE). The UI ships the
+[Open Sans font](https://fonts.google.com/specimen/Open+Sans) (see
+FONT_LICENCE).
 
 ## Finally
-If you have any questions, suggestions or you find problems running this feel free to open issue.
+
+If you have questions, suggestions or problems running this, feel free to
+open an issue.
