@@ -68,7 +68,7 @@ public:
     // The display the phone will be streaming to. Set once by the render loop
     // before start(), which is where a backend samples it: the size travels to
     // the phone during session setup, so it must not change under a live
-    // session (an SDL window resize is logged, not renegotiated).
+    // session (the DRM panel size is fixed for the process lifetime).
     void setDisplay(const DisplayGeometry &geometry) { _display = geometry; }
 
     bool inline send(std::unique_ptr<Message> message) { return writeQueue.pushDiscard(std::move(message)); }

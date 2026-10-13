@@ -752,8 +752,8 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
 // ChaCha20-Poly1305, the exact mirror of the downlink framing in audioLoop:
 //   [12B RTP][ciphertext][16B tag][8B nonce LE], nonce = 4 zero + 8B counter,
 //   AAD = RTP bytes 4..12 (timestamp+SSRC), key = the per-stream Input key.
-// Pulls from SDL's queued capture (no callback) so sealing and sending run on
-// this thread at normal priority with no per-frame heap allocation.
+// Blocking ALSA capture feeds this thread directly, so sealing and sending
+// run here at normal priority with no per-frame heap allocation.
 void AvSession::uplinkLoop(Listener *l)
 {
     const uint64_t myGen = l->uplinkGen;

@@ -19,7 +19,6 @@ ui         = true
 # requests exactly that from the phone, so nothing has to be kept in sync with
 # the panel. source-fps is what we ask the phone for and is independent of
 # the panel's refresh rate -- 30fps content on a 60Hz panel is intentional.
-window-mode = 2
 source-fps  = 60
 android-dpi = 135
 
