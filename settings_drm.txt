@@ -1,7 +1,7 @@
 # FastCarPlay -- head unit (the app owns the screen via DRM/KMS).
 #
 # For the F1C200s and any other board that boots without a desktop: video goes
-# on a DRM plane, the LVGL UI on an overlay plane above it. Nothing here selects
+# on a DRM plane, the built-in UI on an overlay plane above it. Nothing here selects
 # a decoder or a renderer -- video-path defaults to "auto", which asks the kernel
 # what this chip can decode and picks hardware + DRM when it can, software
 # otherwise (see video_path.h). The CarPlay codec offer follows from that too.
@@ -13,13 +13,11 @@
 # for the full annotated list of options.
 
 protocol   = carplay-wired
-lvgl-ui    = true
-icon-theme = material
+ui         = true
 
 # No panel size here: in DRM mode the app asks the kernel (connector/CRTC) and
 # requests exactly that from the phone, so nothing has to be kept in sync with
-# the panel. window-mode only applies if DRM is unavailable and we fall back to
-# an SDL window. source-fps is what we ask the phone for and is independent of
+# the panel. source-fps is what we ask the phone for and is independent of
 # the panel's refresh rate -- 30fps content on a 60Hz panel is intentional.
 window-mode = 2
 source-fps  = 60

@@ -69,7 +69,6 @@ private:
 
     bool _active;
     State _state;
-    bool _debug;
 };
 
 #endif /* SRC_APPLICATION */

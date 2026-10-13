@@ -65,7 +65,7 @@ int uiBpp();
 // Create the single dumb framebuffer for the overlay (lazy, idempotent).
 bool uiBegin();
 // Copy a rectangle of pixels (tightly packed rows of `pitch` bytes, in
-// uiFormat()) into the dumb buffer. LVGL's flush callback lands here.
+// uiFormat()) into the dumb buffer. The UI's flush path lands here.
 void uiWriteRect(int x, int y, int w, int h, const uint8_t *px, int pitch);
 // Commit the overlay plane over rows [y0, y1) -- full screen for the home
 // UI, just the toast band over live video. No-op when already showing the

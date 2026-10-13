@@ -139,20 +139,10 @@ public:
     // Debug section
     static inline Setting<bool> codecLowDelay{"decode-low-delay", true};
     static inline Setting<bool> codecFast{"decode-fast", true};
-    static inline Setting<bool> debugOverlay{"debug-overlay", false};
-    // Use the LVGL screens as the home screen in the normal loop (instead of
-    // the plain status text), so a source can be picked on the head unit.
-    // Selecting one persists it and restarts into that protocol.
-    static inline Setting<bool> lvglUi{"lvgl-ui", false};
-    // Icon set: "builtin" = LVGL's bundled symbols (always available);
-    // "material" = Material Symbols, once tools/make-icon-font.sh has
-    // generated it. Screens name icon slots, so this only changes how they
-    // look. Falls back to builtin if the set was not built in.
-    static inline Setting<std::string> iconTheme{"icon-theme", "builtin"};
-    // Which built-in screen to open on: "picker" or "settings". Lets the
-    // sweep capture any screen at any panel size without having to know where
-    // its rows happen to land.
-    static inline Setting<std::string> lvglStartScreen{"lvgl-start-screen", "picker"};
+    // Run the built-in screens on the overlay plane while no video plays, so
+    // a source can be picked on the head unit. Selecting one persists it and
+    // restarts into that protocol. `lvgl-ui` is the legacy alias.
+    static inline Setting<bool> ui{"ui", false, "lvgl-ui"};
 
     static bool load(const std::string &filename);
     static void print();

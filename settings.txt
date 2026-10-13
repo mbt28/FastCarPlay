@@ -250,6 +250,3 @@
 # Enable FFMPEG AV_CODEC_FLAG2_FAST for HW decoder.
 # Allow non spec compliant speedup tricks.
 #decode-fast = true
-
-# Draw debug info overlay on top of the video output.
-#debug-overlay = false

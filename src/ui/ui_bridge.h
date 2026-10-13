@@ -7,11 +7,11 @@
 // be restyled or relaid out without touching the application, as long as
 // they keep using these names.
 
-#if defined(USE_LVGL) || defined(USE_SLINT)
+#ifdef USE_SLINT
 
 #include <cstdint>
 
-// Plain-C surface shared by both UI toolkits (and once by the EEZ screens):
+// Plain-C variable surface the screens are wired to:
 // integer -> int32_t, string -> const char *.
 extern "C"
 {
@@ -57,5 +57,5 @@ const char *protocolName();
 void requestRestart();
 } // namespace ui_bridge
 
-#endif /* USE_LVGL || USE_SLINT */
+#endif /* USE_SLINT */
 #endif /* SRC_UI_UI_BRIDGE */
