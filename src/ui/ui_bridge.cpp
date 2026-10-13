@@ -1,6 +1,6 @@
 #include "ui_bridge.h"
 
-#if defined(USE_LVGL) || defined(USE_SLINT)
+#ifdef USE_SLINT
 
 #include <atomic>
 #include <string>
@@ -148,4 +148,4 @@ extern "C" void set_var_status(const char *value)
     ui_bridge::setStatus(value);
 }
 
-#endif /* USE_LVGL || USE_SLINT */
+#endif /* USE_SLINT */

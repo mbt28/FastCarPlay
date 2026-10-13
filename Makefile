@@ -11,8 +11,8 @@ OUT_DIR := ./out
 GEN_DIR := $(SRC_DIR)/autogen
 BUILD_DIR := $(OUT_DIR)/$(BUILD_TYPE)
 
-# File lists. src/ui (the LVGL UI) is added
-# back only when USE_LVGL=1, so a UI-less build pays no flash/RAM for it.
+# File lists. src/ui (the built-in UI) is added
+# back only when USE_SLINT=1, so a UI-less build pays no flash/RAM for it.
 SRCS := $(shell find $(SRC_DIR) -type f -name '*.cpp' -not -path '$(SRC_DIR)/ui/*')
 OBJS=$(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
@@ -80,29 +80,11 @@ CXXCOMMON += -DUSE_CP_WIRED $(shell $(PKG_CONFIG) --cflags libimobiledevice-1.0 
 LDOPTIONS += $(shell $(PKG_CONFIG) --libs libimobiledevice-1.0 libplist-2.0)
 endif
 
-# On-device UI: LVGL 9.3.0 (MIT), vendored source in third_party/lvgl (see
-# its VENDORING.md), compiled in. Screens live in src/ui. Enable USE_LVGL=1.
-ifeq ($(USE_LVGL),1)
-LVGL_DIR := ./third_party/lvgl
-LVGL_SRCS := $(shell find $(LVGL_DIR)/src -type f -name '*.c')
-LVGL_OBJS := $(patsubst $(LVGL_DIR)/%.c,$(BUILD_DIR)/lvgl/%.c.o,$(LVGL_SRCS))
-OBJS += $(LVGL_OBJS)
-# LV_CONF_INCLUDE_SIMPLE: LVGL picks up src/ui/lv_conf.h from the include path.
-UI_FLAGS := -DUSE_LVGL -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -Ithird_party
-SRCS += $(shell find $(SRC_DIR)/ui -maxdepth 1 -type f -name '*.cpp')
-SRCS_C += $(shell find $(SRC_DIR)/ui -maxdepth 1 -type f -name '*.c')
-CXXCOMMON += $(UI_FLAGS)
-CCOMMON += $(UI_FLAGS)
-endif
-
-# On-device UI, Slint flavor: links the static libslint_cpp built by the
-# buildroot slint-cpp package (software renderer, fonts embedded at compile
-# time). Screens are declarative (src/ui/slint/app.slint); the only C++20 TU
-# is the facade, src/ui/slint_osd.cpp. Enable USE_SLINT=1.
+# On-device UI: links the static libslint_cpp built by the buildroot
+# slint-cpp package (software renderer, fonts embedded at compile time).
+# Screens are declarative (src/ui/slint/app.slint); the only C++20 TU is the
+# facade, src/ui/slint_osd.cpp. Enable USE_SLINT=1.
 ifeq ($(USE_SLINT),1)
-ifeq ($(USE_LVGL),1)
-$(error USE_LVGL and USE_SLINT are mutually exclusive)
-endif
 # Headers + libslint_cpp.a come from the cross sysroot (the slint-cpp package
 # installs into staging); slint-compiler from the buildroot host tools.
 SLINT_SYSROOT ?= $(shell $(CXX) -print-sysroot)
@@ -142,7 +124,7 @@ endif
 # would quietly break isnan/isinf across the ffmpeg/SDL headers inlined here.
 # -Os over -O2: .text is ~2 MB against a 16 KB I-cache, so smaller code wins
 # the cache more than -O2's inlining loses. -flto lets --gc-sections reach
-# cross-TU dead code (much of the unused LVGL surface).
+# cross-TU dead code.
 release: BUILD_TYPE := release
 release: CXXFLAGS ?= -Os -flto -fno-rtti -fdata-sections -ffunction-sections -fomit-frame-pointer -fvisibility=hidden -pipe -DNDEBUG
 release: LDFLAGS += -Os -flto -Wl,-O1 $(PLATFORM_LDFLAGS)
@@ -178,17 +160,11 @@ $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CCOMMON) $(filter-out -fno-rtti,$(CXXFLAGS)) -MMD -MP -c $< -o $@
 
-# Vendored LVGL. Third-party: warnings off, and it never sees our -Wall/-Werror.
-$(BUILD_DIR)/lvgl/%.c.o: $(LVGL_DIR)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) -std=gnu99 -w -DLV_CONF_INCLUDE_SIMPLE -I$(SRC_DIR)/ui -I$(LVGL_DIR) \
-		$(filter-out -fno-rtti,$(CXXFLAGS)) -c $< -o $@
-
 # Header dependencies (-MMD): editing a header now rebuilds what includes it.
 # NOTE: this does NOT cover changing the feature flags themselves -- toggling
-# USE_LVGL / USE_SLINT / USE_CEDRUS / USE_AA_WIRELESS changes the compile
-# flags, not the sources, so make cannot see it. Always `make clean` when
-# switching a flag, or you get a binary built from a mix of both configurations.
+# USE_SLINT / USE_CEDRUS / USE_AA_WIRELESS changes the compile flags, not the
+# sources, so make cannot see it. Always `make clean` when switching a flag,
+# or you get a binary built from a mix of both configurations.
 -include $(OBJS:.o=.d)
 
 install:

@@ -37,10 +37,6 @@
 Application::Application(/* args */) : _active(true)
 {
     log_v("Creating");
-
-    _debug = Settings::debugOverlay;
-
-
 }
 
 Application::~Application()
@@ -374,7 +370,7 @@ void Application::loopDrm()
     // The built-in screens own the overlay plane while idle, flushing
     // straight into its dumb framebuffer in the plane's own format.
     Osd osd;
-    if (Settings::lvglUi && !osd.beginDrm(uiWidth, uiHeight))
+    if (Settings::ui && !osd.beginDrm(uiWidth, uiHeight))
         log_w("UI unavailable > running without screens (video still works)");
 #endif
 
