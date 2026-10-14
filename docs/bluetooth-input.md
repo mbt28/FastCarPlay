@@ -138,8 +138,8 @@ counts are not detents (a Surface Dial makes 3600 a turn).
 
 | Key | To the phone | In FastCarPlay's screens |
 |---|---|---|
-| Up / Down | knob up / down (repeats) | focus previous / next row; in the editor and dialogs, move the ring (repeats) |
-| Left / Right | knob left / right (repeats) | Left = Back on the lists, except on the Volume row: Right on `-` moves to `+`, Left on `+` moves to `-` (Left on `-` is still Back); in the editor and dialogs, move the ring (repeats) |
+| Up / Down | CarPlay: knob up / down; Android Auto: one knob turn, as the wheel (repeats) | focus previous / next row; in the editor and dialogs, move the ring (repeats) |
+| Left / Right | knob left / right; in Android Auto a jump between areas (repeats) | Left = Back on the lists, except on the Volume row: Right on `-` moves to `+`, Left on `+` moves to `-` (Left on `-` is still Back); in the editor and dialogs, move the ring (repeats) |
 | Enter, keypad Enter, OK, Select | select (held while held) | activate the focused row; in the editor press the ringed key (no ring: save); in a dialog press the ringed button (no ring: accept) |
 | Space | -- | activate the focused row; types a space in the editor |
 | Esc, Back | back | back (cancels a dialog or the editor) |
@@ -156,8 +156,10 @@ counts are not detents (a Surface Dial makes 3600 a turn).
 Both phones have a native rotary knob, and the wheel drives it: one detent
 is one knob step (CarPlay's knob wheel, Android Auto's rotary controller;
 clockwise -- the wheel turned towards you -- is the next item). It moves the
-focus through the current list or area; the arrows move between areas (in
-CarPlay they are the knob's nudges, which also pan a map).
+focus through the current list or area. Android Auto takes the D-pad as the
+knob's nudge, which only jumps between areas (the rail, the content, the
+cards), so there Up/Down turn the knob too and Left/Right jump between
+areas. In CarPlay the arrows are the knob's nudges, which also pan a map.
 
 Typing keys -- letters, digits, Space, Backspace -- are never shortcuts on
 the phone: in a CarPlay search field they would select or go back instead of
