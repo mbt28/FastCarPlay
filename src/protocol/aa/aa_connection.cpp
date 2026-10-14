@@ -828,14 +828,18 @@ bool AaConnection::translate(const Message &message)
         int button = message.getInt(0);
         switch (button)
         {
+        // With a rotary controller declared, Android Auto takes the D-pad as
+        // its nudge: a jump to the next area (the rail, the content, a card),
+        // never to the next item -- turning does that. So Up/Down turn, and
+        // walk a list as the wheel does; Left/Right nudge between areas.
         case BTN_LEFT:
             return sendKey(AA_KEY_DPAD_LEFT);
         case BTN_RIGHT:
             return sendKey(AA_KEY_DPAD_RIGHT);
         case BTN_UP:
-            return sendKey(AA_KEY_DPAD_UP);
+            return sendRelative(AA_KEY_ROTARY_CONTROLLER, -1);
         case BTN_DOWN:
-            return sendKey(AA_KEY_DPAD_DOWN);
+            return sendRelative(AA_KEY_ROTARY_CONTROLLER, 1);
         case BTN_SELECT_DOWN:
             return sendKey(AA_KEY_DPAD_CENTER);
         case BTN_SELECT_UP:
