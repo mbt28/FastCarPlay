@@ -33,6 +33,7 @@ export global Bridge {
     in property <int> protocol;               // active source id (radio list)
     in property <string> night-label;         // "Day" / "Night" / "Auto"
     in property <string> fps-label;           // "30 fps" / "60 fps"
+    in property <string> volume-label;        // "60%" / "Muted"
     in property <string> wifi-ssid;
     in property <string> wifi-pass;
     in property <string> bt-name;
@@ -71,6 +72,7 @@ export global Bridge {
     callback restart-now();
     callback cycle-night();
     callback cycle-fps();
+    callback volume-step(int);                // -1 quieter, +1 louder
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -258,6 +260,82 @@ component Row inherits Rectangle {
     }
 }
 
+// A square button inside a row (the volume -/+). Focusable on its own, like
+// a Row: the keyboard ring reaches it and Enter presses it.
+component StepButton inherits Rectangle {
+    in property <string> label;
+    callback clicked;
+
+    width: Style.row-h - Style.gap * 2;
+    height: Style.row-h - Style.gap * 2;
+    border-radius: Style.gap;
+    background: ta.pressed ? Style.row-pressed : Style.bg;
+    border-width: fs.has-focus ? 4px : 1px;
+    border-color: fs.has-focus ? Style.focus : Style.edge;
+
+    fs := FocusScope {
+        width: 100%;
+        height: 100%;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    Text {
+        text: root.label;
+        color: Style.text;
+        font-size: 40px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A row holding a level: label, value, and -/+ buttons (the row itself is
+// not a button, so a tap beside them does nothing).
+component StepperRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    callback decrease;
+    callback increase;
+
+    height: Style.row-h;
+    border-radius: Style.gap;
+    background: Style.row;
+
+    HorizontalLayout {
+        padding-left: Style.gap * 3;
+        padding-right: Style.gap;
+        spacing: Style.gap * 2;
+        alignment: stretch;
+        Text {
+            text: root.label;
+            color: Style.text;
+            font-size: Style.font;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.value;
+            color: Style.dim;
+            font-size: Style.font;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+            StepButton { label: "-"; clicked => { root.decrease(); } }
+        }
+        VerticalLayout {
+            alignment: center;
+            StepButton { label: "+"; clicked => { root.increase(); } }
+        }
+    }
+}
+
 // Dim caption line at the top of a screen.
 component Header inherits Text {
     color: Style.dim;
@@ -298,8 +376,15 @@ component ScreenSettings inherits ListScreen {
     callback goto(int);
     Header { text: Bridge.restart-needed ? "Settings  -  restart to apply" : "Settings"; }
     // Back at the top (below the header) -- easier to reach on a car screen.
-    // Only four rows fit above the fold: the connectivity rows go first.
+    // Only four rows fit above the fold: the volume, the one adjusted on the
+    // road, then the connectivity rows.
     Row { label: "Back"; clicked => { root.goto(0); } }
+    StepperRow {
+        label: "Volume";
+        value: Bridge.volume-label;
+        decrease => { Bridge.volume-step(-1); }
+        increase => { Bridge.volume-step(1); }
+    }
     Row { label: "Source"; value: Bridge.source-label; clicked => { root.goto(2); } }
     Row { label: "Wireless"; clicked => { root.goto(3); } }
     if Bridge.bt-available: Row {

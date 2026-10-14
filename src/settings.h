@@ -119,6 +119,17 @@ public:
     // dmix -- the mixer sums main+aux itself). "hw:0,0" on the F1C avoids
     // the plugin layer entirely; a desktop dev host can set "default".
     static inline Setting<std::string> alsaDevice{"alsa-device", "hw:0,0"};
+    // Output volume, 0-100 %, saved by the screens and the volume keys; -1
+    // until first changed (the card's current level is taken over).
+    static inline Setting<int> volume{"volume", -1};
+    // What sets it: "auto" -- the card's main playback control (Master, PCM,
+    // Speaker, Headphone, ...), or a software gain when it has none --
+    // "software", or the exact name of an ALSA simple-mixer control.
+    static inline Setting<std::string> volumeControl{"volume-control", "auto"};
+    // The ALSA control device; empty: the card of alsa-device.
+    static inline Setting<std::string> volumeDevice{"volume-device", ""};
+    // One volume key press or -/+ tap, in percent.
+    static inline Setting<int> volumeStep{"volume-step", 5};
     // Voice latency cap: the mixer drops the OLDEST queued aux segments once
     // the backlog exceeds this, so the caller is never heard far behind the
     // live edge. Media is not capped (smoothness wins).

@@ -34,6 +34,7 @@
 #include "bluetooth/bt_manager.h" // the one pairing agent + HID device management
 #endif
 #include "audio_mixer.h"
+#include "audio_volume.h"
 #include "common/functions.h"
 
 
@@ -201,6 +202,15 @@ struct BluetoothScope
 };
 #endif
 
+// The output volume around the mixer: applied before the first sound, and a
+// change not saved yet written out at the end. Declare it before the
+// AudioMixer so it outlives it.
+struct VolumeScope
+{
+    VolumeScope() { AudioVolume::instance().start(); }
+    ~VolumeScope() { AudioVolume::instance().stop(); }
+};
+
 // Discovery competes with a wireless phone session for the shared radio, so
 // the manager hears when one starts and ends. ONLINE counts: the phone is
 // already on the access point, setting the session up. (The Bluetooth
@@ -366,6 +376,7 @@ void Application::loopHeadless()
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
+    VolumeScope volume;
     AudioMixer audioMixer;
 
     startDecoder(*decoder, protocol, protocol.videoCodec());
@@ -408,6 +419,7 @@ void Application::loopHeadless()
         // HW decoder presents to the DRM plane directly and leaves this empty.
         decoder->buffer.consume(&frame, &frameId);
         publishStatus(protocol);
+        AudioVolume::instance().tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
@@ -455,6 +467,7 @@ void Application::loopDrm()
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
+    VolumeScope volume;
     AudioMixer audioMixer;
 
     startDecoder(*decoder, protocol, protocol.videoCodec());
@@ -630,6 +643,7 @@ void Application::loopDrm()
         // Drain the buffer so a buffering (software) decoder can't stall; the
         // HW decoders present directly and leave this empty.
         decoder->buffer.consume(&frame, &frameId);
+        AudioVolume::instance().tick();
         // While our own UI is on screen, tick faster so the toolkit's input
         // and refresh timers run every period and touch feedback lands
         // within one frame; this is cheap now that an unchanged screen costs
