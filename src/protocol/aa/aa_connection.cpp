@@ -717,8 +717,11 @@ bool AaConnection::sendFrame(uint8_t channel, uint16_t msgId, const uint8_t *bod
 
 bool AaConnection::sendKey(uint32_t keycode)
 {
+    // Before the phone opens the input channel a key is dropped, not an
+    // error: false would make writeLoop tear the whole session down, and a
+    // Bluetooth keyboard can easily send keys during session setup.
     if (!_channels[AA_CH_INPUT].open)
-        return false;
+        return true;
     aa_proto::Bytes down = aa_proto::inputReportKey(nowNs(), keycode, true);
     aa_proto::Bytes up = aa_proto::inputReportKey(nowNs(), keycode, false);
     return sendFrame(AA_CH_INPUT, AA_MSG_INPUT_REPORT, down.data(), down.size(), AA_FLAG_ENC_SIGNAL) &&
@@ -821,7 +824,7 @@ bool AaConnection::translate(const Message &message)
             return sendKey(AA_KEY_DPAD_LEFT);
         case BTN_RIGHT:
             return sendKey(AA_KEY_DPAD_RIGHT);
-        case 113: // BTN_UP (not in protocol_const.h)
+        case BTN_UP:
             return sendKey(AA_KEY_DPAD_UP);
         case BTN_DOWN:
             return sendKey(AA_KEY_DPAD_DOWN);

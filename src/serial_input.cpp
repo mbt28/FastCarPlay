@@ -11,8 +11,6 @@
 #include "protocol/message.h"
 #include "common/logger.h"
 
-#define BTN_UP 113 // present in the keyMap but not #defined in protocol_const.h
-
 SerialInput::SerialInput(IConnection &conn)
     : _conn(conn), _active(false)
 {
