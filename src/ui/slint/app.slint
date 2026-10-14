@@ -34,6 +34,9 @@ export global Bridge {
     in property <string> night-label;         // "Day" / "Night" / "Auto"
     in property <string> fps-label;           // "30 fps" / "60 fps"
     in property <string> volume-label;        // "60%" / "Muted"
+    in property <int> volume-level;           // 0..100
+    in property <bool> volume-muted;
+    in property <bool> volume-bar;            // up for a moment after a change
     in property <string> wifi-ssid;
     in property <string> wifi-pass;
     in property <string> bt-name;
@@ -332,6 +335,62 @@ component StepperRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             StepButton { label: "+"; clicked => { root.increase(); } }
+        }
+    }
+}
+
+// Where the volume bar sits. Over live video C++ shows exactly this
+// rectangle of the overlay plane (a window composited by the display
+// engine), so the bar is a plain opaque rectangle: RGB565 has no alpha, and
+// rounded corners would show whatever screen lies beneath in the buffer.
+export global VolumeBar {
+    out property <length> x: 160px;
+    out property <length> y: 392px;
+    out property <length> width: 480px;
+    out property <length> height: 64px;
+}
+
+component VolumeBarView inherits Rectangle {
+    x: VolumeBar.x;
+    y: VolumeBar.y;
+    width: VolumeBar.width;
+    height: VolumeBar.height;
+    background: Style.bg;
+    border-width: 2px;
+    border-color: Style.edge;
+
+    HorizontalLayout {
+        padding-left: Style.gap * 3;
+        padding-right: Style.gap * 3;
+        spacing: Style.gap * 2;
+        Text {
+            text: "Volume";
+            color: Style.text;
+            font-size: Style.font;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: parent.width;
+                height: 12px;
+                background: Style.row;
+                Rectangle {
+                    x: 0;
+                    width: Bridge.volume-muted ? 0 : parent.width * Bridge.volume-level / 100;
+                    height: parent.height;
+                    background: Style.row-on;
+                }
+            }
+        }
+        Text {
+            text: Bridge.volume-label;
+            color: Bridge.volume-muted ? Style.dim : Style.text;
+            font-size: Style.font;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: 64px;
         }
     }
 }
@@ -679,4 +738,6 @@ export component AppWindow inherits Window {
     if Bridge.screen == 5 && !root.modal: ScreenBtDevice  { goto(s) => { Bridge.screen = s; } }
     if Bridge.prompt-kind != 0: Prompt {}
     if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}
+    // Over everything, including dialogs; display only (no input).
+    if Bridge.volume-bar: VolumeBarView {}
 }

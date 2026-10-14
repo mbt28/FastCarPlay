@@ -79,10 +79,15 @@ bool uiBegin();
 // uiFormat()) into the dumb buffer. The UI's flush path lands here.
 void uiWriteRect(int x, int y, int w, int h, const uint8_t *px, int pitch);
 // Commit the overlay plane over rows [y0, y1) -- full screen for the home
-// UI, just the toast band over live video. No-op when already showing the
-// same band. uiHide() disables the plane.
+// UI. No-op when already showing the same band. uiHide() disables the plane.
 bool uiShow(int y0, int y1);
-void uiHide();
+// The overlay plane over just the rectangle (x, y, w, h): a window onto the
+// UI buffer above live video (the volume bar), composited by the display
+// engine. With wait = false neither call ever blocks on a vblank: false then
+// means a flip is still pending -- try again on a later tick -- so the video
+// path never waits behind the UI.
+bool uiShowWindow(int x, int y, int w, int h, bool wait);
+bool uiHide(bool wait = true);
 } // namespace drm_display
 
 #endif /* USE_CEDRUS */

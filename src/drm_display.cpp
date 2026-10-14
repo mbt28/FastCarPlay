@@ -85,7 +85,7 @@ struct DumbFb
 DumbFb ubuf;
 bool ui_ready = false;
 bool ui_visible = false;
-int band_y0 = 0, band_y1 = 0; // rows the plane currently covers
+int band_x0 = 0, band_y0 = 0, band_x1 = 0, band_y1 = 0; // what the plane covers
 
 // black fallback fb for the video plane: some drivers refuse a CRTC with no
 // primary plane, so a UI-only modeset (home screen before any video) may need
@@ -194,21 +194,22 @@ void add_plane_fullscreen(drmModeAtomicReq *req, uint32_t plane,
     drmModeAtomicAddProperty(req, plane, p.ch, ch);
 }
 
-// The UI plane over rows [y0, y1) only: a toast band commits a short plane
-// above the video instead of covering the whole screen (with no per-pixel
-// alpha in RGB565, a full-height plane would black the video out).
-void add_plane_band(drmModeAtomicReq *req, uint32_t plane,
-                    const PlaneProps &p, uint32_t fb, int y0, int y1)
+// The UI plane over the rectangle [x0, x1) x [y0, y1) only, the same pixels
+// of the buffer as of the screen: a window above the video instead of a
+// plane over the whole screen (with no per-pixel alpha in RGB565, a
+// full-size plane would black the video out).
+void add_plane_window(drmModeAtomicReq *req, uint32_t plane, const PlaneProps &p,
+                      uint32_t fb, int x0, int y0, int x1, int y1)
 {
     drmModeAtomicAddProperty(req, plane, p.fb, fb);
     drmModeAtomicAddProperty(req, plane, p.crtc, crtc);
-    drmModeAtomicAddProperty(req, plane, p.sx, 0);
+    drmModeAtomicAddProperty(req, plane, p.sx, (uint64_t)x0 << 16);
     drmModeAtomicAddProperty(req, plane, p.sy, (uint64_t)y0 << 16);
-    drmModeAtomicAddProperty(req, plane, p.sw, (uint64_t)cw << 16);
+    drmModeAtomicAddProperty(req, plane, p.sw, (uint64_t)(x1 - x0) << 16);
     drmModeAtomicAddProperty(req, plane, p.sh, (uint64_t)(y1 - y0) << 16);
-    drmModeAtomicAddProperty(req, plane, p.cx, 0);
+    drmModeAtomicAddProperty(req, plane, p.cx, x0);
     drmModeAtomicAddProperty(req, plane, p.cy, y0);
-    drmModeAtomicAddProperty(req, plane, p.cw, cw);
+    drmModeAtomicAddProperty(req, plane, p.cw, x1 - x0);
     drmModeAtomicAddProperty(req, plane, p.ch, y1 - y0);
 }
 
@@ -428,7 +429,7 @@ void session_close()
     blackfb_live = 0;
     ui_ready = false;
     ui_visible = false;
-    band_y0 = band_y1 = 0;
+    band_x0 = band_y0 = band_x1 = band_y1 = 0;
     flush_video_fbs();
     if (areq) { drmModeAtomicFree(areq); areq = nullptr; }
     if (mode_blob) { drmModeDestroyPropertyBlob(fd, mode_blob); mode_blob = 0; }
@@ -456,33 +457,38 @@ bool ui_begin_locked()
     return true;
 }
 
-// Commit the UI plane over [y0, y1). Caller holds the mutex.
-bool ui_show_locked(int y0, int y1)
+// Commit the UI plane over [x0, x1) x [y0, y1). wait = false never blocks:
+// false then means a flip is still pending. Caller holds the mutex.
+bool ui_show_locked(int x0, int y0, int x1, int y1, bool wait)
 {
     if (!ui_ready)
         return false;
+    if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
+    if (x1 > (int)cw) x1 = (int)cw;
     if (y1 > (int)ch) y1 = (int)ch;
-    if (y1 <= y0)
+    if (x1 <= x0 || y1 <= y0)
         return false;
-    if (ui_visible && band_y0 == y0 && band_y1 == y1)
-        return true; // already showing exactly this band
+    if (ui_visible && band_x0 == x0 && band_y0 == y0 && band_x1 == x1 && band_y1 == y1)
+        return true; // already showing exactly this
 
     drmModeAtomicReq *req = request();
     uint32_t flags = add_modeset(req);
-    add_plane_band(req, uplane, up, ubuf.fb, y0, y1);
+    add_plane_window(req, uplane, up, ubuf.fb, x0, y0, x1, y1);
     if (up.zpos)
         drmModeAtomicAddProperty(req, uplane, up.zpos, 1);
 
     // Once the mode is up, commit without waiting for the flip: a blocking
     // commit parks the caller for a vblank (~16 ms) on every UI update.
-    // EBUSY means the previous flip is still pending -- then wait for it.
+    // EBUSY means the previous flip is still pending -- then wait for it,
+    // unless the caller would rather come back (it holds the lock the video
+    // path needs to present).
     int crc = -1;
     if (modeset_done)
     {
         crc = drmModeAtomicCommit(fd, req, flags | DRM_MODE_ATOMIC_NONBLOCK, nullptr);
-        if (crc && errno != EBUSY)
-            crc = -1;
+        if (crc && !wait)
+            return false;
     }
     if (crc)
         crc = drmModeAtomicCommit(fd, req, flags, nullptr);
@@ -496,7 +502,7 @@ bool ui_show_locked(int y0, int y1)
         {
             req = request();
             flags = add_modeset(req);
-            add_plane_band(req, uplane, up, ubuf.fb, y0, y1);
+            add_plane_window(req, uplane, up, ubuf.fb, x0, y0, x1, y1);
             if (up.zpos)
                 drmModeAtomicAddProperty(req, uplane, up.zpos, 1);
             add_plane_fullscreen(req, vplane, vp, blackfb.fb, cw, ch);
@@ -512,7 +518,9 @@ bool ui_show_locked(int y0, int y1)
     }
     modeset_done = true;
     ui_visible = true;
+    band_x0 = x0;
     band_y0 = y0;
+    band_x1 = x1;
     band_y1 = y1;
     return true;
 }
@@ -688,23 +696,28 @@ void uiWriteRect(int x, int y, int w, int h, const uint8_t *px, int pitch)
 bool uiShow(int y0, int y1)
 {
     std::lock_guard<std::mutex> lock(mtx);
-    return ui_show_locked(y0, y1);
+    return ui_show_locked(0, y0, (int)cw, y1, true);
 }
 
+bool uiShowWindow(int x, int y, int w, int h, bool wait)
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    return ui_show_locked(x, y, x + w, y + h, wait);
+}
 
-void uiHide()
+bool uiHide(bool wait)
 {
     std::lock_guard<std::mutex> lock(mtx);
     if (!ui_ready || !ui_visible || !modeset_done)
-        return;
+        return true;
     drmModeAtomicReq *req = request();
     drmModeAtomicAddProperty(req, uplane, up.fb, 0);
     drmModeAtomicAddProperty(req, uplane, up.crtc, 0);
-    if (drmModeAtomicCommit(fd, req, 0, nullptr) == 0)
-    {
-        ui_visible = false;
-        band_y0 = band_y1 = 0;
-    }
+    if (drmModeAtomicCommit(fd, req, wait ? 0 : DRM_MODE_ATOMIC_NONBLOCK, nullptr) != 0)
+        return false; // wait = false: a flip is still pending
+    ui_visible = false;
+    band_x0 = band_y0 = band_x1 = band_y1 = 0;
+    return true;
 }
 } // namespace drm_display
 

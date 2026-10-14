@@ -66,16 +66,23 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   appears only once a staged change needs it. Staged changes never drop a
   live session; the header says "restart to apply".
 - **Volume** (Settings row with -/+, and the volume / mute keys of a
-  Bluetooth keyboard or remote, whatever is on screen): applies at once and
-  is saved 2 s after the last change. `src/audio_volume.cpp` sets it through
-  the card's own playback control when it has one -- ALSA's simple mixer,
-  any Linux card: Master or PCM; else the card's only output amp
-  (Headphone, Speaker, Line Out...); else a shared digital control
-  (Digital, DAC, Playback); or `volume-control` -- mapped through its dB
-  scale (cubic, as alsamixer and PulseAudio do), muted by its switch or a
-  silent bottom step; otherwise a ramped gain in AudioMixer does the work.
-  The first start takes over the card's current level without writing it.
-  Mute is never saved.
+  Bluetooth keyboard or remote, whatever is on screen): applies at once,
+  shows the volume bar for 2 s and is saved 2 s after the last change.
+  `src/audio_volume.cpp` sets it through the card's own playback control
+  when it has one -- ALSA's simple mixer, any Linux card: Master or PCM;
+  else the card's only output amp (Headphone, Speaker, Line Out...); else a
+  shared digital control (Digital, DAC, Playback); or `volume-control` --
+  mapped through its dB scale (cubic, as alsamixer and PulseAudio do),
+  muted by its switch or a silent bottom step; otherwise a ramped gain in
+  AudioMixer does the work. The first start takes over the card's current
+  level without writing it. Mute is never saved.
+- **Volume bar**: 480x64, bottom centre, over the screens and over live
+  video. Over video it is a window of the overlay plane
+  (`drm_display::uiShowWindow`) that the display engine composites: no video
+  frame is touched, and while it is up no commit happens at all -- one
+  non-blocking commit shows it, one hides it (a pending video flip only
+  means retrying on the next loop turn). It is rendered before it shows and
+  hidden before it is redrawn, so no frame of a screen lands on the video.
 - **Source**: radio list of the four backends; selecting persists
   `protocol` to usersettings and stages a restart.
 - **Wireless**: SSID / passphrase / BT name, each opening a
