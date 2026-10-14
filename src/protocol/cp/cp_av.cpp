@@ -425,9 +425,10 @@ void AvSession::eventLoop(int fd)
             }
         }
 
-        // Forward any queued outbound input (touch/button HID reports). All event
-        // sends happen on this thread, so the cipher's write counter stays in order.
-        if (_inputSource)
+        // Forward any queued outbound input (touch/button HID reports), once the
+        // session has started. All event sends happen on this thread, so the
+        // cipher's write counter stays in order.
+        if (_inputSource && _recorded.load())
         {
             Bytes body;
             while (_inputSource->nextCommand(body))
@@ -1160,7 +1161,12 @@ bool AvSession::handle(const cp_rtsp::Request &req, cp_rtsp::Response &res)
 
     if (m == "GET" && endsWith("/info")) { res = handleInfo(req); return true; }
     if (m == "SETUP") { res = handleSetup(req); return true; }
-    if (m == "RECORD") { log_i("[cp-av] RECORD -- session started"); return true; }
+    if (m == "RECORD")
+    {
+        log_i("[cp-av] RECORD -- session started");
+        _recorded.store(true);
+        return true;
+    }
     if (m == "SET_PARAMETER" || m == "GET_PARAMETER" || m == "OPTIONS" || m == "FLUSH") return true;
     if (m == "TEARDOWN")
     {
