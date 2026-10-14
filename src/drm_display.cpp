@@ -539,12 +539,12 @@ int height() { return (int)ch; }
 int widthMm()  { return (int)cwmm; }
 int heightMm() { return (int)chmm; }
 
-bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
+Show showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
                int nplanes, const int *dmabufFds, const uint32_t *pitches,
                const uint32_t *offsets, uint64_t modifier, const char *tag)
 {
     std::lock_guard<std::mutex> lock(mtx);
-    if (fd < 0) return false;
+    if (fd < 0) return Show::Failed;
 
     int np = nplanes < 4 ? nplanes : 4;
 
@@ -588,7 +588,7 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
             // stable per buffer) -- do NOT close them; drmPrime caches one GEM
             // handle per fd so handles stay bounded by the pool.
             if (drmPrimeFDToHandle(fd, dmabufFds[i], &hn))
-            { fprintf(stderr, "[%s] drmPrimeFDToHandle: %s\n", tag, strerror(errno)); return false; }
+            { fprintf(stderr, "[%s] drmPrimeFDToHandle: %s\n", tag, strerror(errno)); return Show::Failed; }
             handles[i] = hn;
             pit[i] = pitches[i];
             off[i] = offsets[i];
@@ -596,7 +596,7 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
         }
         if (drmModeAddFB2WithModifiers(fd, w, h, fourcc, handles, pit, off, mods,
                                        &fb, DRM_MODE_FB_MODIFIERS))
-        { fprintf(stderr, "[%s] AddFB2WithModifiers: %s\n", tag, strerror(errno)); return false; }
+        { fprintf(stderr, "[%s] AddFB2WithModifiers: %s\n", tag, strerror(errno)); return Show::Failed; }
         entry.fb = fb;
         memcpy(entry.handles, handles, sizeof(handles));
         entry.nh = np;
@@ -610,14 +610,17 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
     uint32_t flags = add_modeset(req);
     add_plane_fullscreen(req, vplane, vp, fb, srcW, srcH);
 
-    // Non-blocking commit so the decode thread never parks on the vblank;
-    // EBUSY (previous flip still pending) falls back to the blocking wait.
+    // Non-blocking commit so the decode thread never parks on the vblank.
+    // EBUSY = the previous flip is still pending: hand the frame back (Busy)
+    // rather than wait -- the decoder keeps decoding and presents its newest
+    // frame once the flip is done. Only the first (modeset) commit and odd
+    // failures other than EBUSY take the blocking path.
     int crc = -1;
     if (modeset_done)
     {
         crc = drmModeAtomicCommit(fd, req, flags | DRM_MODE_ATOMIC_NONBLOCK, nullptr);
-        if (crc && errno != EBUSY)
-            crc = -1;
+        if (crc && errno == EBUSY)
+            return Show::Busy;
     }
     if (crc)
         crc = drmModeAtomicCommit(fd, req, flags, nullptr);
@@ -625,7 +628,7 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
     {
         static bool warned = false;
         if (!warned) { warned = true; fprintf(stderr, "[%s] atomic commit failed: %s\n", tag, strerror(errno)); }
-        return false; // fb stays cached; a transient commit failure won't drop it
+        return Show::Failed; // fb stays cached; a transient commit failure won't drop it
     }
     modeset_done = true;
     vframes.fetch_add(1, std::memory_order_relaxed);
@@ -638,19 +641,7 @@ bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
         blackfb_live = 0;
     }
 
-    static int frames = 0;
-    static int64_t t0 = 0;
-    if (++frames >= 60)
-    {
-        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-        int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-        if (t0 > 0 && now > t0)
-            fprintf(stderr, "[%s] decode %d fps  %dx%d (DEFE)\n",
-                    tag, (int)(frames * 1000 / (now - t0)), w, h);
-        frames = 0;
-        t0 = now;
-    }
-    return true;
+    return Show::Shown;
 }
 
 uint32_t videoFrames()

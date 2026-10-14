@@ -27,7 +27,7 @@ public:
     V4l2DrmDecoder();
     ~V4l2DrmDecoder();
 
-    void start(AtomicQueue<Message> *data, AVCodecID codecId) override;
+    void start(AtomicQueue<Message> *data, AVCodecID codecId, bool resyncOnDrop) override;
     void stop() override;
     void flush() override;
     bool failed() const override { return _failed.load(); }
@@ -37,17 +37,36 @@ private:
     bool setup(AVCodecID codecId);
     void teardown();
     void loop(AVPacket *packet, AVFrame *frame);
-    // Scanout lifetime: keep the two most recently presented frames
-    // referenced so the display engine never scans a buffer the decoder is
-    // writing into (see loop()).
+    // Scanout lifetime: keep the most recently presented frames referenced
+    // so the display engine never scans a buffer the decoder is writing into
+    // (see holdShown()).
     void holdShown(AVFrame *&frame);
     void releaseHeld();
+    // Every frame is decoded (each one is a reference), but only the newest
+    // is presented: a frame the display can't take yet waits in _pending,
+    // where a newer frame supersedes it, and is retried after the flip.
+    void present(AVFrame *frame);
+    void retryPending();
+    void dropPending();
+    void logStats();
 
     std::thread _thread;
     std::atomic<bool> _active;
     std::atomic<bool> _failed{false}; // set when this backend gives up (-> software)
     AtomicQueue<Message> *_data;
     AVCodecID _codecId;
+    bool _resyncOnDrop = false;
+    uint32_t _dropsAtStart = 0;
+    AVFrame *_pending = nullptr;
+    bool _hasPending = false;
+    struct
+    {
+        uint32_t input = 0, decoded = 0, shown = 0, superseded = 0, dropped = 0;
+        uint64_t decodeUs = 0;
+        uint32_t decodeUsMax = 0;
+        uint16_t depthMax = 0;
+        uint32_t since = 0;
+    } _stats;
 
     AVCodecContext *_ctx;
     // The ffmpeg V4L2-request (stateless cedrus) decoder needs libavcodec's
@@ -55,7 +74,8 @@ private:
     // feeding it raw Annex-B access units directly fails with "Invalid data".
     AVCodecParserContext *_parser;
     AVBufferRef *_hwdev;
-    AVFrame *_held[2] = {nullptr, nullptr};
+    static constexpr int HELD_FRAMES = 3;
+    AVFrame *_held[HELD_FRAMES] = {};
     int _heldNext = 0;
 };
 

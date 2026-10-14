@@ -21,7 +21,9 @@ public:
     IDecoder() : buffer(Settings::renderingBuffer) {}
     virtual ~IDecoder() = default;
 
-    virtual void start(AtomicQueue<Message> *data, AVCodecID codecId) = 0;
+    // resyncOnDrop: the producer asks for a keyframe whenever the queue
+    // drops a frame (IConnection::keyframeOnDrop), so a decoder may skip to it.
+    virtual void start(AtomicQueue<Message> *data, AVCodecID codecId, bool resyncOnDrop) = 0;
     virtual void stop() = 0;
     virtual void flush() = 0;
 

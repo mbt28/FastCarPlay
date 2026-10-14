@@ -35,13 +35,24 @@ int height();
 int widthMm();
 int heightMm();
 
+enum class Show
+{
+    Shown,  // queued for scanout -- keep the buffer alive (see below)
+    Busy,   // the previous flip is still pending; nothing changed
+    Failed, // not shown, and retrying would not help
+};
+
 // Import the given dma-buf planes as a framebuffer and flip it fullscreen on
 // the video plane (srcW/srcH crop the buffer before the DEFE scales it to the
 // panel). Called from the decoder thread; serialised internally against the
 // UI commits. Performs the initial modeset if the UI hasn't already.
-// After it returns true the buffer may stay on scanout until the NEXT
-// successful showVideo() -- the decoder must keep it alive until then.
-bool showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
+// After it returns Shown the buffer may stay on scanout until the NEXT Shown
+// -- the decoder must keep it alive until then.
+// Never waits for a pending flip once the mode is set: Busy hands the frame
+// back, because a decoder parked on the vblank cannot keep up with a 60 fps
+// stream, and the frames it falls behind on get dropped from the queue --
+// references included, which corrupts every picture after the gap.
+Show showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
                int nplanes, const int *dmabufFds, const uint32_t *pitches,
                const uint32_t *offsets, uint64_t modifier, const char *tag);
 

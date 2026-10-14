@@ -53,6 +53,7 @@ public:
     // Wireless CarPlay negotiates HEVC on iOS (we offer it in /info); the config
     // atom confirms the real codec once a frame arrives.
     AVCodecID videoCodec() const override { return _codec.load(); }
+    bool keyframeOnDrop() const override { return true; }
     // The user can hand the screen back to FastCarPlay (video-release button) and
     // resume (video-focus button / the home Resume row) without dropping the
     // CarPlay session -- same UX as Android Auto.
@@ -95,6 +96,8 @@ private:
     std::atomic<bool> _videoFocused{true}; // false = handed back to FastCarPlay
     std::atomic<bool> _callActive{false};  // telephony-priority: gate media/alt audio
     std::atomic<uint32_t> _frames{0};
+    std::atomic<uint32_t> _keyframeAskedMs{0}; // last forceKeyFrame (mono ms)
+    std::atomic<bool> _keyframePending{false};  // asked, no keyframe seen yet
     std::string _mfiInfo = "no chip";
     bool _started = false;
 };

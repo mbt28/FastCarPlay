@@ -15,6 +15,14 @@ inline uint32_t mono_ms()
     return (uint32_t)((uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u);
 }
 
+// Microseconds, for measuring short work (64-bit: no practical wrap).
+inline uint64_t mono_us()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+}
+
 inline void sleep_ms(unsigned ms)
 {
     struct timespec ts{(time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L};

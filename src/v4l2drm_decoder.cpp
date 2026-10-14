@@ -8,6 +8,8 @@
 
 #include "common/logger.h"
 #include "common/functions.h"
+#include "common/annexb.h"
+#include "common/clock.h"
 #include "settings.h"
 
 extern "C"
@@ -34,13 +36,13 @@ extern "C"
 namespace
 {
 // Present one decoded drm_prime frame on the shared DRM video plane
-// (drm_display owns the session; the UI overlay shares it). Returns whether
-// the frame is now (queued for) scanout -- the caller must then keep its
-// buffer alive until a later frame has replaced it on the plane.
-bool drm_show(AVFrame *frame)
+// (drm_display owns the session; the UI overlay shares it). On Shown the
+// frame is (queued for) scanout -- the caller must then keep its buffer alive
+// until a later frame has replaced it on the plane.
+drm_display::Show drm_show(AVFrame *frame)
 {
     AVDRMFrameDescriptor *d = (AVDRMFrameDescriptor *)frame->data[0];
-    if (!d || d->nb_objects < 1 || d->nb_layers < 1) return false;
+    if (!d || d->nb_objects < 1 || d->nb_layers < 1) return drm_display::Show::Failed;
     const AVDRMLayerDescriptor *layer = &d->layers[0];
 
     int fds[4] = {0};
@@ -79,6 +81,7 @@ enum AVPixelFormat get_drm_format(AVCodecContext *, const enum AVPixelFormat *fm
             return *p;
     return fmts[0];
 }
+
 } // namespace
 
 V4l2DrmDecoder::V4l2DrmDecoder()
@@ -91,13 +94,17 @@ V4l2DrmDecoder::~V4l2DrmDecoder()
     stop();
 }
 
-void V4l2DrmDecoder::start(AtomicQueue<Message> *data, AVCodecID codecId)
+void V4l2DrmDecoder::start(AtomicQueue<Message> *data, AVCodecID codecId, bool resyncOnDrop)
 {
     if (_active)
         stop();
     buffer.reset();
     _data = data;
     _codecId = codecId;
+    _resyncOnDrop = resyncOnDrop;
+    // Counted from here, so frames dropped while setup() runs (the queue
+    // fills before the first pop) also trigger a resync.
+    _dropsAtStart = data ? data->drops() : 0;
     _active = true;
     _thread = std::thread(&V4l2DrmDecoder::runner, this);
 }
@@ -162,6 +169,15 @@ bool V4l2DrmDecoder::setup(AVCodecID codecId)
         log_e("[V4L2-DRM] can't init parser for %s", avcodec_get_name(codecId));
         return false;
     }
+    // Every segment is exactly one access unit (CarPlay emits one decrypted
+    // frame per segment, Android Auto one reassembled media message, and the
+    // parameter-set config arrives as its own segment). Without this flag
+    // the parser can only end a frame once it sees the START of the next one,
+    // so every frame waited a full frame interval, and the last frame of any
+    // burst -- the final state of a tap or a scroll -- stayed stuck until the
+    // phone happened to send another. It also skips a copy and a byte scan
+    // of every frame.
+    _parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
 
     log_i("[V4L2-DRM] ffmpeg v4l2-request hwaccel ready (%s -> cedrus -> DEFE)", codec->name);
     return true;
@@ -171,6 +187,9 @@ void V4l2DrmDecoder::teardown()
 {
     // Give the held scanout buffers back before the context dies with them.
     releaseHeld();
+    if (_pending)
+        av_frame_free(&_pending);
+    _hasPending = false;
     if (_parser) { av_parser_close(_parser); _parser = nullptr; }
     if (_ctx) avcodec_free_context(&_ctx);
     if (_hwdev) av_buffer_unref(&_hwdev);
@@ -181,10 +200,14 @@ void V4l2DrmDecoder::teardown()
     drm_display::close();
 }
 
-// Keep the last two presented frames referenced: commit N may still be
-// scanning out while commit N+1 is only queued (non-blocking flips), so a
-// buffer handed straight back to the decoder could be written mid-scan.
-// Once a third commit succeeds, the oldest buffer is certainly off screen.
+// Keep the last THREE presented frames referenced. Non-blocking flips leave
+// commit N scanning while N+1 is queued, and sun4i signals a commit's flip
+// one frame early when it starts before the previous commit has latched:
+// sun4i_crtc_atomic_begin() publishes the new event before it waits for the
+// previous LOADCTL, so the vblank that latches commit N also completes N+1.
+// During continuous motion that early state persists, and the frame two
+// commits back can still be on screen -- a buffer returned to the decoder
+// then gets written mid-scan (a torn frame). Three deep covers it.
 void V4l2DrmDecoder::holdShown(AVFrame *&frame)
 {
     AVFrame *old = _held[_heldNext];
@@ -196,7 +219,7 @@ void V4l2DrmDecoder::holdShown(AVFrame *&frame)
         av_frame_move_ref(_held[_heldNext], frame);
     else
         av_frame_unref(frame); // allocation failed: tear risk over leak
-    _heldNext ^= 1;
+    _heldNext = (_heldNext + 1) % HELD_FRAMES;
 }
 
 void V4l2DrmDecoder::releaseHeld()
@@ -208,6 +231,78 @@ void V4l2DrmDecoder::releaseHeld()
         f = nullptr;
     }
     _heldNext = 0;
+}
+
+void V4l2DrmDecoder::present(AVFrame *frame)
+{
+    switch (drm_show(frame))
+    {
+    case drm_display::Show::Shown:
+        holdShown(frame); // on scanout: keep it alive, release an older one
+        dropPending();    // older than what is now on screen
+        _stats.shown++;
+        break;
+    case drm_display::Show::Busy:
+        // The display is still flipping to an earlier frame. Keep this one
+        // as the newest candidate; retryPending() shows it after the flip.
+        if (!_pending)
+            _pending = av_frame_alloc();
+        if (!_pending)
+            break; // allocation failed: lose this frame, the next one shows
+        dropPending();
+        av_frame_move_ref(_pending, frame);
+        _hasPending = true;
+        break;
+    case drm_display::Show::Failed:
+        break;
+    }
+}
+
+void V4l2DrmDecoder::retryPending()
+{
+    switch (drm_show(_pending))
+    {
+    case drm_display::Show::Shown:
+        holdShown(_pending); // moves the reference into the hold ring
+        _hasPending = false;
+        _stats.shown++;
+        break;
+    case drm_display::Show::Busy:
+        break;
+    case drm_display::Show::Failed:
+        av_frame_unref(_pending);
+        _hasPending = false;
+        break;
+    }
+}
+
+void V4l2DrmDecoder::dropPending()
+{
+    if (!_hasPending)
+        return;
+    av_frame_unref(_pending); // never reached the screen: safe to recycle
+    _hasPending = false;
+    _stats.superseded++;
+}
+
+void V4l2DrmDecoder::logStats()
+{
+    const uint32_t now = mono_ms();
+    if (_stats.since == 0)
+        _stats.since = now;
+    const uint32_t span = now - _stats.since;
+    if (span < 5000)
+        return;
+    if (_stats.input > 0 || _stats.dropped > 0)
+        fprintf(stderr,
+                "[Cedrus] in %u fps, decode %u fps (avg %u ms, max %u ms), shown %u fps, "
+                "%u superseded, %u dropped, queue peak %u (%.1fs)\n",
+                (unsigned)(_stats.input * 1000 / span), (unsigned)(_stats.decoded * 1000 / span),
+                _stats.decoded ? (unsigned)(_stats.decodeUs / _stats.decoded / 1000) : 0u,
+                (unsigned)(_stats.decodeUsMax / 1000), (unsigned)(_stats.shown * 1000 / span),
+                _stats.superseded, _stats.dropped, (unsigned)_stats.depthMax, span / 1000.0);
+    _stats = {};
+    _stats.since = now;
 }
 
 void V4l2DrmDecoder::runner()
@@ -240,13 +335,82 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
     // ~1s of frames: long enough to ride out a corrupt packet or a start before
     // the first keyframe, short enough that a real mismatch is caught quickly.
     constexpr int MAX_CONSECUTIVE_FAILURES = 30;
+    // A decoded frame waiting for the display is retried this often even when
+    // no new data arrives, so the last frame of a burst still reaches the
+    // screen. A pending flip completes within one vblank (16.7 ms).
+    constexpr uint32_t PENDING_RETRY_MS = 4;
+    // After a drop, how long to hold the last good picture for the keyframe
+    // the backend asked for before decoding through the gap anyway. Short: a
+    // phone that ignores the request must cost a stutter, not a freeze.
+    constexpr uint32_t RESYNC_TIMEOUT_MS = 300;
     int failures = 0;
+    uint32_t seenDrops = _dropsAtStart;
+    bool resync = false;
+    uint32_t resyncSince = 0;
 
-    while (_data->wait(_active))
+    for (;;)
     {
+        const bool run = _hasPending ? _data->waitFor(_active, PENDING_RETRY_MS)
+                                     : _data->wait(_active);
+        if (!run)
+            break;
+        if (_hasPending)
+            retryPending();
+        logStats();
+
+        const uint16_t depth = _data->count();
         std::unique_ptr<Message> segment = _data->pop();
         if (!segment)
             continue;
+        _stats.input++;
+        if (depth > _stats.depthMax)
+            _stats.depthMax = depth;
+
+        // A dropped frame breaks the reference chain: every frame after the
+        // gap predicts from a picture the decoder never had, smearing garbage
+        // over moving content until a keyframe. When the backend has asked
+        // for one, skip to it and hold the last good picture meanwhile.
+        const uint32_t drops = _data->drops();
+        if (drops != seenDrops)
+        {
+            _stats.dropped += drops - seenDrops;
+            seenDrops = drops;
+            if (_resyncOnDrop && !resync)
+            {
+                log_w("[V4L2-DRM] video fell behind (frames dropped) -- holding the picture until a keyframe");
+                resync = true;
+                resyncSince = mono_ms();
+            }
+        }
+        if (resync)
+        {
+            const uint32_t waited = mono_ms() - resyncSince;
+            const AnnexBKinds kinds = annexbKinds(segment->data(), segment->length(),
+                                                  _codecId == AV_CODEC_ID_HEVC);
+            const bool key = kinds.keyframe;
+            // Parameter sets always go through: CarPlay sends them as their
+            // own segment, and the keyframe after them needs the new ones.
+            if (!key && !kinds.paramSets && waited < RESYNC_TIMEOUT_MS)
+                continue;
+            // No avcodec_flush_buffers() here: on the v4l2-request hwaccel it
+            // forces a full re-init that allocates a second cedrus buffer pool
+            // next to the live one, which CMA cannot fit (ENOMEM -> ffmpeg
+            // silently falls back to software decode). An IDR resets the
+            // references by itself.
+            if (key)
+            {
+                log_i("[V4L2-DRM] resynced at a keyframe after %u ms", (unsigned)waited);
+                resync = false;
+            }
+            else if (!kinds.paramSets)
+            {
+                log_w("[V4L2-DRM] no keyframe within %u ms -- decoding through the gap",
+                      (unsigned)waited);
+                resync = false;
+            }
+            // (a parameter-set segment is decoded and the resync goes on)
+        }
+
         uint8_t *data_ptr = segment->data();
         int data_size = segment->length();
 
@@ -270,9 +434,16 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
             packet->data = pk_data;
             packet->size = pk_size;
 
+            const uint64_t t0 = mono_us();
             int send_ret = avcodec_send_packet(_ctx, packet);
             if (send_ret != 0)
             {
+                // A packet with only parameter sets (CarPlay sends SPS/PPS as
+                // a segment of their own) carries no picture: ffmpeg stores
+                // the sets, then reports "no frame!" as INVALIDDATA.
+                if (send_ret == AVERROR_INVALIDDATA &&
+                    !annexbHasPicture(pk_data, pk_size, _codecId == AV_CODEC_ID_HEVC))
+                    continue;
                 log_w("[V4L2-DRM] can't decode packet > %s", avErrorText(send_ret).c_str());
                 // A stream the hardware cannot actually handle fails on every
                 // packet: the kernel can accept the format and still have no
@@ -291,9 +462,14 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
             failures = 0;
             while (avcodec_receive_frame(_ctx, frame) == 0 && _active)
             {
-                if (frame->format == AV_PIX_FMT_DRM_PRIME && drm_show(frame))
-                    holdShown(frame); // on scanout: keep it alive, release an older one
-                av_frame_unref(frame); // no-op when holdShown moved the ref out
+                const uint32_t us = (uint32_t)(mono_us() - t0);
+                _stats.decodeUs += us;
+                if (us > _stats.decodeUsMax)
+                    _stats.decodeUsMax = us;
+                _stats.decoded++;
+                if (frame->format == AV_PIX_FMT_DRM_PRIME)
+                    present(frame);
+                av_frame_unref(frame); // no-op when present() moved the ref out
             }
         }
     }

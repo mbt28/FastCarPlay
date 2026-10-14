@@ -431,6 +431,14 @@ void AvSession::screenLoop(int fd, int64_t streamId)
 
     // Per-stream key: HKDF-SHA512(shared, "DataStream-Salt"<id>, "…-Output-…").
     const Bytes key = streamKey(streamId, "DataStream-Output-Encryption-Key");
+    // The video queue applies back-pressure by stalling this reader. Cap the
+    // socket's receive buffer so the stall reaches the phone within ~100 ms of
+    // video, instead of a self-tuning buffer of megabytes silently queueing
+    // seconds of stale frames ahead of the decoder. (Linux doubles the value.)
+    {
+        const int rcvbuf = 64 * 1024;
+        ::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    }
     // Reusable AEAD context: key scheduled once, per-packet nonce re-init only
     // (the one-shot helper paid a full EVP setup on every single packet/frame).
     cp_crypto::ChachaStream aead;

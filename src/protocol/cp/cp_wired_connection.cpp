@@ -20,6 +20,8 @@
 #include <libimobiledevice/lockdown.h>
 
 #include "common/logger.h"
+#include "common/annexb.h"
+#include "common/clock.h"
 #include "protocol/message.h"
 #include "protocol/protocol_const.h"
 #include "settings.h"
@@ -210,10 +212,26 @@ void CpWiredConnection::onVideo(const uint8_t *annexB, size_t len)
     if (!p)
         return;
     std::memcpy(p, annexB, len);
-    // Overflow drops the OLDEST queued frame; a keyframe request brings the
-    // picture back immediately instead of waiting out a broken GOP.
-    if (!videoStream.pushDropOldest(std::move(msg)))
+    // Back-pressure first (see VIDEO_BACKPRESSURE_DEPTH). Only a decoder that
+    // stalls past the timeout makes the queue drop its OLDEST frame; then ask
+    // for a keyframe, which the decoder holds the picture for
+    // (keyframeOnDrop). Every gap needs its own keyframe, but while a request
+    // is outstanding further drops are the same backlog and add nothing. A
+    // keyframe passing through answers the request; re-ask after 1 s in case
+    // one got lost.
+    const uint32_t now = mono_ms();
+    if (_keyframePending.load(std::memory_order_relaxed) &&
+        annexbKinds(annexB, len, _codec.load() == AV_CODEC_ID_HEVC).keyframe)
+        _keyframePending.store(false, std::memory_order_relaxed);
+    if (!videoStream.pushWaitDropOldest(std::move(msg), VIDEO_BACKPRESSURE_DEPTH,
+                                        VIDEO_BACKPRESSURE_TIMEOUT_MS) &&
+        (!_keyframePending.load(std::memory_order_relaxed) ||
+         now - _keyframeAskedMs.load(std::memory_order_relaxed) >= 1000))
+    {
+        _keyframePending.store(true, std::memory_order_relaxed);
+        _keyframeAskedMs.store(now, std::memory_order_relaxed);
         enqueueCommand(forceKeyFrameCommand());
+    }
     _transfered.fetch_add((uint32_t)len, std::memory_order_release);
     _frames.fetch_add(1, std::memory_order_relaxed);
     if (_state.load() != PROTOCOL_STATUS_CONNECTED)

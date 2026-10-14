@@ -20,7 +20,7 @@ public:
     Decoder();
     ~Decoder();
 
-    void start(AtomicQueue<Message> *data, AVCodecID codecId) override;
+    void start(AtomicQueue<Message> *data, AVCodecID codecId, bool resyncOnDrop) override;
     void stop() override;
     void flush() override;
 
