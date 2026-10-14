@@ -81,7 +81,7 @@ export global Bridge {
     // Navigation, shared so C++ can follow it (discovery runs only while a
     // Bluetooth screen is up) and drive it (the Home key).
     // 0 home, 1 settings, 2 source, 3 wireless, 4 bluetooth, 5 bt device,
-    // 6 audio
+    // 6 audio, 7 system
     in-out property <int> screen;
 
     // UI -> app
@@ -92,6 +92,7 @@ export global Bridge {
     callback cycle-fps();
     callback volume-step(int);                // -1 quieter, +1 louder
     callback volume-mute();                   // toggle
+    callback system-ask(int);                 // 1 reboot, 2 shut down: asks first
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -585,6 +586,7 @@ component ScreenSettings inherits ListScreen {
     Row { label: "Wireless"; clicked => { root.goto(3); } }
     Row { label: "Night"; value: Bridge.night-label; clicked => { Bridge.cycle-night(); } }
     Row { label: "Video"; value: Bridge.fps-label; clicked => { Bridge.cycle-fps(); } }
+    Row { label: "System"; clicked => { root.goto(7); } }
     // Only meaningful once something needs it; hidden otherwise rather than
     // inviting a pointless restart.
     if Bridge.restart-needed: Row { label: "Restart now"; clicked => { Bridge.restart-now(); } }
@@ -607,6 +609,16 @@ component ScreenSource inherits ListScreen {
         value: Bridge.protocol == src.id ? "Active" : "";
         clicked => { Bridge.select-protocol(src.id); }
     }
+}
+
+// Reboot and shut down. Each asks first, in the dialog; the app then closes
+// down cleanly and the system's own reboot / poweroff takes over.
+component ScreenSystem inherits ListScreen {
+    callback goto(int);
+    Header { text: "System"; }
+    Row { label: "Back"; clicked => { root.goto(1); } }
+    Row { label: "Reboot"; clicked => { Bridge.system-ask(1); } }
+    Row { label: "Shut down"; clicked => { Bridge.system-ask(2); } }
 }
 
 component ScreenAudio inherits ListScreen {
@@ -896,6 +908,7 @@ export component AppWindow inherits Window {
     if Bridge.screen == 4 && !root.modal: ScreenBluetooth { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 5 && !root.modal: ScreenBtDevice  { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 6 && !root.modal: ScreenAudio     { goto(s) => { Bridge.screen = s; } }
+    if Bridge.screen == 7 && !root.modal: ScreenSystem    { goto(s) => { Bridge.screen = s; } }
     if Bridge.prompt-kind != 0: Prompt {}
     if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}
     // Over everything, including dialogs; display only (no input).

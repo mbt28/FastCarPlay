@@ -239,6 +239,30 @@ struct SlintOsd::Impl
             ringLost = true;
     }
 
+    // The dialog shows Bluetooth's prompt -- pairing has a deadline, so it
+    // wins -- or else our own question from the System screen.
+    struct DialogText
+    {
+        int kind = 0; // 0 none, 1 a code (Cancel only), 2 yes/no
+        std::string title, code, hint, accept;
+    };
+    DialogText btDialog;      // the Bluetooth manager's, as last seen
+    int systemAsk = 0;        // the System screen asks: 0 none, 1 reboot, 2 shut down
+    bool dialogDirty = true;  // either changed: pumpDialog looks again
+    bool dialogLocal = false; // the dialog shown is our own question
+    int pPromptKind = 0;
+    std::string pPromptTitle, pPromptCode, pPromptHint, pPromptAccept;
+
+    void answerSystem(bool yes)
+    {
+        const int asked = systemAsk;
+        systemAsk = 0;
+        dialogDirty = true;
+        if (yes && asked != 0)
+            ui_bridge::requestPower(asked == 1 ? ui_bridge::Power::Reboot
+                                               : ui_bridge::Power::Shutdown);
+    }
+
 #ifdef USE_BLUETOOTH
     // Set once and never replaced (see syncRows).
     std::shared_ptr<slint::VectorModel<BtRow>> btPaired =
@@ -251,8 +275,6 @@ struct SlintOsd::Impl
     BtRow pBtCurrent;
     std::string pBtSummary, pBtStatus;
     bool pBtScanning = false, pBtScanAllowed = true, pLinkBt = false;
-    int pPromptKind = 0;
-    std::string pPromptTitle, pPromptCode, pPromptHint, pPromptAccept;
 #endif
 
     Impl(int w, int h, slint::ComponentHandle<AppWindow> handle)
@@ -367,27 +389,33 @@ struct SlintOsd::Impl
             // Buttons left to right: [accept] Cancel (a code dialog has only
             // Cancel). The arrows show and move a ring over them; Enter
             // presses the ringed button, or accepts when there is no ring.
-            // Back always cancels.
+            // Back always cancels. Our own questions are a reboot or a shut
+            // down: there the ring starts on Cancel, and a press with no
+            // ring only shows it -- a double press must not take the head
+            // unit down.
             const int first = kind == 2 ? 0 : 1;
+            const int start = dialogLocal ? 1 : first;
             const int focus = bridge.get_prompt_focus();
             switch (nav)
             {
             case OsdKey::Left:
             case OsdKey::Up:
-                bridge.set_prompt_focus(focus < 0 ? first : std::max(first, focus - 1));
+                bridge.set_prompt_focus(focus < 0 ? start : std::max(first, focus - 1));
                 break;
             case OsdKey::Right:
             case OsdKey::Down:
-                bridge.set_prompt_focus(focus < 0 ? first : std::min(1, focus + 1));
+                bridge.set_prompt_focus(focus < 0 ? start : std::min(1, focus + 1));
                 break;
             case OsdKey::Next: // a knob goes round
-                bridge.set_prompt_focus(focus < 0 || focus >= 1 ? first : focus + 1);
+                bridge.set_prompt_focus(focus < 0 ? start : focus >= 1 ? first : focus + 1);
                 break;
             case OsdKey::Prev:
-                bridge.set_prompt_focus(focus < 0 ? first : focus <= first ? 1 : focus - 1);
+                bridge.set_prompt_focus(focus < 0 ? start : focus <= first ? 1 : focus - 1);
                 break;
             case OsdKey::Ok:
-                if (focus == 1)
+                if (focus < 0 && dialogLocal)
+                    bridge.set_prompt_focus(1);
+                else if (focus == 1)
                     bridge.invoke_prompt_cancel();
                 else if (kind == 2)
                     bridge.invoke_prompt_accept();
@@ -629,6 +657,7 @@ struct SlintOsd::Impl
 #ifdef USE_BLUETOOTH
         pumpBluetooth(bridge, screen);
 #endif
+        pumpDialog(bridge);
     }
 
 #ifdef USE_BLUETOOTH
@@ -692,38 +721,63 @@ struct SlintOsd::Impl
             pLinkBt = s.phoneConnected;
             bridge.set_link_bt(pLinkBt);
         }
-        // Another dialog (or none): it starts without a keyboard ring.
-        const int kind = (int)s.prompt.kind;
-        if (kind != pPromptKind || s.prompt.title != pPromptTitle)
-            bridge.set_prompt_focus(-1);
-        if (s.prompt.title != pPromptTitle)
+        btDialog.kind = (int)s.prompt.kind;
+        btDialog.title = s.prompt.title;
+        btDialog.code = s.prompt.code;
+        btDialog.hint = s.prompt.hint;
+        btDialog.accept = s.prompt.acceptLabel;
+        dialogDirty = true;
+    }
+#endif
+
+    // Bluetooth's prompt, or else our own question -> Bridge, on change.
+    void pumpDialog(const Bridge &bridge)
+    {
+        if (!dialogDirty)
+            return;
+        dialogDirty = false;
+        DialogText d = btDialog;
+        dialogLocal = d.kind == 0 && systemAsk != 0;
+        if (dialogLocal)
         {
-            pPromptTitle = s.prompt.title;
+            const bool reboot = systemAsk == 1;
+            d.kind = 2;
+            d.title = reboot ? "Reboot the head unit?" : "Shut down the head unit?";
+            d.hint = reboot ? "FastCarPlay closes, then the head unit starts again."
+                            : "FastCarPlay closes and the head unit stops. It starts again "
+                              "when its power is switched off and on.";
+            d.accept = reboot ? "Reboot" : "Shut down";
+        }
+        // Another dialog (or none): it starts without a keyboard ring.
+        if (d.kind != pPromptKind || d.title != pPromptTitle)
+            bridge.set_prompt_focus(-1);
+        if (d.title != pPromptTitle)
+        {
+            pPromptTitle = d.title;
             bridge.set_prompt_title(slint::SharedString(pPromptTitle));
         }
-        if (s.prompt.code != pPromptCode)
+        if (d.code != pPromptCode)
         {
-            pPromptCode = s.prompt.code;
+            pPromptCode = d.code;
             bridge.set_prompt_code(slint::SharedString(pPromptCode));
         }
-        if (s.prompt.hint != pPromptHint)
+        if (d.hint != pPromptHint)
         {
-            pPromptHint = s.prompt.hint;
+            pPromptHint = d.hint;
             bridge.set_prompt_hint(slint::SharedString(pPromptHint));
         }
-        if (s.prompt.acceptLabel != pPromptAccept)
+        if (d.accept != pPromptAccept)
         {
-            pPromptAccept = s.prompt.acceptLabel;
+            pPromptAccept = d.accept;
             bridge.set_prompt_accept_label(slint::SharedString(pPromptAccept));
         }
         // Kind last: the dialog appears with its text already in place.
-        if (kind != pPromptKind)
+        if (d.kind != pPromptKind)
         {
-            pPromptKind = kind;
-            bridge.set_prompt_kind(kind);
+            pPromptKind = d.kind;
+            bridge.set_prompt_kind(d.kind);
         }
     }
-#endif
 };
 
 SlintOsd::~SlintOsd()
@@ -801,6 +855,31 @@ bool SlintOsd::beginDrm(int width, int height)
     });
     bridge.on_osk_ok([impl] { impl->saveField(); });
     bridge.on_osk_cancel([impl] { impl->setEditing(-1); });
+    bridge.on_system_ask([impl](int what) {
+        impl->systemAsk = what;
+        impl->dialogDirty = true;
+    });
+    // The dialog answers whoever asked: our own question, or Bluetooth.
+    bridge.on_prompt_accept([impl] {
+        if (impl->dialogLocal)
+        {
+            impl->answerSystem(true);
+            return;
+        }
+#ifdef USE_BLUETOOTH
+        bt::Manager::instance().promptAccept();
+#endif
+    });
+    bridge.on_prompt_cancel([impl] {
+        if (impl->dialogLocal)
+        {
+            impl->answerSystem(false);
+            return;
+        }
+#ifdef USE_BLUETOOTH
+        bt::Manager::instance().promptCancel();
+#endif
+    });
 
 #ifdef USE_BLUETOOTH
     // The manager queues every request for its own thread; nothing here blocks.
@@ -821,8 +900,6 @@ bool SlintOsd::beginDrm(int width, int height)
     bridge.on_bt_forget([](slint::SharedString id) {
         bt::Manager::instance().forget(std::string(std::string_view(id)));
     });
-    bridge.on_prompt_accept([] { bt::Manager::instance().promptAccept(); });
-    bridge.on_prompt_cancel([] { bt::Manager::instance().promptCancel(); });
 #endif
 
     ui->show();
@@ -1011,6 +1088,10 @@ void SlintOsd::hidden()
     if (_impl->pScreen == 4 || _impl->pScreen == 5)
         bt::Manager::instance().screenVisible(false);
 #endif
+    // Our own reboot / shut down question does not wait behind the video:
+    // the screens come back without it.
+    if (_impl->systemAsk != 0)
+        _impl->answerSystem(false);
     // pScreen stays: the screen -- and its focused row -- are still there
     // when the UI comes back, so there is nothing to re-seed.
 }

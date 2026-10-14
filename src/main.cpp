@@ -2,6 +2,8 @@
 #include <iostream>
 #include <memory>
 #include <cerrno>
+#include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 #include <sys/resource.h>
@@ -84,6 +86,37 @@ static void restartSelf()
     std::cerr << "[Main] execvp " << savedArgv[0] << " failed > " << strerror(errno) << std::endl;
 }
 
+#ifdef USE_OSD_UI
+// Settings > System: hand the head unit to the system's own reboot / poweroff,
+// once start() has closed everything down (the phone session, audio, the
+// saved volume). init then stops every service, this process included.
+// Should the command fail (not root, not there) or the system not go down,
+// start again: S99carplay does not respawn us, and a dark screen is worse
+// than a reboot that did not happen.
+static void powerDown(bool reboot)
+{
+    const std::string &command =
+        reboot ? Settings::rebootCommand.value : Settings::shutdownCommand.value;
+    std::cout << (reboot ? "Rebooting" : "Shutting down") << ": " << command << std::endl;
+    sync();
+    // init's TERM must end this process now, not ask it for a clean quit.
+    std::signal(SIGTERM, SIG_DFL);
+    std::signal(SIGINT, SIG_DFL);
+    const int status = std::system(command.c_str());
+    if (status == 0)
+    {
+        for (int i = 0; i < 60; i++)
+            sleep(1);
+        std::cerr << "[Main] still running 60 s after '" << command << "' -- starting again"
+                  << std::endl;
+    }
+    else
+        std::cerr << "[Main] '" << command << "' failed (" << status << ") -- starting again"
+                  << std::endl;
+    restartSelf();
+}
+#endif
+
 // glibc derives a new thread's default stack size from RLIMIT_STACK. The
 // default (8 MB) across the ~16 threads this app runs reserves ~128 MB of
 // address space on a 64 MB board. The deepest frames here are small, fixed
@@ -138,6 +171,9 @@ int main(int argc, char **argv)
         // process reads it back from usersettings.txt on the way up.
         if (ui_bridge::restartRequested())
             restartSelf();
+        else if (const ui_bridge::Power power = ui_bridge::powerRequested();
+                 power != ui_bridge::Power::None)
+            powerDown(power == ui_bridge::Power::Reboot);
 #endif
     }
     catch (const std::exception &e)

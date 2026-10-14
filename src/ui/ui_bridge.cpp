@@ -14,6 +14,7 @@ std::atomic<bool> g_restart{false};
 std::atomic<bool> g_backgrounded{false};
 std::atomic<bool> g_resume{false};
 std::atomic<bool> g_night{false};
+std::atomic<int> g_power{0}; // ui_bridge::Power
 std::atomic<bool> g_restartNeeded{false};
 std::atomic<bool> g_linkUsb{false};
 std::atomic<bool> g_linkWifi{false};
@@ -146,6 +147,17 @@ void requestRestart()
 {
     setStatus("Restarting...");
     g_restart = true;
+}
+
+void requestPower(Power action)
+{
+    setStatus(action == Power::Reboot ? "Rebooting..." : "Shutting down...");
+    g_power = (int)action;
+}
+
+Power powerRequested()
+{
+    return (Power)g_power.load();
 }
 } // namespace ui_bridge
 

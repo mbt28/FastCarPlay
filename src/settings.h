@@ -146,6 +146,10 @@ public:
     static inline Setting<int> micGain{"mic-gain", 1};
     static inline Setting<std::string> onConnect{"on-connect-script", ""};
     static inline Setting<std::string> onDisconnect{"on-disconnect-script", ""};
+    // Settings > System: what Reboot / Shut down run once the app has closed
+    // down -- the system's own commands, so init stops every service.
+    static inline Setting<std::string> rebootCommand{"reboot-command", "reboot"};
+    static inline Setting<std::string> shutdownCommand{"shutdown-command", "poweroff"};
 
     // Debug section
     static inline Setting<bool> codecLowDelay{"decode-low-delay", true};
