@@ -477,7 +477,7 @@ void AvSession::screenLoop(int fd, int64_t streamId)
         capture("screen", acc.data() + have, (size_t)n); // raw capture (FCP_CP_CAPTURE)
 
         size_t off = 0;
-        while (acc.size() - off >= HEADER_LEN)
+        while (_running && acc.size() - off >= HEADER_LEN)
         {
             uint8_t *hdr = acc.data() + off;
             const uint32_t bodySize =

@@ -138,6 +138,10 @@ void CpConnection::onVideoCodec(bool hevc)
 
 void CpConnection::onVideo(const uint8_t *annexB, size_t len)
 {
+    // The screen reader can still be emitting a batch it received before the
+    // session ended; those frames belong to no session.
+    if (!_sessionLive.load(std::memory_order_acquire))
+        return;
     if (!annexB || len == 0)
         return;
     // Carlinkit-shaped video message: raw Annex-B at offset 0 (the decoder reads
@@ -171,8 +175,10 @@ void CpConnection::onVideo(const uint8_t *annexB, size_t len)
     }
     _transfered.fetch_add((uint32_t)len, std::memory_order_release);
     _frames.fetch_add(1, std::memory_order_relaxed);
-    if (_state.load() != PROTOCOL_STATUS_CONNECTED)
-        _state.store(PROTOCOL_STATUS_CONNECTED);
+    // ONLINE -> CONNECTED only: a frame that arrives after the disconnect
+    // stored LINKING must not flip a dead session back to connected.
+    int8_t expected = PROTOCOL_STATUS_ONLINE;
+    _state.compare_exchange_strong(expected, (int8_t)PROTOCOL_STATUS_CONNECTED);
 }
 
 void CpConnection::onAudio(int type, int rate, int channels, const uint8_t *pcm, size_t bytes)
@@ -227,6 +233,7 @@ void CpConnection::onSessionConnect()
 {
     log_i("CarPlay: phone connected the :7000 control channel");
     clearInput(); // drop anything stale from a previous session
+    _sessionLive.store(true, std::memory_order_release);
     if (_state.load() != PROTOCOL_STATUS_CONNECTED)
         _state.store(PROTOCOL_STATUS_ONLINE);
 }
@@ -234,6 +241,7 @@ void CpConnection::onSessionConnect()
 void CpConnection::onSessionDisconnect()
 {
     log_i("CarPlay: control channel closed");
+    _sessionLive.store(false, std::memory_order_release); // before LINKING: see onVideo
     clearInput();
     _callActive.store(false); // a phone that drops mid-call must not mute media forever
     _state.store(PROTOCOL_STATUS_LINKING); // back to waiting for the phone

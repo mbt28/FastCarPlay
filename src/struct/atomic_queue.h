@@ -84,7 +84,7 @@ public:
         {
             unique_lock<std::mutex> lock(_mtx);
             _space.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]
-                            { return _count.load(std::memory_order_relaxed) < depth; });
+                            { return _count.load(std::memory_order_relaxed) < depth || _closed; });
         }
         // Single producer: the count can only have fallen since the wait.
         return pushDropOldest(std::move(obj));
@@ -152,7 +152,7 @@ public:
         unique_lock<std::mutex> lock(_mtx);
 
         _lock.wait(lock, [&]
-                   { return _count.load(std::memory_order_acquire) > count || !waitFlag.load(std::memory_order_acquire); });
+                   { return _count.load(std::memory_order_acquire) > count || !waitFlag.load(std::memory_order_acquire) || _closed; });
         return waitFlag.load(std::memory_order_acquire);
     }
 
@@ -160,7 +160,7 @@ public:
     {
         unique_lock<std::mutex> lock(_mtx);
         _lock.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]
-                       { return _count.load(std::memory_order_acquire) > count || !waitFlag.load(std::memory_order_acquire); });
+                       { return _count.load(std::memory_order_acquire) > count || !waitFlag.load(std::memory_order_acquire) || _closed; });
         return waitFlag.load(std::memory_order_acquire);
     }
 
@@ -182,6 +182,28 @@ public:
         _space.notify_all();
     }
 
+    // The consumer's stop signal. While closed no wait blocks: a producer in
+    // pushWaitDropOldest() falls straight through to drop-oldest instead of
+    // sitting out its timeout per item, and a consumer's wait() returns. Set
+    // under the lock the wait predicates run under, so unlike a bare notify()
+    // after flipping a flag elsewhere, a waiter about to sleep cannot miss it.
+    // A consumer open()s it again before it starts waiting.
+    void close()
+    {
+        {
+            lock_guard<std::mutex> lock(_mtx);
+            _closed = true;
+        }
+        _lock.notify_all();
+        _space.notify_all();
+    }
+
+    void open()
+    {
+        lock_guard<std::mutex> lock(_mtx);
+        _closed = false;
+    }
+
     uint16_t count() const { return _count.load(std::memory_order_acquire); }
 
 private:
@@ -191,6 +213,7 @@ private:
     uint16_t _last;
     atomic<uint16_t> _count;
     atomic<uint32_t> _drops{0};
+    bool _closed = false; // guarded by _mtx
     mutex _mtx;
     condition_variable _lock;
     condition_variable _space; // signalled on pop: room for a waiting producer

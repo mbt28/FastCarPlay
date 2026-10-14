@@ -98,6 +98,7 @@ private:
     std::atomic<uint32_t> _frames{0};
     std::atomic<uint32_t> _keyframeAskedMs{0}; // last forceKeyFrame (mono ms)
     std::atomic<bool> _keyframePending{false};  // asked, no keyframe seen yet
+    std::atomic<bool> _sessionLive{false};      // :7000 control session up
     std::string _mfiInfo = "no chip";
     bool _started = false;
 };
