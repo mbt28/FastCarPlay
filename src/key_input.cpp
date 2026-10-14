@@ -16,8 +16,10 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -44,6 +46,12 @@ constexpr uint32_t REPEAT_VOLUME_MS = 150;
 // A held volume key repeats this long at most (0 to 100 % takes ~3 s); then
 // it needs a fresh press.
 constexpr uint32_t VOLUME_REPEAT_FOR_MS = 4000;
+// A wheel's turns reach the phone one detent per report, as CarPlay and
+// Android Auto expect, but no faster than this: a fast spin must not flood
+// that same write queue. A spin ahead of the pace keeps at most
+// MAX_TURNS_PENDING steps; the rest of it is dropped.
+constexpr uint32_t TURN_PHONE_MS = 30;
+constexpr int MAX_TURNS_PENDING = 4;
 
 // devtmpfs creates the node before it is always openable.
 constexpr uint32_t OPEN_RETRY_MS = 100;
@@ -78,6 +86,8 @@ int normalize(int code)
     case BTN_START:
     case BTN_MODE:
         return KEY_HOMEPAGE;
+    case BTN_MIDDLE: // a wheel's click: the rotary knob's press
+        return KEY_ENTER;
     default:
         return code;
     }
@@ -253,6 +263,15 @@ bool hasHat(int fd)
     return testBit(abs, ABS_HAT0X) || testBit(abs, ABS_HAT0Y);
 }
 
+// A scroll wheel or a dial: used as a rotary knob.
+bool hasWheel(int fd)
+{
+    unsigned long rel[(REL_CNT + LONG_BITS - 1) / LONG_BITS] = {0};
+    if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rel)), rel) < 0)
+        return false;
+    return testBit(rel, REL_WHEEL) || testBit(rel, REL_DIAL);
+}
+
 bool due(uint32_t now, uint32_t deadline)
 {
     return (int32_t)(now - deadline) >= 0;
@@ -314,6 +333,8 @@ struct KeyInput::Impl
     std::vector<Held> held;
     std::vector<Retry> retries;
     bool routedToUi = false;
+    int turnsPending = 0;  // wheel steps owed to the phone: > 0 next, < 0 previous
+    uint32_t lastTurn = 0; // when the last one went
 
     // False when the button did not go out (no session, or a full queue).
     bool sendPhone(int button)
@@ -347,6 +368,7 @@ struct KeyInput::Impl
             return;
         routedToUi = now;
         releaseHeld(-1, true);
+        turnsPending = 0;
     }
 
     void press(Device &dev, int code)
@@ -492,6 +514,36 @@ struct KeyInput::Impl
             press(dev, dir < 0 ? negative : positive);
     }
 
+    // A wheel or dial as a rotary knob, one step per detent. A wheel counts
+    // away from the user as positive -- "previous", like scrolling up -- a
+    // dial counts clockwise as positive, "next".
+    void onRotate(int axis, int value)
+    {
+        int steps = axis == REL_WHEEL ? -value : value; // > 0: next
+        steps = std::clamp(steps, -8, 8);               // a fast spin, in one event
+        if (routedToUi)
+        {
+            for (int i = 0; i < std::abs(steps); i++)
+                sink(steps > 0 ? OsdKey::Next : OsdKey::Prev, 0, 1);
+            return;
+        }
+        // A turn the other way drops what is still owed.
+        if (turnsPending != 0 && (steps > 0) != (turnsPending > 0))
+            turnsPending = 0;
+        turnsPending = std::clamp(turnsPending + steps, -MAX_TURNS_PENDING, MAX_TURNS_PENDING);
+        sendTurn(mono_ms());
+    }
+
+    // One owed wheel step to the phone, once the pace allows it.
+    void sendTurn(uint32_t now)
+    {
+        if (turnsPending == 0 || now - lastTurn < TURN_PHONE_MS)
+            return;
+        sendPhone(turnsPending > 0 ? BTN_ROTATE_NEXT : BTN_ROTATE_PREV);
+        turnsPending += turnsPending > 0 ? -1 : 1;
+        lastTurn = now;
+    }
+
     // Returns false when the node could not be opened (yet): worth a retry.
     bool tryOpen(const std::string &name)
     {
@@ -506,7 +558,7 @@ struct KeyInput::Impl
         struct input_id id;
         memset(&id, 0, sizeof(id));
         if (ioctl(fd, EVIOCGID, &id) < 0 || id.bustype != BUS_BLUETOOTH ||
-            !(hasUsefulKeys(fd) || hasHat(fd)))
+            !(hasUsefulKeys(fd) || hasHat(fd) || hasWheel(fd)))
         {
             ::close(fd);
             return true;
@@ -671,11 +723,13 @@ struct KeyInput::Impl
                     onKey(dev, e.code, e.value);
                 else if (e.type == EV_ABS && (e.code == ABS_HAT0X || e.code == ABS_HAT0Y))
                     onHat(dev, e.code, e.value);
+                else if (e.type == EV_REL && (e.code == REL_WHEEL || e.code == REL_DIAL))
+                    onRotate(e.code, e.value);
             }
         }
     }
 
-    // Repeats and open retries that are due; returns the poll timeout until
+    // Repeats, owed wheel turns and open retries that are due; returns the poll timeout until
     // the next one (-1: nothing pending, sleep until an event).
     int runTimers()
     {
@@ -697,6 +751,7 @@ struct KeyInput::Impl
                 sendPhone(h.button);
             h.nextRepeat = now + h.period;
         }
+        sendTurn(now);
         for (size_t i = retries.size(); i-- > 0;)
         {
             Retry &r = retries[i];
@@ -720,6 +775,8 @@ struct KeyInput::Impl
                 consider(h.nextRepeat);
         for (const Retry &r : retries)
             consider(r.next);
+        if (turnsPending != 0)
+            consider(lastTurn + TURN_PHONE_MS);
         return timeout;
     }
 

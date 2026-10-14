@@ -160,7 +160,9 @@
 # Driving position; mirrors some UI layout the phone renders.
 #left-hand-drive = true
 
-# 0 day, 1 night, 2 auto. Sent to the phone in the sensor batch at connect.
+# The phone's day/night look: 0 day, 1 night, 2 auto. Sent at connect and
+# whenever it changes. Auto lets CarPlay follow the sun where the phone is;
+# Android Auto has nothing of its own to follow and stays in day mode.
 #night-mode = 2
 
 # Run a script when a phone connects / disconnects.

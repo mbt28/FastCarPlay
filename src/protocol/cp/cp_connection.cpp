@@ -233,6 +233,7 @@ void CpConnection::onSessionConnect()
 {
     log_i("CarPlay: phone connected the :7000 control channel");
     clearInput(); // drop anything stale from a previous session
+    _knobSelect.store(false);
     _sessionLive.store(true, std::memory_order_release);
     if (_state.load() != PROTOCOL_STATUS_CONNECTED)
         _state.store(PROTOCOL_STATUS_ONLINE);
@@ -243,6 +244,7 @@ void CpConnection::onSessionDisconnect()
     log_i("CarPlay: control channel closed");
     _sessionLive.store(false, std::memory_order_release); // before LINKING: see onVideo
     clearInput();
+    _knobSelect.store(false);
     _callActive.store(false); // a phone that drops mid-call must not mute media forever
     _state.store(PROTOCOL_STATUS_LINKING); // back to waiting for the phone
 }
@@ -326,14 +328,21 @@ void CpConnection::handleInput(const Message &m)
             enqueueCommand(hidCommand(cp_hid::MEDIA_UUID, cp_hid::mediaReport(cp_hid::MEDIA_NONE)));
         };
         auto knobTap = [&](bool home, bool back) {
-            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, home, back)));
-            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false)));
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(_knobSelect.load(), home, back)));
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(_knobSelect.load(), false, false)));
         };
         // Directional nav: the knob's X/Y are absolute axes, so deflect fully in
         // the pressed direction then re-center -- one focus nudge per press.
         auto knobMove = [&](int dx, int dy) {
-            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false, dx, dy, 0)));
-            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false, 0, 0, 0)));
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(_knobSelect.load(), false, false, dx, dy, 0)));
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(_knobSelect.load(), false, false, 0, 0, 0)));
+        };
+        // A knob's turn: the wheel is relative, one count per detent, +1 =
+        // clockwise = the next item. Every knob report carries the whole
+        // state, so a held select stays held through it.
+        auto knobTurn = [&](int d) {
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(_knobSelect.load(), false, false, 0, 0, d)));
+            enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(_knobSelect.load(), false, false, 0, 0, 0)));
         };
         switch (btn)
         {
@@ -343,10 +352,14 @@ void CpConnection::handleInput(const Message &m)
         case BTN_RIGHT: knobMove(127, 0); break;
         case BTN_UP: knobMove(0, -127); break;
         case BTN_DOWN: knobMove(0, 127); break;
+        case BTN_ROTATE_NEXT: knobTurn(1); break;
+        case BTN_ROTATE_PREV: knobTurn(-1); break;
         case BTN_SELECT_DOWN:
+            _knobSelect = true;
             enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(true, false, false)));
             break;
         case BTN_SELECT_UP:
+            _knobSelect = false;
             enqueueCommand(hidCommand(cp_hid::KNOB_UUID, cp_hid::knobReport(false, false, false)));
             break;
         case BTN_PLAY: media(cp_hid::MEDIA_PLAY); break;
@@ -359,6 +372,13 @@ void CpConnection::handleInput(const Message &m)
             enqueueCommand(siriCommand(3));
             break;
         case BTN_SCREEN_REFRESH: enqueueCommand(forceKeyFrameCommand()); break;
+        case BTN_NIGHT_ON:
+        case BTN_NIGHT_OFF:
+        case BTN_NIGHT_AUTO:
+            for (Bytes &command :
+                 cp_av::appearanceCommands(btn == BTN_NIGHT_ON ? 1 : btn == BTN_NIGHT_OFF ? 0 : 2))
+                enqueueCommand(std::move(command));
+            break;
         case 500: // video focus -- re-project (same as the home Resume row)
             requestVideoFocus();
             break;

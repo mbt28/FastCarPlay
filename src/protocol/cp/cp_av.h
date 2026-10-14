@@ -63,6 +63,10 @@ struct Config
 // at the same pixel density as the defaults above.
 Config configForDisplay(int width, int height, int widthMm, int heightMm, int fps, bool hevc);
 
+// Day / night for a running session (the Night setting: 0 day, 1 night,
+// 2 auto), as event-channel command bodies; /info carries the same at connect.
+std::vector<Bytes> appearanceCommands(int nightMode);
+
 // A source of outbound event-channel commands (touch/button HID reports, etc.)
 // the accessory sends to the phone. The AV session pulls from it on the event
 // channel's own thread and POSTs each body, so the event cipher stays

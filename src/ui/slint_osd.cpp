@@ -114,6 +114,16 @@ BtRow toRow(const bt::DeviceRow &d)
     return r;
 }
 
+// The ring is on a row of this list (ring-row "<prefix><id>") that has gone.
+bool ringRowGone(std::string_view ring, std::string_view prefix,
+                 const std::vector<bt::DeviceRow> &rows)
+{
+    if (ring.substr(0, prefix.size()) != prefix)
+        return false;
+    const std::string_view id = ring.substr(prefix.size());
+    return std::none_of(rows.begin(), rows.end(), [&](const bt::DeviceRow &d) { return d.id == id; });
+}
+
 // Bring a list model in line with the manager's rows, by id: changed rows are
 // updated in place, vanished ones erased, new ones appended. Never a reset or
 // a new model: that destroys every row instance (keyboard focus is lost and
@@ -204,6 +214,7 @@ struct SlintOsd::Impl
     uint32_t pVolumeGen = 0;
     bool volumeBar = false; // the bar is up (in the scene)
     uint32_t volumeBarUntil = 0;
+    bool pLinkUsb = false, pLinkWifi = false;
     int pProtocol = -1;
     bool pWaiting = false, pRestartNeeded = false;
 
@@ -216,6 +227,17 @@ struct SlintOsd::Impl
     int pScreen = -1;
     bool pModal = false;
     bool eraseEdits = false; // the held Backspace was pressed in the editor
+    // The row with the ring went away while its screen stayed: next tick,
+    // once it is really gone, the ring goes back on the first row.
+    bool ringLost = false;
+    bool switched = false; // this pump saw a screen switch
+
+    void ringGone(const Bridge &bridge)
+    {
+        bridge.set_ring_row("");
+        if (!switched)
+            ringLost = true;
+    }
 
 #ifdef USE_BLUETOOTH
     // Set once and never replaced (see syncRows).
@@ -228,7 +250,7 @@ struct SlintOsd::Impl
     std::string btCurrentId; // the device screen's device (by id)
     BtRow pBtCurrent;
     std::string pBtSummary, pBtStatus;
-    bool pBtScanning = false, pBtScanAllowed = true;
+    bool pBtScanning = false, pBtScanAllowed = true, pLinkBt = false;
     int pPromptKind = 0;
     std::string pPromptTitle, pPromptCode, pPromptHint, pPromptAccept;
 #endif
@@ -358,6 +380,12 @@ struct SlintOsd::Impl
             case OsdKey::Down:
                 bridge.set_prompt_focus(focus < 0 ? first : std::min(1, focus + 1));
                 break;
+            case OsdKey::Next: // a knob goes round
+                bridge.set_prompt_focus(focus < 0 || focus >= 1 ? first : focus + 1);
+                break;
+            case OsdKey::Prev:
+                bridge.set_prompt_focus(focus < 0 ? first : focus <= first ? 1 : focus - 1);
+                break;
             case OsdKey::Ok:
                 if (focus == 1)
                     bridge.invoke_prompt_cancel();
@@ -393,6 +421,12 @@ struct SlintOsd::Impl
             case OsdKey::Right:
                 osk.invoke_move(1, 0);
                 return;
+            case OsdKey::Next: // a knob walks every key in reading order
+                osk.invoke_step(1);
+                return;
+            case OsdKey::Prev:
+                osk.invoke_step(-1);
+                return;
             default:
                 break;
             }
@@ -423,12 +457,25 @@ struct SlintOsd::Impl
             }
             return;
         }
+        // The volume row's -/+ sit side by side: there Left/Right move
+        // between them (Left on "-" is still Back). A screen switched by an
+        // earlier key of this tick has not reported its focus yet.
+        const int stepper = bridge.get_screen() == pScreen ? bridge.get_stepper_focus() : -1;
+        if ((nav == OsdKey::Right && stepper == 0) || (nav == OsdKey::Left && stepper == 1))
+        {
+            dispatchKey(nav == OsdKey::Right ? slint::platform::key_codes::Tab
+                                             : slint::platform::key_codes::Backtab,
+                        repeat);
+            return;
+        }
         switch (nav)
         {
         case OsdKey::Down:
+        case OsdKey::Next: // a knob: the same focus chain, wrapping at its ends
             dispatchKey(slint::platform::key_codes::Tab, repeat);
             break;
         case OsdKey::Up:
+        case OsdKey::Prev:
             dispatchKey(slint::platform::key_codes::Backtab, repeat);
             break;
         case OsdKey::Ok:
@@ -443,7 +490,7 @@ struct SlintOsd::Impl
             if (!repeat && !ui->invoke_back() && ui_bridge::backgroundedSession())
                 ui_bridge::requestResume();
             break;
-        default: // Right, and typing outside the editor: nothing to act on
+        default: // Right elsewhere, and typing outside the editor: nothing to act on
             break;
         }
     }
@@ -452,6 +499,7 @@ struct SlintOsd::Impl
     void pump()
     {
         const auto &bridge = ui->global<Bridge>();
+        switched = false;
 
         const std::string status = get_var_status();
         if (status != pStatus)
@@ -470,6 +518,8 @@ struct SlintOsd::Impl
         {
             bridge.set_session_waiting(waiting);
             pWaiting = waiting;
+            if (!waiting && bridge.get_ring_row() == "resume")
+                ringGone(bridge);
         }
         const bool restartNeeded = ui_bridge::restartNeeded();
         if (restartNeeded != pRestartNeeded)
@@ -528,6 +578,19 @@ struct SlintOsd::Impl
             volumeBar = false;
             bridge.set_volume_bar(false);
         }
+        // How the phone is connected: the Home screen's icons.
+        const bool linkUsb = ui_bridge::phoneLinkUsb();
+        if (linkUsb != pLinkUsb)
+        {
+            pLinkUsb = linkUsb;
+            bridge.set_link_usb(linkUsb);
+        }
+        const bool linkWifi = ui_bridge::phoneLinkWifi();
+        if (linkWifi != pLinkWifi)
+        {
+            pLinkWifi = linkWifi;
+            bridge.set_link_wifi(linkWifi);
+        }
         if (Settings::wifiSsid.value != pSsid)
         {
             pSsid = Settings::wifiSsid.value;
@@ -549,6 +612,11 @@ struct SlintOsd::Impl
         if (screen != pScreen || modal != pModal)
         {
             focusSeed = true;
+            switched = true;
+            ringLost = false; // the switch re-seeds the ring anyway
+            // A screen that went away does not report losing focus.
+            bridge.set_stepper_focus(-1);
+            bridge.set_ring_row("");
 #ifdef USE_BLUETOOTH
             const bool btNow = screen == 4 || screen == 5;
             const bool btBefore = pScreen == 4 || pScreen == 5;
@@ -578,6 +646,9 @@ struct SlintOsd::Impl
 
         syncRows(*btPaired, s.paired);
         syncRows(*btFound, s.found);
+        const slint::SharedString ring = bridge.get_ring_row();
+        if (ringRowGone(ring, "paired:", s.paired) || ringRowGone(ring, "found:", s.found))
+            ringGone(bridge);
 
         BtRow current;
         bool present = false;
@@ -615,6 +686,11 @@ struct SlintOsd::Impl
         {
             pBtScanAllowed = s.scanAllowed;
             bridge.set_bt_scan_allowed(pBtScanAllowed);
+        }
+        if (s.phoneConnected != pLinkBt)
+        {
+            pLinkBt = s.phoneConnected;
+            bridge.set_link_bt(pLinkBt);
         }
         // Another dialog (or none): it starts without a keyboard ring.
         const int kind = (int)s.prompt.kind;
@@ -691,17 +767,18 @@ bool SlintOsd::beginDrm(int width, int height)
     bridge.on_resume([] { ui_bridge::requestResume(); });
     bridge.on_restart_now([] { ui_bridge::requestRestart(); });
     bridge.on_cycle_night([] {
-        // 0 day -> 1 night -> 2 auto -> 0. Only reaches the phone in the
-        // sensor batch at connect, so it needs a restart to take effect.
+        // 0 day -> 1 night -> 2 auto -> 0; a running session switches at once.
         char buffer[8];
         snprintf(buffer, sizeof(buffer), "%d", (int)((Settings::nightMode + 1) % 3));
-        persist("night-mode", buffer, true);
+        persist("night-mode", buffer, false);
+        ui_bridge::nightModeChanged();
     });
     bridge.on_cycle_fps([] {
         persist("aa-video-fps", Settings::aaFps >= 60 ? "30" : "60", true);
     });
     // Applies at once (no restart) and saves itself a moment later.
     bridge.on_volume_step([](int direction) { AudioVolume::instance().step(direction); });
+    bridge.on_volume_mute([] { AudioVolume::instance().toggleMute(); });
     Impl *impl = _impl;
     bridge.on_edit_field([impl](int id) {
         if (id >= 0 && id < FIELD_COUNT)
@@ -811,6 +888,14 @@ bool SlintOsd::tick(bool overVideo)
     if (_impl == nullptr || _impl->win == nullptr)
         return false;
     Impl &impl = *_impl;
+
+    // The ring's row was removed last tick and is destroyed by now: from
+    // nothing focused, Tab lands on the first row.
+    if (impl.ringLost)
+    {
+        impl.ringLost = false;
+        impl.dispatchKey(slint::platform::key_codes::Tab, false);
+    }
 
     // Touch -> pointer events, on this thread as Slint requires. A tap that
     // fit entirely between two ticks still delivers a press + release pair.

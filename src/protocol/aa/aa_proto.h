@@ -43,6 +43,7 @@ Bytes inputReportTouch(uint64_t timestamp, uint32_t x, uint32_t y, int action);
 Bytes inputReportMultiTouch(uint64_t timestamp, const TouchPoint *points, int count,
                             int action, int actionIndex);
 Bytes inputReportKey(uint64_t timestamp, uint32_t keycode, bool down);
+Bytes inputReportRelative(uint64_t timestamp, uint32_t keycode, int32_t delta);
 
 // sensor channel
 Bytes sensorResponse(int32_t status = 0);

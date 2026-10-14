@@ -162,7 +162,48 @@ uint64_t getNtp(const uint8_t *p)
 }
 constexpr uint8_t PT_REQUEST = 210;
 constexpr uint8_t PT_RESPONSE = 211;
+
+const char *MAIN_UUID = "b7e6c5a0-1111-4000-8000-000000000001";
+
+// The Night setting as CarPlay's appearance. The phone darkens by itself at
+// sunset where it is; the car's night mode can only add to that. The
+// display's appearance can override it: mode 0 light / 1 dark, setting
+// 1 = the driver's choice (Day stays light after sunset), 0 = automatic.
+struct Appearance
+{
+    int mode;
+    int setting;
+    bool night;
+};
+
+Appearance appearanceFor(int nightMode)
+{
+    if (nightMode == 1)
+        return {1, 1, true};
+    if (nightMode == 0)
+        return {0, 1, false};
+    return {0, 0, false};
+}
 } // namespace
+
+std::vector<Bytes> appearanceCommands(int nightMode)
+{
+    using V = cp_plist::Value;
+    const Appearance a = appearanceFor(nightMode);
+    V display = V::map();
+    display.set("uuid", V::str(MAIN_UUID));
+    display.set("appearanceMode", V::integer(a.mode));
+    display.set("appearanceSetting", V::integer(a.setting));
+    V update = V::map();
+    update.set("type", V::str("uiAppearanceUpdate"));
+    update.set("params", display);
+    V night = V::map();
+    night.set("nightMode", V::boolean(a.night));
+    V setNight = V::map();
+    setNight.set("type", V::str("setNightMode"));
+    setNight.set("params", night);
+    return {cp_plist::encode(update), cp_plist::encode(setNight)};
+}
 
 AvSession::AvSession(const Bytes &pairVerifyShared, const Config &cfg)
     : _cfg(cfg), _shared(pairVerifyShared)
@@ -1179,7 +1220,7 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
     // The accessory's full AV capabilities. Without this (displays / audio
     // formats / features / modes) the phone tears the session down after RECORD.
     // Mirrors LIVI cp/stack/getInfo.ts buildInfoPlist (main-screen only).
-    const char *MAIN_UUID = "b7e6c5a0-1111-4000-8000-000000000001";
+    const Appearance appearance = appearanceFor(Settings::nightMode);
 
     auto arr = [](std::vector<V> items) {
         V a = V::arr();
@@ -1198,6 +1239,9 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
     display.set("heightPhysical", V::integer(_cfg.screenHeightMm));
     display.set("features", V::integer(0x08 | 0x02)); // high-fidelity touch | knobs
     display.set("primaryInputDevice", V::integer(3));  // knobs (input refined later)
+    // Declaring the appearance is what lets uiAppearanceUpdate change it later.
+    display.set("uiAppearanceMode", V::integer(appearance.mode));
+    display.set("uiAppearanceSetting", V::integer(appearance.setting));
     // We advertise the "viewAreas" feature, so the display must carry the view
     // area geometry (a full-screen area + safe area). Omitting it while claiming
     // the feature makes the phone tear the session down after RECORD.
@@ -1315,6 +1359,7 @@ cp_rtsp::Response AvSession::handleInfo(const cp_rtsp::Request &)
     info.set("audioFormats", audioFormats);
     info.set("extendedFeatures", arr({V::str("vocoderInfo"), V::str("enhancedRequestCarUI")}));
     info.set("displays", arr({display}));
+    info.set("nightMode", V::boolean(appearance.night));
 
     // ── HID: a multitouch touchscreen (CarPlay needs an input device) ──
     auto fingerCollection = [&](int xMax, int yMax) {

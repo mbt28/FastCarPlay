@@ -128,6 +128,8 @@
 #define AA_KEY_MEDIA_PREVIOUS 88
 #define AA_KEY_MEDIA_PLAY 126
 #define AA_KEY_MEDIA_PAUSE 127
+// A rotary controller's turns: relative events, +1 per clockwise detent.
+#define AA_KEY_ROTARY_CONTROLLER 65536
 
 // AA PointerAction values (proto enum) for touch reports.
 #define AA_TOUCH_DOWN 0
