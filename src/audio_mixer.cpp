@@ -2,6 +2,9 @@
 
 #include <alsa/asoundlib.h>
 
+#include <algorithm>
+
+#include "audio_volume.h"
 #include "common/functions.h"
 #include "common/logger.h"
 #include "protocol/protocol_const.h"
@@ -19,6 +22,8 @@
 // Q15 duck ramp, one step per output frame (same rates as the old PcmAudio).
 #define FADE_IN_STEP_Q15 1
 #define FADE_OUT_STEP_Q15 3
+// Software volume ramp per output frame: a full swing in ~10 ms, no click.
+#define VOLUME_STEP_Q15 64
 // Aux silent this many periods before music ramps back (~85ms, matching the
 // old 10-segment release at 7.5ms voice segments).
 #define AUX_SILENT_RELEASE_PERIODS 4
@@ -221,6 +226,20 @@ int AudioMixer::renderSource(Source &s, int32_t *mix, int frames, int32_t &volQ1
     return frames;
 }
 
+void AudioMixer::applyVolume(int32_t *mix, int32_t targetQ15)
+{
+    for (int i = 0; i < MIX_PERIOD; i++)
+    {
+        if (_volumeQ15 < targetQ15)
+            _volumeQ15 = std::min(targetQ15, _volumeQ15 + VOLUME_STEP_Q15);
+        else if (_volumeQ15 > targetQ15)
+            _volumeQ15 = std::max(targetQ15, _volumeQ15 - VOLUME_STEP_Q15);
+        // The mix may exceed 16 bits before the final clamp: 64-bit product.
+        mix[2 * i] = (int32_t)(((int64_t)mix[2 * i] * _volumeQ15) >> 15);
+        mix[2 * i + 1] = (int32_t)(((int64_t)mix[2 * i + 1] * _volumeQ15) >> 15);
+    }
+}
+
 void AudioMixer::capAuxQueue()
 {
     const Message *head = _aux.q->peek();
@@ -274,6 +293,11 @@ void AudioMixer::loop()
             _mainTargetQ15 = 32768;
             _auxSilentPeriods = AUX_SILENT_RELEASE_PERIODS;
             idlePeriods = 0;
+            // Nothing was playing: the software volume starts at its level,
+            // not ramping from an old one. And a card that was unplugged and
+            // came back gets its volume again (from the main loop).
+            _volumeQ15 = AudioVolume::instance().softwareGainQ15();
+            AudioVolume::instance().outputOpened();
         }
 
         // Source liveness: a dry source needs a short prefill before it starts
@@ -332,6 +356,12 @@ void AudioMixer::loop()
             else if (rendered > 0)
                 s->dryPeriods = 0;
         }
+
+        // Software volume, for cards without a usable mixer control (see
+        // AudioVolume); at unity it costs nothing.
+        const int32_t volumeQ15 = AudioVolume::instance().softwareGainQ15();
+        if (volumeQ15 != 32768 || _volumeQ15 != 32768)
+            applyVolume(mix, volumeQ15);
 
         for (int i = 0; i < MIX_PERIOD * MIX_CHANNELS; i++)
         {

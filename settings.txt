@@ -113,6 +113,23 @@
 # ALSA PCM the in-app mixer opens (playback and capture).
 #alsa-device = hw:0,0
 
+# Output volume, 0-100 %. Settings > Audio and the volume keys of a Bluetooth
+# keyboard/remote save it to ~/.fastcarplay/usersettings.txt, which overrides
+# any value set here; -1 (the default) takes over the card's current level.
+#volume = -1
+
+# What sets the volume: auto (Master or PCM; else the card's only output amp,
+# e.g. Headphone; else a shared digital control such as Digital, DAC or
+# Playback; else a software gain), software, or the exact name of an ALSA
+# mixer control (as alsamixer shows it).
+#volume-control = auto
+
+# ALSA control device for that; empty means the card of alsa-device.
+#volume-device =
+
+# Percent per volume key press or -/+ tap.
+#volume-step = 5
+
 # Buffers (in 10 ms periods) to hold before starting playback: music / call.
 #audio-buffer-wait = 2
 #audio-buffer-wait-call = 6

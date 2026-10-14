@@ -68,6 +68,8 @@ private:
     // per-frame Q15 gain ramp. Returns the frames actually rendered (the rest
     // stay silent when the source runs dry mid-period).
     int renderSource(Source &s, int32_t *mix, int frames, int32_t &volQ15, int32_t targetQ15);
+    // The software volume over one period, ramped towards targetQ15.
+    void applyVolume(int32_t *mix, int32_t targetQ15);
     // Drop stale aux segments past the voice latency cap.
     void capAuxQueue();
 
@@ -77,6 +79,7 @@ private:
     Source _main, _aux;
     int32_t _mainVolQ15 = 32768;  // ducked by aux voice
     int32_t _mainTargetQ15 = 32768;
+    int32_t _volumeQ15 = 32768;   // software volume, as ramped so far
     int _auxSilentPeriods = 0;
 };
 

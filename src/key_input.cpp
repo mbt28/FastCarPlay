@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "audio_volume.h"
 #include "common/clock.h"
 #include "common/logger.h"
 #include "common/threading.h"
@@ -39,6 +40,10 @@ constexpr int LONG_BITS = 8 * sizeof(long);
 constexpr uint32_t REPEAT_DELAY_MS = 400;
 constexpr uint32_t REPEAT_PHONE_MS = 150;
 constexpr uint32_t REPEAT_UI_MS = 120;
+constexpr uint32_t REPEAT_VOLUME_MS = 150;
+// A held volume key repeats this long at most (0 to 100 % takes ~3 s); then
+// it needs a fresh press.
+constexpr uint32_t VOLUME_REPEAT_FOR_MS = 4000;
 
 // devtmpfs creates the node before it is always openable.
 constexpr uint32_t OPEN_RETRY_MS = 100;
@@ -122,6 +127,22 @@ int phoneButton(int code)
     case KEY_SEARCH:
     case KEY_ASSISTANT:
         return BTN_SIRI;
+    default:
+        return 0;
+    }
+}
+
+// Volume keys set the head unit's own volume: +1 up, -1 down, 2 mute.
+int volumeKey(int code)
+{
+    switch (code)
+    {
+    case KEY_VOLUMEUP:
+        return 1;
+    case KEY_VOLUMEDOWN:
+        return -1;
+    case KEY_MUTE:
+        return 2;
     default:
         return 0;
     }
@@ -219,7 +240,7 @@ bool hasUsefulKeys(int fd)
     for (int code = 1; code < KEY_CNT; code++)
         if (testBit(keys, code) && (phoneButton(normalize(code)) != 0 ||
                                     uiKey(normalize(code)) != OsdKey::None ||
-                                    typedChar(code, false, false) != 0))
+                                    typedChar(code, false, false) != 0 || volumeKey(code) != 0))
             return true;
     return false;
 }
@@ -266,7 +287,9 @@ struct KeyInput::Impl
         int button;         // phone route: the BTN sent on press
         bool selectToPhone; // BTN_SELECT_DOWN went out: needs its UP
         uint32_t nextRepeat;
-        uint32_t period; // 0: no repeat
+        uint32_t period;    // 0: no repeat
+        int8_t volume = 0;  // a held volume key: +1 / -1, on no route
+        uint32_t until = 0; // a volume repeat stops by itself here
     };
 
     struct Retry
@@ -300,13 +323,14 @@ struct KeyInput::Impl
 
     // Terminal release for held keys (all, or one device's): a select held on
     // the phone is let go there, a key held on a screen gets its release.
-    // Their own later releases then find nothing and are swallowed.
-    void releaseHeld(int fd)
+    // Their own later releases then find nothing and are swallowed. A held
+    // volume key belongs to no route: a route change (keepVolume) leaves it.
+    void releaseHeld(int fd, bool keepVolume = false)
     {
         for (size_t i = held.size(); i-- > 0;)
         {
             const Held &h = held[i];
-            if (fd >= 0 && h.fd != fd)
+            if ((fd >= 0 && h.fd != fd) || (keepVolume && h.volume))
                 continue;
             if (h.toUi && sink)
                 sink(h.nav, h.ch, 0);
@@ -322,7 +346,7 @@ struct KeyInput::Impl
         if (now == routedToUi)
             return;
         routedToUi = now;
-        releaseHeld(-1);
+        releaseHeld(-1, true);
     }
 
     void press(Device &dev, int code)
@@ -336,6 +360,28 @@ struct KeyInput::Impl
         // A second press without a release in between: the old entry must
         // not outlive this one (and keep repeating).
         release(dev, code);
+        if (const int v = volumeKey(code))
+        {
+            // The head unit's volume, whatever is on screen; up/down repeat.
+            // Any volume key first stops a repeat still running -- from a
+            // key whose release got lost (link loss, a remote that drops
+            // key-ups), which would otherwise drive the volume to its end.
+            for (size_t i = held.size(); i-- > 0;)
+                if (held[i].volume)
+                    held.erase(held.begin() + (long)i);
+            if (v == 2)
+            {
+                AudioVolume::instance().toggleMute();
+                return;
+            }
+            AudioVolume::instance().step(v);
+            Held h{dev.fd, code, false, OsdKey::None, 0, 0, false, now + REPEAT_DELAY_MS,
+                   REPEAT_VOLUME_MS};
+            h.volume = (int8_t)v;
+            h.until = now + VOLUME_REPEAT_FOR_MS;
+            held.push_back(h);
+            return;
+        }
         Held h{dev.fd, code, false, OsdKey::None, 0, 0, false, 0, 0};
         if (routedToUi)
         {
@@ -638,7 +684,14 @@ struct KeyInput::Impl
         {
             if (!h.period || !due(now, h.nextRepeat))
                 continue;
-            if (h.toUi)
+            if (h.volume && due(now, h.until))
+            {
+                h.period = 0; // held too long: wait for a fresh press
+                continue;
+            }
+            if (h.volume)
+                AudioVolume::instance().step(h.volume);
+            else if (h.toUi)
                 sink(h.nav, h.ch, 2);
             else
                 sendPhone(h.button);

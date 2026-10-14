@@ -140,6 +140,7 @@ Alt+SysRq+B on a paired keyboard would reboot the head unit.
 | Esc, Back | back | back (cancels a dialog or the editor) |
 | Backspace | -- | delete a character in the editor, else back |
 | Home, Home page | home | home screen |
+| Volume up / down (repeats), Mute | the head unit's volume | the head unit's volume |
 | Play/Pause, Play, Pause | media play/pause | (phone) |
 | Next / Previous song | next / previous track | (phone) |
 | Voice command, Search, Assistant | Siri / assistant | (phone) |

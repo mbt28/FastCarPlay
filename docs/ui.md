@@ -59,12 +59,23 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
 
 - **Home**: `<source> - <status|ready>` header; a double-height Resume row
   only while a connected session waits behind the UI; Settings.
-- **Settings**: Back on top (easiest reach), Source, Wireless, Bluetooth
-  (builds with Bluetooth support only; only four rows fit above the fold,
-  so connectivity goes first), Night
+- **Settings**: Back on top (easiest reach), Volume, Source, Wireless,
+  Bluetooth (builds with Bluetooth support only; only four rows fit above
+  the fold: the volume, then connectivity), Night
   (day/night/auto cycle), Video (30/60 fps), and Restart now -- which
   appears only once a staged change needs it. Staged changes never drop a
   live session; the header says "restart to apply".
+- **Volume** (Settings row with -/+, and the volume / mute keys of a
+  Bluetooth keyboard or remote, whatever is on screen): applies at once and
+  is saved 2 s after the last change. `src/audio_volume.cpp` sets it through
+  the card's own playback control when it has one -- ALSA's simple mixer,
+  any Linux card: Master or PCM; else the card's only output amp
+  (Headphone, Speaker, Line Out...); else a shared digital control
+  (Digital, DAC, Playback); or `volume-control` -- mapped through its dB
+  scale (cubic, as alsamixer and PulseAudio do), muted by its switch or a
+  silent bottom step; otherwise a ramped gain in AudioMixer does the work.
+  The first start takes over the card's current level without writing it.
+  Mute is never saved.
 - **Source**: radio list of the four backends; selecting persists
   `protocol` to usersettings and stages a restart.
 - **Wireless**: SSID / passphrase / BT name, each opening a

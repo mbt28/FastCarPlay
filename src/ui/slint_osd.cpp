@@ -17,6 +17,7 @@
 #include "common/logger.h"
 #include "drm_display.h"
 #include "protocol/wifi_ap.h"
+#include "audio_volume.h"
 #include "settings.h"
 #include "ui_bridge.h"
 
@@ -191,6 +192,8 @@ struct SlintOsd::Impl
     // Last pushed property values, so an unchanged tick sets nothing and the
     // renderer stays idle (every overlay commit costs real time on the F1C).
     std::string pStatus{"\x01"}, pSource, pNight, pFps, pSsid, pPass, pBt;
+    bool volumeSeen = false;
+    uint32_t pVolumeGen = 0;
     int pProtocol = -1;
     bool pWaiting = false, pRestartNeeded = false;
 
@@ -483,6 +486,20 @@ struct SlintOsd::Impl
             bridge.set_fps_label(slint::SharedString(fps));
             pFps = fps;
         }
+        // Volume keys change it from another thread: one atomic load per tick.
+        const AudioVolume &volume = AudioVolume::instance();
+        const uint32_t volumeGen = volume.generation();
+        if (!volumeSeen || volumeGen != pVolumeGen)
+        {
+            volumeSeen = true;
+            pVolumeGen = volumeGen;
+            char label[16];
+            if (volume.muted())
+                snprintf(label, sizeof(label), "Muted");
+            else
+                snprintf(label, sizeof(label), "%d%%", volume.level());
+            bridge.set_volume_label(slint::SharedString(label));
+        }
         if (Settings::wifiSsid.value != pSsid)
         {
             pSsid = Settings::wifiSsid.value;
@@ -655,6 +672,8 @@ bool SlintOsd::beginDrm(int width, int height)
     bridge.on_cycle_fps([] {
         persist("aa-video-fps", Settings::aaFps >= 60 ? "30" : "60", true);
     });
+    // Applies at once (no restart) and saves itself a moment later.
+    bridge.on_volume_step([](int direction) { AudioVolume::instance().step(direction); });
     Impl *impl = _impl;
     bridge.on_edit_field([impl](int id) {
         if (id >= 0 && id < FIELD_COUNT)
