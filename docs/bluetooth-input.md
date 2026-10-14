@@ -130,10 +130,11 @@ Only Bluetooth input devices are read (`EVIOCGID` bus `BUS_BLUETOOTH`), and
 each is grabbed (`EVIOCGRAB`): no other kernel handler sees its keys, which
 matters because Magic SysRq is enabled on the image -- without the grab,
 Alt+SysRq+B on a paired keyboard would reboot the head unit. A device counts
-when it has keys this table uses, a hat, or a scroll wheel / dial -- so a
+when it has keys this table uses, a hat, or a scroll wheel -- so a
 keyboard's touchpad half ("i4 Mouse") is read for its wheel and wheel click,
 which together act as a rotary knob with a centre press. Its pointer motion
-and left/right buttons are ignored.
+and left/right buttons are ignored. Dials (`REL_DIAL`) are not read: their
+counts are not detents (a Surface Dial makes 3600 a turn).
 
 | Key | To the phone | In FastCarPlay's screens |
 |---|---|---|
@@ -145,7 +146,7 @@ and left/right buttons are ignored.
 | Backspace | -- | delete a character in the editor, else back |
 | Home, Home page | home | home screen |
 | Volume up / down (repeats), Mute | the head unit's volume | the head unit's volume |
-| Scroll wheel / dial (one step per detent) | knob rotation (CarPlay) / rotary controller (AA) | next / previous: rows, the editor's keys, a dialog's buttons |
+| Scroll wheel (one step per detent) | knob rotation (CarPlay) / rotary controller (AA) | next / previous: rows, the editor's keys, a dialog's buttons |
 | Wheel click (middle button) | select, as Enter | activate, as Enter |
 | Play/Pause, Play, Pause | media play/pause | (phone) |
 | Next / Previous song | next / previous track | (phone) |
@@ -197,7 +198,7 @@ Board prerequisites: `bt status` shows bluetoothd running;
    and Enter saves, and the arrows reach every on-screen key plus Cancel and
    OK (Enter presses the ringed one). With CarPlay/AA projecting, arrows/Enter
    drive the phone's focus, media keys work, letters do nothing.
-4. **Wheel** (a keyboard's scroll wheel or a dial): turning walks the ring
+4. **Wheel** (a keyboard's or mouse's scroll wheel): turning walks the ring
    through every row, the editor's keys and a dialog's buttons, wrapping at
    the ends; the click activates. With CarPlay/AA projecting it moves the
    phone's focus through lists, towards you = down.

@@ -53,8 +53,8 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   removed row never reports losing focus, so such rows report holding it
   (`ring-row`). A held Backspace keeps deleting only if it was pressed in
   the editor, not when it closed a dialog over it.
-- **Rotary knob** (a scroll wheel or dial on a Bluetooth device; its click
-  is Enter): one detent is `Next`/`Prev`. On the lists that is Tab/Backtab,
+- **Rotary knob** (a scroll wheel on a Bluetooth device; its click is
+  Enter): one detent is `Next`/`Prev`. On the lists that is Tab/Backtab,
   wrapping at the ends; in the editor the ring walks every key in reading
   order (Cancel, the key rows, the bottom row ending in OK) and wraps
   (`Osk.step()`); in a dialog it cycles the buttons. Every screen starts

@@ -263,13 +263,15 @@ bool hasHat(int fd)
     return testBit(abs, ABS_HAT0X) || testBit(abs, ABS_HAT0Y);
 }
 
-// A scroll wheel or a dial: used as a rotary knob.
+// A scroll wheel: used as a rotary knob. The kernel reports REL_WHEEL in
+// detents, high-resolution wheels included. Dials (REL_DIAL) are not read:
+// their counts are not detents (a Surface Dial makes 3600 a turn).
 bool hasWheel(int fd)
 {
     unsigned long rel[(REL_CNT + LONG_BITS - 1) / LONG_BITS] = {0};
     if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rel)), rel) < 0)
         return false;
-    return testBit(rel, REL_WHEEL) || testBit(rel, REL_DIAL);
+    return testBit(rel, REL_WHEEL);
 }
 
 bool due(uint32_t now, uint32_t deadline)
@@ -514,13 +516,11 @@ struct KeyInput::Impl
             press(dev, dir < 0 ? negative : positive);
     }
 
-    // A wheel or dial as a rotary knob, one step per detent. A wheel counts
-    // away from the user as positive -- "previous", like scrolling up -- a
-    // dial counts clockwise as positive, "next".
-    void onRotate(int axis, int value)
+    // A wheel as a rotary knob, one step per detent. It counts away from the
+    // user as positive: "previous", like scrolling up.
+    void onRotate(int value)
     {
-        int steps = axis == REL_WHEEL ? -value : value; // > 0: next
-        steps = std::clamp(steps, -8, 8);               // a fast spin, in one event
+        const int steps = std::clamp(-value, -8, 8); // > 0: next; a fast spin, in one event
         if (routedToUi)
         {
             for (int i = 0; i < std::abs(steps); i++)
@@ -723,8 +723,8 @@ struct KeyInput::Impl
                     onKey(dev, e.code, e.value);
                 else if (e.type == EV_ABS && (e.code == ABS_HAT0X || e.code == ABS_HAT0Y))
                     onHat(dev, e.code, e.value);
-                else if (e.type == EV_REL && (e.code == REL_WHEEL || e.code == REL_DIAL))
-                    onRotate(e.code, e.value);
+                else if (e.type == EV_REL && e.code == REL_WHEEL)
+                    onRotate(e.value);
             }
         }
     }
