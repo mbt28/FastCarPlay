@@ -168,3 +168,9 @@
 # Run a script when a phone connects / disconnects.
 #on-connect-script =
 #on-disconnect-script =
+
+# What Settings > System > Reboot / Shut down run, once the app has closed
+# down cleanly. If one fails, the app starts again instead of leaving the
+# screen dark.
+#reboot-command = reboot
+#shutdown-command = poweroff

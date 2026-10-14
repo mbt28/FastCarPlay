@@ -56,6 +56,17 @@ void setPhoneLink(bool usb, bool wifi);
 bool phoneLinkUsb();
 bool phoneLinkWifi();
 
+// Settings > System: reboot or shut down the head unit. The loops exit and
+// main runs the system's command (reboot-command / shutdown-command).
+enum class Power
+{
+    None,
+    Reboot,
+    Shutdown,
+};
+void requestPower(Power action);
+Power powerRequested();
+
 // A change is staged and needs a restart. Nothing restarts under the driver:
 // the settings header says so and an explicit "Restart now" appears.
 void setRestartNeeded();

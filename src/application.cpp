@@ -636,8 +636,11 @@ void Application::loopDrm()
                 uiShowsHome = true;
                 osdShown = false;
 
-                if (ui_bridge::restartRequested())
-                    _active = false; // main re-execs into the chosen source
+                // main re-execs into the chosen source, or hands over to the
+                // system's reboot / poweroff.
+                if (ui_bridge::restartRequested() ||
+                    ui_bridge::powerRequested() != ui_bridge::Power::None)
+                    _active = false;
             }
             else
 #endif

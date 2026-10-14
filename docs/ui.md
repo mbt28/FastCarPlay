@@ -75,9 +75,18 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   UI; Settings.
 - **Settings**: Back on top (easiest reach), Audio, Source, Wireless
   (only four rows fit above the fold: audio, then connectivity), Night
-  (day/night/auto cycle, below), Video (30/60 fps), and Restart now --
-  which appears only once a staged change needs it. Staged changes never
-  drop a live session; the header says "restart to apply".
+  (day/night/auto cycle, below), Video (30/60 fps), System, and Restart
+  now -- which appears only once a staged change needs it. Staged changes
+  never drop a live session; the header says "restart to apply".
+- **System** (screen 7): Reboot and Shut down. Each asks first, in the
+  dialog below; for a knob or Enter the ring starts on Cancel, and a press
+  with no ring only shows it, so a double press cannot take the head unit
+  down. The question does not wait behind the video. Then the app closes
+  down cleanly (phone session, audio, the saved volume) and `main` runs the
+  system's own command -- `reboot-command` / `shutdown-command`, `reboot` and
+  `poweroff` by default -- so init stops every service. Should the command
+  fail, or the system not go down within 60 s, the app starts again rather
+  than leave the screen dark.
 - **Night** applies at once, to a running session too. CarPlay: Night
   darkens it, Day keeps it light even after sunset (the display's
   appearance, `uiAppearanceUpdate`), Auto leaves it to the phone, which
@@ -118,15 +127,16 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   pair from their own settings.
 - **Bluetooth device** (screen 5): Connect / Disconnect and Forget (asks
   first). Forgetting the device on screen returns to the list.
-- **Pairing dialog**: replaces the screen (it wins over the editor -- pairing
-  has a deadline). Shows the code to type on the keyboard (40 px), the
-  progress BlueZ reports, or a yes/no question; Cancel always exits. When
-  video takes the screen the dialog stays open behind it, ready to finish
-  when the UI is back (BlueZ's timeouts end it otherwise).
+- **Dialog**: replaces the screen (it wins over the editor -- pairing has a
+  deadline). Shows Bluetooth's prompt -- the code to type on the keyboard
+  (40 px), the progress BlueZ reports, or a yes/no question -- or else the
+  System screen's question; Cancel always exits. When video takes the
+  screen a Bluetooth dialog stays open behind it, ready to finish when the
+  UI is back (BlueZ's timeouts end it otherwise).
 - **Navigation state** lives in `Bridge.screen` (0 home, 1 settings,
-  2 source, 3 wireless, 4 bluetooth, 5 bt device, 6 audio) so C++ can
-  follow it (discovery runs only while 4/5 is visible) and drive it (Home
-  key).
+  2 source, 3 wireless, 4 bluetooth, 5 bt device, 6 audio, 7 system) so C++
+  can follow it (discovery runs only while 4/5 is visible) and drive it
+  (Home key).
 
 ## Design rules (inherited, still binding)
 
