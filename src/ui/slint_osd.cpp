@@ -95,6 +95,14 @@ const char *nightModeName(int mode)
 // Keyboard focus is only re-seeded for someone actually using a keyboard.
 constexpr uint32_t KEY_RECENT_MS = 10000;
 
+// The volume bar stays up this long after the last change.
+constexpr uint32_t VOLUME_BAR_MS = 2000;
+
+bool due(uint32_t now, uint32_t deadline)
+{
+    return (int32_t)(now - deadline) >= 0;
+}
+
 #ifdef USE_BLUETOOTH
 BtRow toRow(const bt::DeviceRow &d)
 {
@@ -194,6 +202,8 @@ struct SlintOsd::Impl
     std::string pStatus{"\x01"}, pSource, pNight, pFps, pSsid, pPass, pBt;
     bool volumeSeen = false;
     uint32_t pVolumeGen = 0;
+    bool volumeBar = false; // the bar is up (in the scene)
+    uint32_t volumeBarUntil = 0;
     int pProtocol = -1;
     bool pWaiting = false, pRestartNeeded = false;
 
@@ -487,10 +497,12 @@ struct SlintOsd::Impl
             pFps = fps;
         }
         // Volume keys change it from another thread: one atomic load per tick.
+        // Every change after the first look brings the volume bar up.
         const AudioVolume &volume = AudioVolume::instance();
         const uint32_t volumeGen = volume.generation();
         if (!volumeSeen || volumeGen != pVolumeGen)
         {
+            const bool change = volumeSeen;
             volumeSeen = true;
             pVolumeGen = volumeGen;
             char label[16];
@@ -499,6 +511,22 @@ struct SlintOsd::Impl
             else
                 snprintf(label, sizeof(label), "%d%%", volume.level());
             bridge.set_volume_label(slint::SharedString(label));
+            bridge.set_volume_level(volume.level());
+            bridge.set_volume_muted(volume.muted());
+            if (change)
+            {
+                volumeBarUntil = mono_ms() + VOLUME_BAR_MS;
+                if (!volumeBar)
+                {
+                    volumeBar = true;
+                    bridge.set_volume_bar(true);
+                }
+            }
+        }
+        if (volumeBar && due(mono_ms(), volumeBarUntil))
+        {
+            volumeBar = false;
+            bridge.set_volume_bar(false);
         }
         if (Settings::wifiSsid.value != pSsid)
         {
@@ -760,7 +788,25 @@ void SlintOsd::pointer(int x, int y, bool pressed)
         _pressSeen = true;
 }
 
-bool SlintOsd::tick()
+bool SlintOsd::overVideo(int &x, int &y, int &w, int &h)
+{
+    if (_impl == nullptr || _impl->win == nullptr)
+        return false;
+    const Impl &impl = *_impl;
+    // A change the next tick() has not pumped yet brings the bar up too.
+    const bool pending =
+        impl.volumeSeen && AudioVolume::instance().generation() != impl.pVolumeGen;
+    if (!pending && !(impl.volumeBar && !due(mono_ms(), impl.volumeBarUntil)))
+        return false;
+    const auto &bar = impl.ui->global<VolumeBar>();
+    x = (int)bar.get_x();
+    y = (int)bar.get_y();
+    w = (int)bar.get_width();
+    h = (int)bar.get_height();
+    return true;
+}
+
+bool SlintOsd::tick(bool overVideo)
 {
     if (_impl == nullptr || _impl->win == nullptr)
         return false;
@@ -815,11 +861,14 @@ bool SlintOsd::tick()
     }
     slint::platform::update_timers_and_animations();
 
-    const bool fullPush = impl.fullPush;
+    // Over video only the bar's window is up: a pending whole-frame push
+    // waits for the screens (copying 750 KB here would be wasted work).
+    const bool fullPush = impl.fullPush && !overVideo;
     if (!impl.win->dirty && !impl.win->window().has_active_animations() && !fullPush)
         return false;
     impl.win->dirty = false;
-    impl.fullPush = false;
+    if (fullPush)
+        impl.fullPush = false;
 
     // ReusedBuffer: the buffer always holds the complete current frame, the
     // renderer only repaints what changed and reports where.

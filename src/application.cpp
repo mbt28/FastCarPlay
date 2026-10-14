@@ -627,8 +627,8 @@ void Application::loopDrm()
             touchInput.routeToUi(false); // video is up: touch goes to the phone
             keyInput.routeToUi(false);
 #endif
-            // Video plays below; the overlay hides entirely.
-            if (uiShowsHome || osdShown)
+            // Video plays below; the screens give way.
+            if (uiShowsHome)
             {
                 drm_display::uiHide();
                 osdShown = false;
@@ -638,6 +638,23 @@ void Application::loopDrm()
 #endif
             }
             uiShowsHome = false;
+#ifdef USE_OSD_UI
+            // The volume bar over the video: a small window of the overlay
+            // plane, composited by the display engine -- the video frames and
+            // their path are untouched. Rendered before it is shown, hidden
+            // before it is redrawn (never a frame of a screen over the video),
+            // and neither commit waits: a pending video flip only means
+            // trying again next turn.
+            int barX, barY, barW, barH;
+            if (osd.active() && osd.overVideo(barX, barY, barW, barH))
+            {
+                osd.tick(true);
+                if (!osdShown)
+                    osdShown = drm_display::uiShowWindow(barX, barY, barW, barH, false);
+            }
+            else if (osdShown && drm_display::uiHide(false))
+                osdShown = false;
+#endif
         }
 
         // Drain the buffer so a buffering (software) decoder can't stall; the

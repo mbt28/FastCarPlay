@@ -47,8 +47,14 @@ public:
 
     // Pumps app state into the UI, dispatches input, runs timers/animations
     // and renders what changed. Returns true when the overlay buffer changed
-    // and the caller should uiShow().
-    bool tick();
+    // and the caller should uiShow(). overVideo: only a window of the plane
+    // is up (see overVideo()) -- a whole-frame push is left for the screens.
+    bool tick(bool overVideo = false);
+
+    // What to show over live video right now -- the volume bar, for a
+    // moment after a volume change (also one not tick()ed in yet) -- and
+    // where: the overlay plane's window. Cheap enough to ask every loop turn.
+    bool overVideo(int &x, int &y, int &w, int &h);
 
     // Push the whole frame to the plane on the next tick (backend transition:
     // the renderer's buffer always holds the complete current frame).
