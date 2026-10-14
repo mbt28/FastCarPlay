@@ -181,6 +181,7 @@ void Application::startDecoder(IDecoder &decoder, IConnection &protocol, AVCodec
     // stream queue is bounded, so the unconsumed frames just get dropped.
     log_w("No presentable decoder for %s on this video path -- video disabled",
           avcodec_get_name(codecId));
+    protocol.videoStream.close(); // no consumer: the stream reader must not wait on it
 }
 
 void Application::publishStatus(IConnection &protocol)

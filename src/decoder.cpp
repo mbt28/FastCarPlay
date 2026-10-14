@@ -25,6 +25,7 @@ void Decoder::start(AtomicQueue<Message> *data, AVCodecID codecId, bool)
     buffer.reset();
     _data = data;
     _codecId = codecId;
+    _data->open();
     _active = true;
     _thread = std::thread(&Decoder::runner, this);
 }
@@ -34,7 +35,7 @@ void Decoder::stop()
     if (!_active)
         return;
     _active = false;
-    _data->notify();
+    _data->close();
     if (_thread.joinable())
         _thread.join();
 }
@@ -109,6 +110,7 @@ void Decoder::runner()
     if (!_context)
     {
         log_e("Can't find decoder for codec %s", avcodec_get_name(_codecId));
+        _data->close(); // no consumer: the stream reader must not wait on it
         return;
     }
     std::string codec = _context->codec->name;
@@ -138,6 +140,7 @@ void Decoder::runner()
         }
         av_parser_close(parser);
     }
+    _data->close(); // stopped or failed: nothing consumes the queue any more
     avcodec_free_context(&_context);
     _context = nullptr;
 }

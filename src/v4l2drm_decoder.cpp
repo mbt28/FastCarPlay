@@ -106,6 +106,8 @@ void V4l2DrmDecoder::start(AtomicQueue<Message> *data, AVCodecID codecId, bool r
     // Counted from here, so frames dropped while setup() runs (the queue
     // fills before the first pop) also trigger a resync.
     _dropsAtStart = data ? data->drops() : 0;
+    if (_data)
+        _data->open();
     _active = true;
     _thread = std::thread(&V4l2DrmDecoder::runner, this);
 }
@@ -116,7 +118,7 @@ void V4l2DrmDecoder::stop()
         return;
     _active = false;
     if (_data)
-        _data->notify();
+        _data->close();
     if (_thread.joinable())
         _thread.join();
 }
@@ -317,6 +319,7 @@ void V4l2DrmDecoder::runner()
         log_w("[V4L2-DRM] hardware decode unavailable for %s, falling back to software",
               avcodec_get_name(_codecId));
         _failed.store(true);
+        _data->close();
         teardown();
         return;
     }
@@ -328,6 +331,9 @@ void V4l2DrmDecoder::runner()
     if (frame) av_frame_free(&frame);
     if (packet) av_packet_free(&packet);
 
+    // Nothing consumes the queue any more (stopped, or given up): don't let
+    // the stream reader block on it.
+    _data->close();
     teardown();
 }
 
