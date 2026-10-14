@@ -28,9 +28,10 @@ aa_aaw_test: aa_aaw_test.cpp
 
 # Smoke-test the Bluetooth D-Bus service against a live BlueZ (run as root).
 aa_bt_test: aa_bt_test.cpp
-	$(CXX) $(CXXFLAGS) -DUSE_AA_WIRELESS -I../src $(shell pkg-config --cflags dbus-1) aa_bt_test.cpp \
-	  $(AA_DIR)/aa_bluetooth.cpp $(AA_DIR)/aa_aaw.cpp ../src/settings.cpp ../src/common/logger.cpp \
-	  -o $(OUT_DIR)/aa_bt_test $(LDFLAGS) $(shell pkg-config --libs dbus-1) -lbluetooth -pthread
+	$(CXX) $(CXXFLAGS) -DUSE_AA_WIRELESS -DUSE_BLUETOOTH -I../src $(shell pkg-config --cflags dbus-1) aa_bt_test.cpp \
+	  $(AA_DIR)/aa_bluetooth.cpp $(AA_DIR)/aa_aaw.cpp ../src/bluetooth/bt_manager.cpp \
+	  ../src/settings.cpp ../src/common/logger.cpp \
+	  -o $(OUT_DIR)/aa_bt_test $(LDFLAGS) $(shell pkg-config --libs dbus-1) -pthread
 
 # Round-trip for the user-settings override layer (UI persistence).
 settings_user_test: settings_user_test.cpp
@@ -147,9 +148,11 @@ cp_serve: cp_serve.cpp
 	  -o $(OUT_DIR)/cp_serve $(LDFLAGS) $(shell pkg-config --libs openssl libavcodec libavutil) -pthread
 
 # cp_wireless_serve -- live wireless CarPlay daemon (BT profiles + handoff +
-# :7000 server). Needs dbus/bluez; enable the Bluetooth layer with USE_CP_WIRELESS.
+# :7000 server). Needs dbus/bluez; enable the Bluetooth layer with USE_CP_WIRELESS
+# (plus USE_BLUETOOTH for the app's manager, which owns the pairing agent).
 cp_wireless_serve: cp_wireless_serve.cpp
-	$(CXX) $(CXXFLAGS) -DUSE_CP_WIRELESS -I../src $(shell pkg-config --cflags dbus-1) cp_wireless_serve.cpp \
+	$(CXX) $(CXXFLAGS) -DUSE_CP_WIRELESS -DUSE_BLUETOOTH -I../src $(shell pkg-config --cflags dbus-1) cp_wireless_serve.cpp \
+	  ../src/bluetooth/bt_manager.cpp \
 	  $(CP_DIR)/cp_bluetooth.cpp $(CP_DIR)/cp_carplay_session.cpp $(CP_DIR)/cp_iap2_link.cpp \
 	  $(CP_DIR)/cp_carplay_msg.cpp $(CP_DIR)/cp_iap2.cpp \
 	  $(CP_DIR)/cp_mdns.cpp $(CP_DIR)/cp_server.cpp \

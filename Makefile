@@ -58,7 +58,7 @@ endif
 # runtime, hostapd + dnsmasq. Without it, protocol = aa-wireless is unavailable.
 ifeq ($(USE_AA_WIRELESS),1)
 CXXCOMMON += -DUSE_AA_WIRELESS $(shell $(PKG_CONFIG) --cflags dbus-1)
-LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1) -lbluetooth
+LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1)
 endif
 
 # Wireless CarPlay (protocol = carplay-wireless): the iPhone bootstrap over
@@ -67,6 +67,14 @@ endif
 # bluez, and at runtime hostapd + dnsmasq + the MFi auth chip on i2c).
 ifeq ($(USE_CP_WIRELESS),1)
 CXXCOMMON += -DUSE_CP_WIRELESS $(shell $(PKG_CONFIG) --cflags dbus-1)
+LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1)
+endif
+
+# Bluetooth (BlueZ over D-Bus): the app-wide manager -- the one pairing agent
+# and HID keyboards/remotes (src/bluetooth). On whenever D-Bus is in the build
+# (the wireless backends need it anyway), or explicitly with USE_BLUETOOTH=1.
+ifneq ($(filter 1,$(USE_AA_WIRELESS) $(USE_CP_WIRELESS) $(USE_BLUETOOTH)),)
+CXXCOMMON += -DUSE_BLUETOOTH $(shell $(PKG_CONFIG) --cflags dbus-1)
 LDOPTIONS += $(shell $(PKG_CONFIG) --libs dbus-1)
 endif
 

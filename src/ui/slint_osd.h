@@ -6,12 +6,17 @@
 // dirty rows are copied into the overlay plane (uiWriteRect). The caller owns
 // presentation (drm_display::uiShow() when tick() reports a change).
 //
-// Slint is single-threaded: pointer() may be called from the touch thread
-// (it only records state); everything else must stay on the loop thread.
+// Slint is single-threaded: pointer() and key() may be called from the input
+// threads (they only record state); everything else must stay on the loop
+// thread.
 
 #ifdef USE_SLINT
 
 #include <atomic>
+#include <cstdint>
+#include <mutex>
+
+#include "osd_key.h"
 
 class SlintOsd
 {
@@ -31,6 +36,15 @@ public:
     // Thread-safe; the next tick() dispatches on the loop thread.
     void pointer(int x, int y, bool pressed);
 
+    // Feed a keyboard event: navigation key, the typed ASCII character (0 if
+    // none), and the evdev value (1 press, 2 repeat, 0 release). Thread-safe;
+    // queued in order and applied by the next tick().
+    void key(OsdKey nav, char ch, int value);
+
+    // The UI was just hidden (video took the screen): queued keys are stale,
+    // and what only runs while a screen is visible (discovery) stops.
+    void hidden();
+
     // Pumps app state into the UI, dispatches input, runs timers/animations
     // and renders what changed. Returns true when the overlay buffer changed
     // and the caller should uiShow().
@@ -48,6 +62,20 @@ private:
     std::atomic<int> _px{0}, _py{0};
     std::atomic<bool> _pressed{false};
     std::atomic<bool> _pressSeen{false}; // tap shorter than one tick
+
+    // Discrete events, so a FIFO rather than the pointer's last-state atomics:
+    // several keys can land within one tick. Lives here, not in Impl, so a
+    // key() racing end() never touches freed memory.
+    struct KeyEvent
+    {
+        OsdKey nav;
+        char ch;
+        int8_t value;
+    };
+    static constexpr int KEY_QUEUE = 32;
+    std::mutex _keyMutex;
+    KeyEvent _keys[KEY_QUEUE];
+    int _keyCount = 0;
 };
 
 #endif /* USE_SLINT */

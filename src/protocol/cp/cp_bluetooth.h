@@ -15,8 +15,8 @@
 namespace cp_auth_setup { class MfiSigner; }
 
 // Bluetooth bootstrap for wireless CarPlay via BlueZ over D-Bus. Powers the
-// adapter, makes it pairable/discoverable, installs an auto-accept pairing
-// agent, and registers the iAP2 + CarPlay RFCOMM profiles with SDP records so
+// adapter, makes it pairable/discoverable (the pairing agent is the app-wide
+// bt::Manager's), and registers the iAP2 + CarPlay RFCOMM profiles with SDP records so
 // the iPhone recognises the head unit as a CarPlay accessory (it appears in
 // Settings > General > CarPlay). When the phone connects the iAP channel, its
 // RFCOMM fd is wrapped in an iAP2 link and driven by CarplaySession, which
@@ -43,12 +43,10 @@ public:
     void stop();
 
 private:
-    static DBusHandlerResult agentMessage(DBusConnection *c, DBusMessage *m, void *user);
     static DBusHandlerResult profileMessage(DBusConnection *c, DBusMessage *m, void *user);
 
     bool setupAdapter();
     bool adapterAddress(cp_carplay::Bytes &mac);
-    bool registerAgent();
     bool registerProfile(const char *path, const char *uuid, bool server, uint16_t channel,
                          const char *serviceRecord, const char *name);
     bool setAdapterProp(const char *prop, int type, const void *value);

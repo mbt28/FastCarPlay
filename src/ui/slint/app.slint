@@ -7,8 +7,22 @@
 // Layout follows the screens it replaces (docs/ui.md): fixed-height
 // touch rows (never a fraction of the screen), 800x480 panel metrics
 // (row 80 px, gap 8 px, 20 px text), colors from the old ui_style.
+//
+// Input: touch everywhere; a Bluetooth keyboard moves an amber focus ring
+// over the rows (Up/Down), activates (Enter), goes back (Esc/Backspace) and
+// types into the editor -- all fed from C++ (slint_osd.cpp).
 
 import "fonts/font.ttf";
+
+// One Bluetooth device in a list. `id` is the BlueZ object path: callbacks
+// carry it rather than a row index, because a row can move between a tap's
+// press and its release.
+export struct BtRow {
+    id: string,
+    name: string,
+    detail: string,
+    connected: bool,
+}
 
 export global Bridge {
     // app -> UI
@@ -27,6 +41,30 @@ export global Bridge {
     in property <string> editor-text;         // the edit buffer (owned by C++)
     in property <string> editor-error;        // non-empty = red validation hint
 
+    // Bluetooth devices (keyboards, remotes); all text composed in C++.
+    in property <bool> bt-available;          // built with Bluetooth support
+    in property <string> bt-summary;          // Settings row value
+    in property <string> bt-status;           // header suffix ("Searching...")
+    in property <bool> bt-scanning;
+    in property <bool> bt-scan-allowed: true; // false during a wireless phone session
+    in property <[BtRow]> bt-paired;
+    in property <[BtRow]> bt-found;
+    in property <BtRow> bt-current;           // the device screen's device
+
+    // A dialog over everything: 0 none, 1 a code to type on the device
+    // (Cancel only), 2 a yes/no question.
+    in property <int> prompt-kind;
+    in property <string> prompt-title;
+    in property <string> prompt-code;
+    in property <string> prompt-hint;
+    in property <string> prompt-accept-label;
+    in property <int> prompt-focus: -1;      // keyboard ring: 0 accept, 1 Cancel, -1 none
+
+    // Navigation, shared so C++ can follow it (discovery runs only while a
+    // Bluetooth screen is up) and drive it (the Home key).
+    // 0 home, 1 settings, 2 source, 3 wireless, 4 bluetooth, 5 bt device
+    in-out property <int> screen;
+
     // UI -> app
     callback select-protocol(int);
     callback resume();
@@ -38,6 +76,119 @@ export global Bridge {
     callback osk-backspace();
     callback osk-ok();                        // validate + save (C++ closes)
     callback osk-cancel();
+    callback bt-scan(bool);
+    callback bt-pair(string);
+    callback bt-open(string);
+    callback bt-connect(string, bool);
+    callback bt-forget(string);
+    callback prompt-accept();
+    callback prompt-cancel();
+}
+
+// ── on-screen keyboard ───────────────────────────────────────────────────
+// The editor's keyboard: layout, shift/symbols and the keyboard focus ring.
+// A global, because the editor itself comes and goes: C++ moves the ring
+// with the arrows of a keyboard or remote and presses the ringed key on
+// Enter/OK, so a remote with no letters can type too. Touch never shows it.
+export global Osk {
+    in-out property <bool> shift;
+    in-out property <bool> symbols;
+    // The ring: row -1 none, 0 Cancel, 1-3 the key rows, 4 the bottom row;
+    // col counts that row's keys from the left, as laid out in Editor.
+    in-out property <int> row: -1;
+    in-out property <int> col;
+
+    out property <[string]> r1: root.symbols ? ["1","2","3","4","5","6","7","8","9","0"]
+        : root.shift ? ["Q","W","E","R","T","Y","U","I","O","P"]
+                     : ["q","w","e","r","t","y","u","i","o","p"];
+    out property <[string]> r2: root.symbols ? ["!","@","#","$","%","^","&","*","(",")"]
+        : root.shift ? ["A","S","D","F","G","H","J","K","L"]
+                     : ["a","s","d","f","g","h","j","k","l"];
+    out property <[string]> r3: root.symbols ? ["-","_","+","=",";",":","'","\"","/","?"]
+        : root.shift ? ["Z","X","C","V","B","N","M"]
+                     : ["z","x","c","v","b","n","m"];
+    // Row 3 starts with Shift in letter mode; row 4 has the backtick key in
+    // symbol mode.
+    out property <int> r3-first: root.symbols ? 0 : 1;
+    out property <int> r4-extra: root.symbols ? 1 : 0;
+
+    function count(r: int) -> int {
+        if (r == 0) {
+            return 1;
+        }
+        if (r == 1) {
+            return root.r1.length;
+        }
+        if (r == 2) {
+            return root.r2.length;
+        }
+        if (r == 3) {
+            return root.r3-first + root.r3.length + 1;
+        }
+        return 5 + root.r4-extra;
+    }
+
+    // A fresh editor: letters, no ring.
+    public function reset() {
+        root.shift = false;
+        root.symbols = false;
+        root.row = -1;
+        root.col = 0;
+    }
+
+    // An arrow key. The first one only shows the ring, on the first letter.
+    public function move(dx: int, dy: int) {
+        if (root.row < 0) {
+            root.row = 1;
+            root.col = 0;
+            return;
+        }
+        if (dy != 0 && root.row + dy >= 0 && root.row + dy <= 4) {
+            // Cancel sits top right; between key rows keep the same share
+            // of the width.
+            root.col = root.row + dy == 0 ? 0
+                : root.row == 0 ? count(root.row + dy) - 1
+                : Math.min(count(root.row + dy) - 1,
+                           Math.floor((root.col + 0.5) * count(root.row + dy) / count(root.row)));
+            root.row = root.row + dy;
+        }
+        root.col = Math.max(0, Math.min(count(root.row) - 1, root.col + dx));
+    }
+
+    // Enter/OK on the ringed key: the same as tapping it.
+    public function activate() {
+        root.col = Math.max(0, Math.min(count(root.row) - 1, root.col));
+        if (root.row == 0) {
+            Bridge.osk-cancel();
+        } else if (root.row == 1) {
+            Bridge.osk-key(root.r1[root.col]);
+        } else if (root.row == 2) {
+            Bridge.osk-key(root.r2[root.col]);
+        } else if (root.row == 3) {
+            if (root.col < root.r3-first) {
+                root.shift = !root.shift;
+            } else if (root.col < root.r3-first + root.r3.length) {
+                Bridge.osk-key(root.r3[root.col - root.r3-first]);
+            } else {
+                Bridge.osk-backspace();
+            }
+        } else if (root.row == 4) {
+            if (root.col == 0) {
+                root.symbols = !root.symbols;
+                root.shift = false;
+            } else if (root.col < 1 + root.r4-extra) {
+                Bridge.osk-key("`");
+            } else if (root.col == 1 + root.r4-extra) {
+                Bridge.osk-key(",");
+            } else if (root.col == 2 + root.r4-extra) {
+                Bridge.osk-key(" ");
+            } else if (root.col == 3 + root.r4-extra) {
+                Bridge.osk-key(".");
+            } else {
+                Bridge.osk-ok();
+            }
+        }
+    }
 }
 
 // ── shared look ──────────────────────────────────────────────────────────
@@ -47,6 +198,7 @@ global Style {
     out property <color> row-pressed: #2C3844;
     out property <color> row-on: #1E88E5;
     out property <color> edge: #64B5F6;
+    out property <color> focus: #FFB300;
     out property <color> dim: #8FA3B0;
     out property <color> text: #E8Eef2;
     out property <length> gap: 8px;
@@ -55,6 +207,9 @@ global Style {
 }
 
 // A touch row: label, optional right-aligned value, pressed/selected states.
+// Keyboard focus shows as an amber ring, distinct from the blue "selected"
+// fill. Rows never take focus from a tap (focus-on-click false), so touch use
+// is unchanged and never shows a ring.
 component Row inherits Rectangle {
     in property <string> label;
     in property <string> value;
@@ -65,9 +220,21 @@ component Row inherits Rectangle {
     border-radius: Style.gap;
     background: ta.pressed ? Style.row-pressed
               : root.selected ? Style.row-on : Style.row;
-    border-width: root.selected ? 2px : 0px;
-    border-color: Style.edge;
+    border-width: fs.has-focus ? 4px : root.selected ? 2px : 0px;
+    border-color: fs.has-focus ? Style.focus : Style.edge;
 
+    fs := FocusScope {
+        width: 100%;
+        height: 100%;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
     ta := TouchArea { clicked => { root.clicked(); } }
 
     HorizontalLayout {
@@ -102,7 +269,7 @@ component Header inherits Text {
 
 // Full-screen scrollable column of rows.
 component ListScreen inherits Flickable {
-    viewport-height: col.preferred-height;
+    content-height: col.preferred-height;
     col := VerticalLayout {
         padding: Style.gap;
         spacing: Style.gap;
@@ -111,7 +278,7 @@ component ListScreen inherits Flickable {
 }
 
 // ── screens ──────────────────────────────────────────────────────────────
-// 0 home, 1 settings, 2 source, 3 wireless (navigation is UI-local state)
+// Screen ids: see Bridge.screen.
 
 component ScreenHome inherits ListScreen {
     callback goto(int);
@@ -131,11 +298,17 @@ component ScreenSettings inherits ListScreen {
     callback goto(int);
     Header { text: Bridge.restart-needed ? "Settings  -  restart to apply" : "Settings"; }
     // Back at the top (below the header) -- easier to reach on a car screen.
+    // Only four rows fit above the fold: the connectivity rows go first.
     Row { label: "Back"; clicked => { root.goto(0); } }
     Row { label: "Source"; value: Bridge.source-label; clicked => { root.goto(2); } }
+    Row { label: "Wireless"; clicked => { root.goto(3); } }
+    if Bridge.bt-available: Row {
+        label: "Bluetooth";
+        value: Bridge.bt-summary;
+        clicked => { root.goto(4); }
+    }
     Row { label: "Night"; value: Bridge.night-label; clicked => { Bridge.cycle-night(); } }
     Row { label: "Video"; value: Bridge.fps-label; clicked => { Bridge.cycle-fps(); } }
-    Row { label: "Wireless"; clicked => { root.goto(3); } }
     // Only meaningful once something needs it; hidden otherwise rather than
     // inviting a pointless restart.
     if Bridge.restart-needed: Row { label: "Restart now"; clicked => { Bridge.restart-now(); } }
@@ -166,17 +339,62 @@ component ScreenWireless inherits ListScreen {
     Row { label: "Back"; clicked => { root.goto(1); } }
     Row { label: "Name"; value: Bridge.wifi-ssid; clicked => { Bridge.edit-field(0); } }
     Row { label: "Password"; value: Bridge.wifi-pass; clicked => { Bridge.edit-field(1); } }
-    Row { label: "Bluetooth"; value: Bridge.bt-name; clicked => { Bridge.edit-field(2); } }
+    Row { label: "BT name"; value: Bridge.bt-name; clicked => { Bridge.edit-field(2); } }
+}
+
+// Paired keyboards/remotes, and pairing new ones. Phones are not listed:
+// they pair from their own Bluetooth settings, as before.
+component ScreenBluetooth inherits ListScreen {
+    callback goto(int);
+    Header { text: Bridge.bt-status == "" ? "Bluetooth devices" : "Bluetooth  -  " + Bridge.bt-status; }
+    Row { label: "Back"; clicked => { root.goto(1); } }
+    Row {
+        label: Bridge.bt-scanning ? "Stop searching" : "Add device";
+        value: !Bridge.bt-scan-allowed ? "Not during a session"
+             : Bridge.bt-scanning ? "Searching..." : "";
+        selected: Bridge.bt-scanning;
+        clicked => { Bridge.bt-scan(!Bridge.bt-scanning); }
+    }
+    for d in Bridge.bt-paired: Row {
+        label: d.name;
+        value: d.detail;
+        selected: d.connected;
+        clicked => {
+            Bridge.bt-open(d.id);
+            root.goto(5);
+        }
+    }
+    if Bridge.bt-found.length > 0: Header { text: "Found - tap to pair"; }
+    for d in Bridge.bt-found: Row {
+        label: d.name;
+        value: d.detail;
+        clicked => { Bridge.bt-pair(d.id); }
+    }
+}
+
+component ScreenBtDevice inherits ListScreen {
+    callback goto(int);
+    Header { text: Bridge.bt-current.name; }
+    Row { label: "Back"; clicked => { root.goto(4); } }
+    Row {
+        label: Bridge.bt-current.connected ? "Disconnect" : "Connect";
+        value: Bridge.bt-current.detail;
+        clicked => { Bridge.bt-connect(Bridge.bt-current.id, !Bridge.bt-current.connected); }
+    }
+    Row { label: "Forget"; clicked => { Bridge.bt-forget(Bridge.bt-current.id); } }
 }
 
 // ── full-screen text editor with an on-screen keyboard ──────────────────
 component OskKey inherits Rectangle {
     in property <string> label;
     in property <float> weight: 1;
+    in property <bool> focused; // the keyboard ring is on this key
     callback pressed;
     horizontal-stretch: root.weight;
     border-radius: 6px;
     background: ta.pressed ? Style.row-pressed : Style.row;
+    border-width: root.focused ? 4px : 0px;
+    border-color: Style.focus;
     ta := TouchArea { clicked => { root.pressed(); } }
     Text {
         text: root.label;
@@ -187,19 +405,9 @@ component OskKey inherits Rectangle {
     }
 }
 
+// Keys and their ring positions follow Osk (row, col) -- keep the two in step.
 component Editor inherits Rectangle {
     background: Style.bg;
-    property <bool> shift: false;
-    property <bool> symbols: false;
-    property <[string]> r1: root.symbols ? ["1","2","3","4","5","6","7","8","9","0"]
-        : root.shift ? ["Q","W","E","R","T","Y","U","I","O","P"]
-                     : ["q","w","e","r","t","y","u","i","o","p"];
-    property <[string]> r2: root.symbols ? ["!","@","#","$","%","^","&","*","(",")"]
-        : root.shift ? ["A","S","D","F","G","H","J","K","L"]
-                     : ["a","s","d","f","g","h","j","k","l"];
-    property <[string]> r3: root.symbols ? ["-","_","+","=",";",":","'","\"","/","?"]
-        : root.shift ? ["Z","X","C","V","B","N","M"]
-                     : ["z","x","c","v","b","n","m"];
 
     VerticalLayout {
         padding: Style.gap;
@@ -217,7 +425,7 @@ component Editor inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            OskKey { label: "Cancel"; pressed => { Bridge.osk-cancel(); } }
+            OskKey { label: "Cancel"; focused: Osk.row == 0; pressed => { Bridge.osk-cancel(); } }
         }
 
         // The value being edited, with a plain underscore caret.
@@ -240,31 +448,119 @@ component Editor inherits Rectangle {
 
         HorizontalLayout {
             spacing: 6px;
-            for k in root.r1: OskKey { label: k; pressed => { Bridge.osk-key(k); } }
-        }
-        HorizontalLayout {
-            spacing: 6px;
-            for k in root.r2: OskKey { label: k; pressed => { Bridge.osk-key(k); } }
-        }
-        HorizontalLayout {
-            spacing: 6px;
-            if !root.symbols: OskKey {
-                label: "Shift"; weight: 1.5;
-                pressed => { root.shift = !root.shift; }
+            for k[i] in Osk.r1: OskKey {
+                label: k;
+                focused: Osk.row == 1 && Osk.col == i;
+                pressed => { Bridge.osk-key(k); }
             }
-            for k in root.r3: OskKey { label: k; pressed => { Bridge.osk-key(k); } }
-            OskKey { label: "Del"; weight: 1.5; pressed => { Bridge.osk-backspace(); } }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            for k[i] in Osk.r2: OskKey {
+                label: k;
+                focused: Osk.row == 2 && Osk.col == i;
+                pressed => { Bridge.osk-key(k); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            if !Osk.symbols: OskKey {
+                label: "Shift"; weight: 1.5;
+                focused: Osk.row == 3 && Osk.col == 0;
+                pressed => { Osk.shift = !Osk.shift; }
+            }
+            for k[i] in Osk.r3: OskKey {
+                label: k;
+                focused: Osk.row == 3 && Osk.col == Osk.r3-first + i;
+                pressed => { Bridge.osk-key(k); }
+            }
+            OskKey {
+                label: "Del"; weight: 1.5;
+                focused: Osk.row == 3 && Osk.col == Osk.r3-first + Osk.r3.length;
+                pressed => { Bridge.osk-backspace(); }
+            }
         }
         HorizontalLayout {
             spacing: 6px;
             OskKey {
-                label: root.symbols ? "abc" : "?123"; weight: 1.5;
-                pressed => { root.symbols = !root.symbols; root.shift = false; }
+                label: Osk.symbols ? "abc" : "?123"; weight: 1.5;
+                focused: Osk.row == 4 && Osk.col == 0;
+                pressed => { Osk.symbols = !Osk.symbols; Osk.shift = false; }
             }
-            OskKey { label: ","; pressed => { Bridge.osk-key(","); } }
-            OskKey { label: "Space"; weight: 3; pressed => { Bridge.osk-key(" "); } }
-            OskKey { label: "."; pressed => { Bridge.osk-key("."); } }
-            OskKey { label: "OK"; weight: 1.5; pressed => { Bridge.osk-ok(); } }
+            // The backtick is outside the compiler's default glyph set: this
+            // key embeds it, so one typed on a keyboard is drawn too.
+            if Osk.symbols: OskKey {
+                label: "`";
+                focused: Osk.row == 4 && Osk.col == 1;
+                pressed => { Bridge.osk-key("`"); }
+            }
+            OskKey {
+                label: ",";
+                focused: Osk.row == 4 && Osk.col == 1 + Osk.r4-extra;
+                pressed => { Bridge.osk-key(","); }
+            }
+            OskKey {
+                label: "Space"; weight: 3;
+                focused: Osk.row == 4 && Osk.col == 2 + Osk.r4-extra;
+                pressed => { Bridge.osk-key(" "); }
+            }
+            OskKey {
+                label: ".";
+                focused: Osk.row == 4 && Osk.col == 3 + Osk.r4-extra;
+                pressed => { Bridge.osk-key("."); }
+            }
+            OskKey {
+                label: "OK"; weight: 1.5;
+                focused: Osk.row == 4 && Osk.col == 4 + Osk.r4-extra;
+                pressed => { Bridge.osk-ok(); }
+            }
+        }
+    }
+}
+
+// ── pairing / confirmation dialog ────────────────────────────────────────
+// Like the editor, a full-screen replacement opened and closed only by C++.
+// The code is large: it is typed on a keyboard held away from the screen.
+component Prompt inherits Rectangle {
+    background: Style.bg;
+    VerticalLayout {
+        padding: Style.gap * 2;
+        spacing: Style.gap * 2;
+        Header { text: Bridge.prompt-title; }
+        if Bridge.prompt-code != "": Rectangle {
+            height: 96px;
+            border-radius: Style.gap;
+            background: #0B0E11;
+            border-width: 1px;
+            border-color: Style.edge;
+            Text {
+                text: Bridge.prompt-code;
+                color: Style.text;
+                font-size: 40px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: Bridge.prompt-hint;
+            color: Style.text;
+            font-size: Style.font;
+            wrap: word-wrap;
+            vertical-stretch: 1;
+        }
+        HorizontalLayout {
+            height: Style.row-h;
+            spacing: Style.gap;
+            if Bridge.prompt-kind == 2: OskKey {
+                label: Bridge.prompt-accept-label;
+                focused: Bridge.prompt-focus == 0;
+                pressed => { Bridge.prompt-accept(); }
+            }
+            OskKey {
+                label: "Cancel";
+                focused: Bridge.prompt-focus == 1;
+                pressed => { Bridge.prompt-cancel(); }
+            }
         }
     }
 }
@@ -276,11 +572,26 @@ export component AppWindow inherits Window {
     background: Style.bg;
     default-font-family: "Open Sans";
 
-    property <int> screen: 0;
+    // A dialog replaces the screen. The pairing prompt has a deadline, so it
+    // wins over the editor (whose buffer survives in C++).
+    property <bool> modal: Bridge.prompt-kind != 0 || Bridge.editing >= 0;
 
-    if root.screen == 0 && Bridge.editing < 0: ScreenHome     { goto(s) => { root.screen = s; } }
-    if root.screen == 1 && Bridge.editing < 0: ScreenSettings { goto(s) => { root.screen = s; } }
-    if root.screen == 2 && Bridge.editing < 0: ScreenSource   { goto(s) => { root.screen = s; } }
-    if root.screen == 3 && Bridge.editing < 0: ScreenWireless { goto(s) => { root.screen = s; } }
-    if Bridge.editing >= 0: Editor {}
+    // The Back key: one level up. C++ calls it directly so Back never
+    // depends on keyboard focus; false means "already home".
+    public function back() -> bool {
+        if (Bridge.screen == 0) {
+            return false;
+        }
+        Bridge.screen = Bridge.screen == 5 ? 4 : Bridge.screen >= 2 ? 1 : 0;
+        return true;
+    }
+
+    if Bridge.screen == 0 && !root.modal: ScreenHome      { goto(s) => { Bridge.screen = s; } }
+    if Bridge.screen == 1 && !root.modal: ScreenSettings  { goto(s) => { Bridge.screen = s; } }
+    if Bridge.screen == 2 && !root.modal: ScreenSource    { goto(s) => { Bridge.screen = s; } }
+    if Bridge.screen == 3 && !root.modal: ScreenWireless  { goto(s) => { Bridge.screen = s; } }
+    if Bridge.screen == 4 && !root.modal: ScreenBluetooth { goto(s) => { Bridge.screen = s; } }
+    if Bridge.screen == 5 && !root.modal: ScreenBtDevice  { goto(s) => { Bridge.screen = s; } }
+    if Bridge.prompt-kind != 0: Prompt {}
+    if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}
 }

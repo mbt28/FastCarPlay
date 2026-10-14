@@ -28,6 +28,10 @@
 #endif
 #ifdef __linux__
 #include "touch_input.h" // evdev touchscreen; used on the drm/headless render paths
+#include "key_input.h"   // Bluetooth keyboards/remotes (evdev, hotplugged)
+#endif
+#ifdef USE_BLUETOOTH
+#include "bluetooth/bt_manager.h" // the one pairing agent + HID device management
 #endif
 #include "audio_mixer.h"
 #include "common/functions.h"
@@ -140,6 +144,76 @@ void onQuitSignal(int)
         _exit(1);
     g_quit = 1;
 }
+
+// The backend Settings::protocol selects in this build: an unknown string or
+// a backend compiled out falls back to the first one the build carries.
+// makeConnection() builds it, and the Bluetooth policy asks it too, so both
+// agree on whether a phone pairs over Bluetooth.
+enum class Backend : uint8_t
+{
+    CpWireless,
+    CpWired,
+    AaWireless,
+    AaUsb,
+};
+
+Backend resolveBackend()
+{
+#ifdef USE_AA_WIRELESS
+    if (Settings::aaWireless())
+        return Backend::AaWireless;
+#endif
+#ifdef USE_CP_WIRELESS
+    if (Settings::carplayWireless())
+        return Backend::CpWireless;
+#endif
+#ifdef USE_CP_WIRED
+    if (Settings::carplayWired())
+        return Backend::CpWired;
+#endif
+    if (Settings::aaUsb())
+        return Backend::AaUsb;
+#if defined(USE_CP_WIRELESS)
+    return Backend::CpWireless;
+#elif defined(USE_CP_WIRED)
+    return Backend::CpWired;
+#elif defined(USE_AA_WIRELESS)
+    return Backend::AaWireless;
+#else
+    return Backend::AaUsb;
+#endif
+}
+
+#ifdef USE_BLUETOOTH
+bool wirelessBackend()
+{
+    const Backend b = resolveBackend();
+    return b == Backend::CpWireless || b == Backend::AaWireless;
+}
+
+// The Bluetooth manager brackets the connection: up before it (its agent must
+// already answer when a phone pairs) and down after it. Declare it before the
+// connection so destruction runs in that order.
+struct BluetoothScope
+{
+    BluetoothScope() { bt::Manager::instance().start(wirelessBackend()); }
+    ~BluetoothScope() { bt::Manager::instance().stop(); }
+};
+#endif
+
+// Discovery competes with a wireless phone session for the shared radio, so
+// the manager hears when one starts and ends. ONLINE counts: the phone is
+// already on the access point, setting the session up. (The Bluetooth
+// handoff before it the manager sees itself: the phone is connected.)
+void noteSession(int state)
+{
+#ifdef USE_BLUETOOTH
+    bt::Manager::instance().setSessionActive(
+        wirelessBackend() && (state == PROTOCOL_STATUS_ONLINE || state == PROTOCOL_STATUS_CONNECTED));
+#else
+    (void)state;
+#endif
+}
 } // namespace
 
 std::unique_ptr<IDecoder> Application::makeDecoder(AVCodecID codecId)
@@ -228,46 +302,46 @@ DisplayGeometry Application::resolveGeometry() const
 
 std::unique_ptr<IConnection> Application::makeConnection()
 {
-    std::unique_ptr<IConnection> connection;
-#ifdef USE_AA_WIRELESS
-    if (Settings::aaWireless())
-        connection = std::make_unique<AaWirelessConnection>();
-#else
+    // Unknown protocol string or a backend compiled out: resolveBackend()
+    // falls back to the first native backend this build carries rather than
+    // failing to start; say why.
+#ifndef USE_AA_WIRELESS
     if (Settings::aaWireless())
         log_e("protocol = aa-wireless needs a USE_AA_WIRELESS build");
 #endif
-#ifdef USE_CP_WIRELESS
-    if (!connection && Settings::carplayWireless())
-        connection = std::make_unique<CpConnection>();
-#else
+#ifndef USE_CP_WIRELESS
     if (Settings::carplayWireless())
         log_e("protocol = carplay-wireless needs a USE_CP_WIRELESS build");
 #endif
-#ifdef USE_CP_WIRED
-    if (!connection && Settings::carplayWired())
-        connection = std::make_unique<CpWiredConnection>();
-#else
+#ifndef USE_CP_WIRED
     if (Settings::carplayWired())
         log_e("protocol = carplay-wired needs a USE_CP_WIRED build");
 #endif
-    if (!connection && Settings::aaUsb())
-        connection = std::make_unique<AaConnection>();
-    // Unknown protocol string or a backend compiled out: fall back to the
-    // first native backend this build carries rather than failing to start.
-    if (!connection)
+    if (!Settings::aaWireless() && !Settings::carplayWireless() && !Settings::carplayWired() &&
+        !Settings::aaUsb())
+        log_e("unknown protocol '%s' -- using default", Settings::protocol.value.c_str());
+
+    std::unique_ptr<IConnection> connection;
+    switch (resolveBackend())
     {
-        if (!Settings::aaWireless() && !Settings::carplayWireless() &&
-            !Settings::carplayWired() && !Settings::aaUsb())
-            log_e("unknown protocol '%s' -- using default", Settings::protocol.value.c_str());
-#ifdef USE_CP_WIRELESS
-        connection = std::make_unique<CpConnection>();
-#elif defined(USE_CP_WIRED)
-        connection = std::make_unique<CpWiredConnection>();
-#elif defined(USE_AA_WIRELESS)
+#ifdef USE_AA_WIRELESS
+    case Backend::AaWireless:
         connection = std::make_unique<AaWirelessConnection>();
-#else
-        connection = std::make_unique<AaConnection>();
+        break;
 #endif
+#ifdef USE_CP_WIRELESS
+    case Backend::CpWireless:
+        connection = std::make_unique<CpConnection>();
+        break;
+#endif
+#ifdef USE_CP_WIRED
+    case Backend::CpWired:
+        connection = std::make_unique<CpWiredConnection>();
+        break;
+#endif
+    default: // AaUsb: every build carries it
+        connection = std::make_unique<AaConnection>();
+        break;
     }
 
     // Every loop has its display up by the time it builds the connection, so
@@ -286,6 +360,9 @@ std::unique_ptr<IConnection> Application::makeConnection()
 // console. Keeps the process alive and drives the protocol state.
 void Application::loopHeadless()
 {
+#ifdef USE_BLUETOOTH
+    BluetoothScope bluetooth;
+#endif
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
@@ -298,6 +375,7 @@ void Application::loopHeadless()
 
 #ifdef __linux__
     TouchInput touchInput(protocol);   // evdev touchscreen (board loops only)
+    KeyInput keyInput(protocol);       // Bluetooth keyboards/remotes -> the phone
 #endif
 #ifdef USE_CEDRUS
     SerialInput serialInput(protocol); // TEST-only serial-console navigation
@@ -323,6 +401,7 @@ void Application::loopHeadless()
                 decoder->buffer.reset();
                 protocol.send(Message::Control(BTN_SCREEN_REFRESH));
             }
+            noteSession(state);
             lastState = state;
         }
         // Drain the buffer so a buffering (software) decoder can't stall; the
@@ -370,6 +449,9 @@ void Application::loopDrm()
         log_w("UI unavailable > running without screens (video still works)");
 #endif
 
+#ifdef USE_BLUETOOTH
+    BluetoothScope bluetooth;
+#endif
     std::unique_ptr<IConnection> protocolPtr = makeConnection();
     IConnection &protocol = *protocolPtr;
     std::unique_ptr<IDecoder> decoder = makeDecoder(protocol.videoCodec());
@@ -389,6 +471,13 @@ void Application::loopDrm()
         touchInput.setUiSink([&osd, uiWidth, uiHeight](float nx, float ny, bool pressed) {
             osd.pointer((int)(nx * uiWidth), (int)(ny * uiHeight), pressed);
         });
+#endif
+    // Bluetooth keyboards/remotes: the phone, or the UI while a screen is up
+    // (routed exactly like touch).
+    KeyInput keyInput(protocol);
+#ifdef USE_OSD_UI
+    if (osd.active())
+        keyInput.setUiSink([&osd](OsdKey key, char ch, int value) { osd.key(key, ch, value); });
 #endif
 #endif
     SerialInput serialInput(protocol); // TEST-only serial-console navigation
@@ -465,6 +554,7 @@ void Application::loopDrm()
                 decoder->stop();
                 decoderRunning = false;
             }
+            noteSession(state);
             lastState = state;
             dirty = true;
         }
@@ -484,6 +574,7 @@ void Application::loopDrm()
                     protocol.requestVideoFocus();
 #ifdef __linux__
                 touchInput.routeToUi(true);
+                keyInput.routeToUi(true);
 #endif
                 // UI flushes land straight in the dumb framebuffer, so
                 // presenting is just making sure the plane covers the panel.
@@ -521,12 +612,17 @@ void Application::loopDrm()
         {
 #if defined(USE_OSD_UI) && defined(__linux__)
             touchInput.routeToUi(false); // video is up: touch goes to the phone
+            keyInput.routeToUi(false);
 #endif
             // Video plays below; the overlay hides entirely.
             if (uiShowsHome || osdShown)
             {
                 drm_display::uiHide();
                 osdShown = false;
+#ifdef USE_OSD_UI
+                if (osd.active())
+                    osd.hidden();
+#endif
             }
             uiShowsHome = false;
         }

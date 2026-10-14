@@ -13,9 +13,9 @@
 #include "protocol/aa/aa_aaw.h"
 
 // Bluetooth bootstrap for wireless Android Auto via BlueZ over D-Bus. Powers
-// the adapter, makes it pairable/discoverable, installs an auto-accept pairing
-// agent, and registers the Android Auto RFCOMM profile (plus a fake hands-free
-// profile so the phone offers wireless AA). When the phone connects the AA
+// the adapter, makes it pairable/discoverable, and registers the Android Auto
+// RFCOMM profile (the pairing agent is the app-wide bt::Manager's; HFP comes
+// from bluealsa so the phone offers wireless AA). When the phone connects the AA
 // channel, its RFCOMM fd is handed to the aaw handshake, which gives the phone
 // the Wi-Fi credentials + TCP endpoint. Requires a running bluetoothd + dbus.
 class AaBluetooth
@@ -28,12 +28,10 @@ public:
     void stop();
 
 private:
-    // D-Bus message handlers for the agent and profile objects (BlueZ calls us).
-    static DBusHandlerResult agentMessage(DBusConnection *c, DBusMessage *m, void *user);
+    // D-Bus message handler for the profile object (BlueZ calls us).
     static DBusHandlerResult profileMessage(DBusConnection *c, DBusMessage *m, void *user);
 
     bool setupAdapter();
-    bool registerAgent();
     bool registerProfile(const char *path, const char *uuid, bool server,
                          const char *serviceRecord = nullptr, const char *name = nullptr);
     bool setAdapterProp(const char *prop, int type, const void *value);

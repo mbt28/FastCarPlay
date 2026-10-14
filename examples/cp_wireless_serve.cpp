@@ -24,6 +24,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 
+#include "bluetooth/bt_manager.h"
 #include "common/logger.h"
 #include "protocol/cp/cp_bluetooth.h"
 #include "protocol/cp/cp_crypto.h"
@@ -170,10 +171,13 @@ int main(int argc, char **argv)
     cfg.wifi.publicKey = hex(id.pubRaw);
     cfg.wifi.sourceVersion = "550.1";
 
+    // The pairing agent lives in the app's Bluetooth manager, as in the app.
+    bt::Manager::instance().start(true);
     cp_bt::CpBluetooth bt;
     if (!bt.start(cfg))
     {
         fprintf(stderr, "Bluetooth bootstrap failed (is bluetoothd running? root?)\n");
+        bt::Manager::instance().stop();
         server.stop();
         responder.stop();
         return 1;
@@ -187,6 +191,7 @@ int main(int argc, char **argv)
 
     printf("\nstopping\n");
     bt.stop();
+    bt::Manager::instance().stop();
     server.stop();
     responder.stop();
     return 0;

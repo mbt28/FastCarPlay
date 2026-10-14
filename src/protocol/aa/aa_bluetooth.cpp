@@ -13,11 +13,8 @@
 #define PROPS_IFACE "org.freedesktop.DBus.Properties"
 #define ADAPTER_IFACE "org.bluez.Adapter1"
 #define PROFILE_MGR_IFACE "org.bluez.ProfileManager1"
-#define AGENT_MGR_IFACE "org.bluez.AgentManager1"
-#define AGENT_IFACE "org.bluez.Agent1"
 #define PROFILE_IFACE "org.bluez.Profile1"
 
-#define AGENT_PATH "/fcp/agent"
 #define AA_PROFILE_PATH "/fcp/aa"
 #define HFP_PROFILE_PATH "/fcp/hfp"
 
@@ -118,51 +115,6 @@ bool AaBluetooth::setupAdapter()
     return true;
 }
 
-bool AaBluetooth::registerAgent()
-{
-    static DBusObjectPathVTable vtable;
-    vtable.message_function = &AaBluetooth::agentMessage;
-    vtable.unregister_function = nullptr;
-    if (!dbus_connection_register_object_path(_conn, AGENT_PATH, &vtable, this))
-    {
-        log_e("bt: can't register agent object");
-        return false;
-    }
-
-    // AgentManager1.RegisterAgent(path, "DisplayYesNo") -> Numeric Comparison
-    // (or Just Works) pairing. DisplayYesNo satisfies phones that require MITM
-    // protection (e.g. Samsung Galaxy S21, which rejects plain Just-Works SSP
-    // with Authentication Failure 0x05); both outcomes are auto-accepted by our
-    // agent handler. Avoid "KeyboardDisplay", which could ask for a passkey/PIN
-    // the handler doesn't implement.
-    const char *path = AGENT_PATH;
-    const char *cap = "DisplayYesNo";
-    for (const char *method : {"RegisterAgent", "RequestDefaultAgent"})
-    {
-        DBusMessage *msg =
-            dbus_message_new_method_call(BLUEZ, "/org/bluez", AGENT_MGR_IFACE, method);
-        DBusMessageIter it;
-        dbus_message_iter_init_append(msg, &it);
-        dbus_message_iter_append_basic(&it, DBUS_TYPE_OBJECT_PATH, &path);
-        if (strcmp(method, "RegisterAgent") == 0)
-            dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &cap);
-
-        DBusError err;
-        dbus_error_init(&err);
-        DBusMessage *reply = dbus_connection_send_with_reply_and_block(_conn, msg, 2000, &err);
-        dbus_message_unref(msg);
-        if (dbus_error_is_set(&err))
-        {
-            log_w("bt: %s > %s", method, err.message);
-            dbus_error_free(&err);
-        }
-        else if (reply)
-            dbus_message_unref(reply);
-    }
-    log_i("bt: pairing agent registered");
-    return true;
-}
-
 // Add a {sv} dict entry (string key, basic-typed variant value).
 static void addDictEntry(DBusMessageIter *dict, const char *key, int type, const void *value)
 {
@@ -227,25 +179,6 @@ bool AaBluetooth::registerProfile(const char *path, const char *uuid, bool serve
     return true;
 }
 
-DBusHandlerResult AaBluetooth::agentMessage(DBusConnection *conn, DBusMessage *msg, void *)
-{
-    const char *member = dbus_message_get_member(msg);
-    if (!member)
-        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-
-    // Just-works pairing: accept everything, no reply body needed.
-    log_d("bt: agent %s", member);
-    if (strcmp(member, "RequestConfirmation") == 0 || strcmp(member, "RequestAuthorization") == 0 ||
-        strcmp(member, "AuthorizeService") == 0 || strcmp(member, "Cancel") == 0 ||
-        strcmp(member, "Release") == 0 || strcmp(member, "DisplayPasskey") == 0 ||
-        strcmp(member, "DisplayPinCode") == 0)
-    {
-        emptyReply(conn, msg);
-        return DBUS_HANDLER_RESULT_HANDLED;
-    }
-    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-}
-
 DBusHandlerResult AaBluetooth::profileMessage(DBusConnection *conn, DBusMessage *msg, void *user)
 {
     AaBluetooth *self = static_cast<AaBluetooth *>(user);
@@ -308,9 +241,13 @@ bool AaBluetooth::start(const aa_aaw::Params &params)
         return false;
     }
 
+    // A dbus-daemon restart (`bt off`) must not take the whole app down.
+    dbus_connection_set_exit_on_disconnect(_conn, FALSE);
+
     _running = true;
+    // Pairing itself (the agent) belongs to the app-wide bt::Manager, which is
+    // already up: phones still pair without a prompt through it.
     setupAdapter();
-    registerAgent();
     registerProfile(AA_PROFILE_PATH, AA_UUID, true, AA_SDP_RECORD, "Android Auto Wireless");
     // HFP is provided by an external Audio Gateway backend (bluealsad -p hfp-ag
     // -p hfp-hf). Do NOT register 0x111e here: a client registration serves no
