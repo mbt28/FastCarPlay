@@ -567,6 +567,21 @@ private:
             if (off > 0)
                 rx.erase(rx.begin(), rx.begin() + off);
         }
+
+        // Reader died while the host is supposed to be running = the cable was
+        // pulled (ESHUTDOWN). Fail every muxed connection NOW so blocked relay
+        // reads see EOF and the carkit session unwinds into its retry loop --
+        // otherwise idevice_connection_receive_timeout() keeps returning
+        // TIMEOUT on a socket that can never deliver another byte and the
+        // wired session waits forever instead of reconnecting on replug. No
+        // reset() here: the link is gone, there is no phone to tell.
+        if (_run)
+        {
+            std::lock_guard<std::mutex> lk(_connMutex);
+            for (auto &kv : _conns)
+                kv.second->markClosed();
+            _conns.clear();
+        }
     }
 
     std::string _serial;
