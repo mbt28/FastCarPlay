@@ -2,20 +2,27 @@
 
 #ifdef USE_SLINT
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include <slint-platform.h>
 
 #include "app_window.h" // generated from src/ui/slint/app.slint
 
+#include "common/clock.h"
 #include "common/logger.h"
 #include "drm_display.h"
 #include "protocol/wifi_ap.h"
 #include "settings.h"
 #include "ui_bridge.h"
+
+#ifdef USE_BLUETOOTH
+#include "bluetooth/bt_manager.h"
+#endif
 
 namespace
 {
@@ -31,7 +38,7 @@ struct Field
 const Field FIELDS[] = {
     {"wifi-ssid", "Name", 1, 32},
     {"wifi-passphrase", "Password", 8, 63},
-    {"bluetooth-name", "Bluetooth", 1, 32},
+    {"bluetooth-name", "BT name", 1, 32},
 };
 constexpr int FIELD_COUNT = (int)(sizeof(FIELDS) / sizeof(FIELDS[0]));
 
@@ -83,6 +90,50 @@ const char *nightModeName(int mode)
         return "Auto";
     }
 }
+
+// Keyboard focus is only re-seeded for someone actually using a keyboard.
+constexpr uint32_t KEY_RECENT_MS = 10000;
+
+#ifdef USE_BLUETOOTH
+BtRow toRow(const bt::DeviceRow &d)
+{
+    BtRow r;
+    r.id = slint::SharedString(d.id);
+    r.name = slint::SharedString(d.name);
+    r.detail = slint::SharedString(d.detail);
+    r.connected = d.connected;
+    return r;
+}
+
+// Bring a list model in line with the manager's rows, by id: changed rows are
+// updated in place, vanished ones erased, new ones appended. Never a reset or
+// a new model: that destroys every row instance (keyboard focus is lost and
+// the whole list repaints). Both sides keep first-seen order, so appending
+// keeps them aligned.
+void syncRows(slint::VectorModel<BtRow> &model, const std::vector<bt::DeviceRow> &rows)
+{
+    for (size_t i = model.row_count(); i-- > 0;)
+    {
+        const auto row = model.row_data(i);
+        const std::string_view id = row ? std::string_view(row->id) : std::string_view();
+        const bool keep = std::any_of(rows.begin(), rows.end(),
+                                      [&](const bt::DeviceRow &d) { return d.id == id; });
+        if (!keep)
+            model.erase(i);
+    }
+    for (const bt::DeviceRow &d : rows)
+    {
+        const BtRow want = toRow(d);
+        size_t i = 0;
+        while (i < model.row_count() && model.row_data(i)->id != want.id)
+            i++;
+        if (i == model.row_count())
+            model.push_back(want);
+        else if (!(*model.row_data(i) == want))
+            model.set_row_data(i, want);
+    }
+}
+#endif
 
 // ── slint platform glue ──────────────────────────────────────────────────
 class OsdWindow : public slint::platform::WindowAdapter
@@ -143,6 +194,32 @@ struct SlintOsd::Impl
     int pProtocol = -1;
     bool pWaiting = false, pRestartNeeded = false;
 
+    // Keyboard. Switching a screen or closing a dialog destroys the focused
+    // row, so focus is re-seeded on the first row -- but only for someone
+    // who used a key recently (touch never shows a ring).
+    uint32_t lastKeyMs = 0;
+    bool keyUsed = false;
+    bool focusSeed = false;
+    int pScreen = -1;
+    bool pModal = false;
+    bool eraseEdits = false; // the held Backspace was pressed in the editor
+
+#ifdef USE_BLUETOOTH
+    // Set once and never replaced (see syncRows).
+    std::shared_ptr<slint::VectorModel<BtRow>> btPaired =
+        std::make_shared<slint::VectorModel<BtRow>>();
+    std::shared_ptr<slint::VectorModel<BtRow>> btFound =
+        std::make_shared<slint::VectorModel<BtRow>>();
+    bool btSeen = false; // first snapshot pushed
+    uint32_t pBtGen = 0;
+    std::string btCurrentId; // the device screen's device (by id)
+    BtRow pBtCurrent;
+    std::string pBtSummary, pBtStatus;
+    bool pBtScanning = false, pBtScanAllowed = true;
+    int pPromptKind = 0;
+    std::string pPromptTitle, pPromptCode, pPromptHint, pPromptAccept;
+#endif
+
     Impl(int w, int h, slint::ComponentHandle<AppWindow> handle)
         : ui(std::move(handle)), width(w), height(h)
     {
@@ -159,6 +236,7 @@ struct SlintOsd::Impl
             bridge.set_editor_label(FIELDS[id].label);
             bridge.set_editor_text(slint::SharedString(editBuffer));
             bridge.set_editor_error("");
+            ui->global<Osk>().invoke_reset(); // letters, no ring
         }
     }
 
@@ -204,6 +282,157 @@ struct SlintOsd::Impl
             persist(field.key, editBuffer.c_str(), true); // BT name is set at start-up
         }
         setEditing(-1);
+    }
+
+    // Tab/Backtab/Return as Slint key events (they reach the focused Row).
+    void dispatchKey(std::u8string_view key, bool repeat)
+    {
+        auto &window = win->window();
+        if (repeat)
+            window.dispatch_key_press_repeat_event(key);
+        else
+            window.dispatch_key_press_event(key);
+        window.dispatch_key_release_event(key);
+    }
+
+    // One keyboard event, on the loop thread. Dialogs take keys first. On the
+    // list screens Up/Down move Slint's focus -- injected as Backtab/Tab, so
+    // the built-in traversal (conditional rows, lists) and scroll-into-view do
+    // the work -- and Enter activates the focused row. Back and Home never
+    // depend on focus: a recreated screen has none.
+    void applyKey(OsdKey nav, char ch, int value)
+    {
+        if (value == 0)
+            return; // releases carry nothing: no modifier keys are sent to Slint
+        const bool repeat = value == 2;
+        lastKeyMs = mono_ms();
+        keyUsed = true;
+        const auto &bridge = ui->global<Bridge>();
+        // A held Backspace keeps deleting only if it was pressed in the
+        // editor: the press that cancels a dialog over it must not then eat
+        // the text beneath.
+        if (nav == OsdKey::Erase && !repeat)
+            eraseEdits = bridge.get_prompt_kind() == 0 && editing >= 0;
+
+        if (nav == OsdKey::Home)
+        {
+            if (repeat)
+                return;
+            if (bridge.get_prompt_kind() != 0)
+                bridge.invoke_prompt_cancel();
+            if (editing >= 0)
+                setEditing(-1);
+            bridge.set_screen(0);
+            return;
+        }
+        if (const int kind = bridge.get_prompt_kind(); kind != 0)
+        {
+            if (repeat)
+                return;
+            // Buttons left to right: [accept] Cancel (a code dialog has only
+            // Cancel). The arrows show and move a ring over them; Enter
+            // presses the ringed button, or accepts when there is no ring.
+            // Back always cancels.
+            const int first = kind == 2 ? 0 : 1;
+            const int focus = bridge.get_prompt_focus();
+            switch (nav)
+            {
+            case OsdKey::Left:
+            case OsdKey::Up:
+                bridge.set_prompt_focus(focus < 0 ? first : std::max(first, focus - 1));
+                break;
+            case OsdKey::Right:
+            case OsdKey::Down:
+                bridge.set_prompt_focus(focus < 0 ? first : std::min(1, focus + 1));
+                break;
+            case OsdKey::Ok:
+                if (focus == 1)
+                    bridge.invoke_prompt_cancel();
+                else if (kind == 2)
+                    bridge.invoke_prompt_accept();
+                break;
+            case OsdKey::Back:
+            case OsdKey::Erase:
+                bridge.invoke_prompt_cancel();
+                break;
+            default:
+                break;
+            }
+            return;
+        }
+        if (editing >= 0)
+        {
+            // Arrows move the on-screen keyboard's ring (how a remote types)
+            // and Enter presses the ringed key. Typing on a keyboard hides
+            // the ring again, so its Enter saves.
+            const auto &osk = ui->global<Osk>();
+            switch (nav)
+            {
+            case OsdKey::Up:
+                osk.invoke_move(0, -1);
+                return;
+            case OsdKey::Down:
+                osk.invoke_move(0, 1);
+                return;
+            case OsdKey::Left:
+                osk.invoke_move(-1, 0);
+                return;
+            case OsdKey::Right:
+                osk.invoke_move(1, 0);
+                return;
+            default:
+                break;
+            }
+            // Through the same callbacks as the on-screen keyboard, so the
+            // length limits and validation stay in one place.
+            if (nav == OsdKey::Erase)
+            {
+                osk.set_row(-1);
+                if (!repeat || eraseEdits)
+                    bridge.invoke_osk_backspace(); // held Backspace keeps deleting
+            }
+            else if (repeat)
+                return;
+            else if (nav == OsdKey::Ok && ch != ' ')
+            {
+                if (osk.get_row() >= 0)
+                    osk.invoke_activate();
+                else
+                    bridge.invoke_osk_ok();
+            }
+            else if (nav == OsdKey::Back)
+                bridge.invoke_osk_cancel();
+            else if (ch >= 0x20 && ch < 0x7F)
+            {
+                osk.set_row(-1);
+                const char text[2] = {ch, 0};
+                bridge.invoke_osk_key(slint::SharedString(text));
+            }
+            return;
+        }
+        switch (nav)
+        {
+        case OsdKey::Down:
+            dispatchKey(slint::platform::key_codes::Tab, repeat);
+            break;
+        case OsdKey::Up:
+            dispatchKey(slint::platform::key_codes::Backtab, repeat);
+            break;
+        case OsdKey::Ok:
+            if (!repeat)
+                dispatchKey(slint::platform::key_codes::Return, false);
+            break;
+        case OsdKey::Back:
+        case OsdKey::Erase:
+        case OsdKey::Left: // remotes have no Back key; Left is the convention
+            // Back from the home screen returns to a paused session, the
+            // same as its Resume row.
+            if (!repeat && !ui->invoke_back() && ui_bridge::backgroundedSession())
+                ui_bridge::requestResume();
+            break;
+        default: // Right, and typing outside the editor: nothing to act on
+            break;
+        }
     }
 
     // App state -> Bridge properties, on change only.
@@ -269,7 +498,111 @@ struct SlintOsd::Impl
             pBt = Settings::btName.value;
             bridge.set_bt_name(slint::SharedString(pBt));
         }
+
+        const int screen = bridge.get_screen();
+        const bool modal = bridge.get_prompt_kind() != 0 || editing >= 0;
+        if (screen != pScreen || modal != pModal)
+        {
+            focusSeed = true;
+#ifdef USE_BLUETOOTH
+            const bool btNow = screen == 4 || screen == 5;
+            const bool btBefore = pScreen == 4 || pScreen == 5;
+            if (btNow != btBefore)
+                bt::Manager::instance().screenVisible(btNow);
+#endif
+            pScreen = screen;
+            pModal = modal;
+        }
+#ifdef USE_BLUETOOTH
+        pumpBluetooth(bridge, screen);
+#endif
     }
+
+#ifdef USE_BLUETOOTH
+    // Bluetooth state -> Bridge, gated on the manager's generation: an idle
+    // screen pays one atomic load per tick.
+    void pumpBluetooth(const Bridge &bridge, int screen)
+    {
+        auto &manager = bt::Manager::instance();
+        const uint32_t generation = manager.generation();
+        if (btSeen && generation == pBtGen)
+            return;
+        btSeen = true;
+        pBtGen = generation;
+        const bt::Snapshot s = manager.snapshot();
+
+        syncRows(*btPaired, s.paired);
+        syncRows(*btFound, s.found);
+
+        BtRow current;
+        bool present = false;
+        for (const bt::DeviceRow &d : s.paired)
+            if (d.id == btCurrentId)
+            {
+                current = toRow(d);
+                present = true;
+            }
+        if (!(current == pBtCurrent))
+        {
+            bridge.set_bt_current(current);
+            pBtCurrent = current;
+        }
+        // The device screen's device was forgotten: back to the list.
+        if (screen == 5 && !present)
+            bridge.set_screen(4);
+
+        if (s.summary != pBtSummary)
+        {
+            pBtSummary = s.summary;
+            bridge.set_bt_summary(slint::SharedString(pBtSummary));
+        }
+        if (s.status != pBtStatus)
+        {
+            pBtStatus = s.status;
+            bridge.set_bt_status(slint::SharedString(pBtStatus));
+        }
+        if (s.scanning != pBtScanning)
+        {
+            pBtScanning = s.scanning;
+            bridge.set_bt_scanning(pBtScanning);
+        }
+        if (s.scanAllowed != pBtScanAllowed)
+        {
+            pBtScanAllowed = s.scanAllowed;
+            bridge.set_bt_scan_allowed(pBtScanAllowed);
+        }
+        // Another dialog (or none): it starts without a keyboard ring.
+        const int kind = (int)s.prompt.kind;
+        if (kind != pPromptKind || s.prompt.title != pPromptTitle)
+            bridge.set_prompt_focus(-1);
+        if (s.prompt.title != pPromptTitle)
+        {
+            pPromptTitle = s.prompt.title;
+            bridge.set_prompt_title(slint::SharedString(pPromptTitle));
+        }
+        if (s.prompt.code != pPromptCode)
+        {
+            pPromptCode = s.prompt.code;
+            bridge.set_prompt_code(slint::SharedString(pPromptCode));
+        }
+        if (s.prompt.hint != pPromptHint)
+        {
+            pPromptHint = s.prompt.hint;
+            bridge.set_prompt_hint(slint::SharedString(pPromptHint));
+        }
+        if (s.prompt.acceptLabel != pPromptAccept)
+        {
+            pPromptAccept = s.prompt.acceptLabel;
+            bridge.set_prompt_accept_label(slint::SharedString(pPromptAccept));
+        }
+        // Kind last: the dialog appears with its text already in place.
+        if (kind != pPromptKind)
+        {
+            pPromptKind = kind;
+            bridge.set_prompt_kind(kind);
+        }
+    }
+#endif
 };
 
 SlintOsd::~SlintOsd()
@@ -345,6 +678,29 @@ bool SlintOsd::beginDrm(int width, int height)
     bridge.on_osk_ok([impl] { impl->saveField(); });
     bridge.on_osk_cancel([impl] { impl->setEditing(-1); });
 
+#ifdef USE_BLUETOOTH
+    // The manager queues every request for its own thread; nothing here blocks.
+    bridge.set_bt_available(true);
+    bridge.set_bt_paired(impl->btPaired);
+    bridge.set_bt_found(impl->btFound);
+    bridge.on_bt_scan([](bool on) { bt::Manager::instance().scan(on); });
+    bridge.on_bt_pair([](slint::SharedString id) {
+        bt::Manager::instance().pair(std::string(std::string_view(id)));
+    });
+    bridge.on_bt_open([impl](slint::SharedString id) {
+        impl->btCurrentId = std::string(std::string_view(id));
+        impl->btSeen = false; // re-pump bt-current now
+    });
+    bridge.on_bt_connect([](slint::SharedString id, bool on) {
+        bt::Manager::instance().connect(std::string(std::string_view(id)), on);
+    });
+    bridge.on_bt_forget([](slint::SharedString id) {
+        bt::Manager::instance().forget(std::string(std::string_view(id)));
+    });
+    bridge.on_prompt_accept([] { bt::Manager::instance().promptAccept(); });
+    bridge.on_prompt_cancel([] { bt::Manager::instance().promptCancel(); });
+#endif
+
     ui->show();
     _impl->win = g_platform->window;
     if (_impl->win == nullptr)
@@ -414,7 +770,30 @@ bool SlintOsd::tick()
         impl.lastDown = down;
     }
 
+    // Keys before pump(), so a screen a key switches to is pumped and laid
+    // out in this same tick.
+    {
+        KeyEvent keys[KEY_QUEUE];
+        int count;
+        {
+            std::lock_guard<std::mutex> lock(_keyMutex);
+            count = _keyCount;
+            std::copy(_keys, _keys + count, keys);
+            _keyCount = 0;
+        }
+        for (int i = 0; i < count; i++)
+            impl.applyKey(keys[i].nav, keys[i].ch, keys[i].value);
+    }
+
     impl.pump();
+    if (impl.focusSeed)
+    {
+        impl.focusSeed = false;
+        // Tab from nothing focused lands on the first row (Back): the ring is
+        // where a keyboard user expects it after every switch.
+        if (impl.keyUsed && mono_ms() - impl.lastKeyMs < KEY_RECENT_MS)
+            impl.dispatchKey(slint::platform::key_codes::Tab, false);
+    }
     slint::platform::update_timers_and_animations();
 
     const bool fullPush = impl.fullPush;
@@ -453,6 +832,34 @@ void SlintOsd::invalidate()
     _impl->fullPush = true;
     if (_impl->win != nullptr)
         _impl->win->dirty = true;
+}
+
+void SlintOsd::key(OsdKey nav, char ch, int value)
+{
+    std::lock_guard<std::mutex> lock(_keyMutex);
+    // A full queue drops the newest: the UI is not ticking (or not keeping
+    // up), and replaying a burst later would only surprise.
+    if (_keyCount < KEY_QUEUE)
+        _keys[_keyCount++] = {nav, ch, (int8_t)value};
+}
+
+void SlintOsd::hidden()
+{
+    {
+        std::lock_guard<std::mutex> lock(_keyMutex);
+        _keyCount = 0;
+    }
+    if (_impl == nullptr)
+        return;
+#ifdef USE_BLUETOOTH
+    // Discovery stops with the screens. An open dialog stays: it is still
+    // there to finish when the UI comes back, and BlueZ's own timeouts end
+    // it otherwise.
+    if (_impl->pScreen == 4 || _impl->pScreen == 5)
+        bt::Manager::instance().screenVisible(false);
+#endif
+    // pScreen stays: the screen -- and its focused row -- are still there
+    // when the UI comes back, so there is nothing to re-seed.
 }
 
 #endif /* USE_SLINT */

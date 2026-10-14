@@ -133,8 +133,9 @@ Two host-side harnesses build with `USE_AA_WIRELESS`:
 
 - `examples/aa_aaw_test` — socketpair round-trip of the RFCOMM credential
   handshake (`make aa_aaw_test`).
-- `examples/aa_bt_test` — runs the Bluetooth D-Bus service against a live BlueZ
-  and makes the host discoverable (`make aa_bt_test && sudo ../out/aa_bt_test`,
+- `examples/aa_bt_test` — runs the Bluetooth D-Bus service, plus the app's
+  Bluetooth manager (which owns the pairing agent), against a live BlueZ and
+  makes the host discoverable (`make aa_bt_test && sudo ../out/aa_bt_test`,
   then `bluetoothctl show`).
 
 ## Protocol reference

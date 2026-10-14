@@ -15,9 +15,7 @@
 #define PROPS_IFACE "org.freedesktop.DBus.Properties"
 #define ADAPTER_IFACE "org.bluez.Adapter1"
 #define PROFILE_MGR_IFACE "org.bluez.ProfileManager1"
-#define AGENT_MGR_IFACE "org.bluez.AgentManager1"
 
-#define AGENT_PATH "/fcp/cp/agent"
 #define IAP_SERVER_PATH "/fcp/cp/iap_server"
 #define IAP_CLIENT_PATH "/fcp/cp/iap_client"
 #define CARPLAY_PATH "/fcp/cp/carplay"
@@ -174,44 +172,6 @@ bool CpBluetooth::setupAdapter()
     return true;
 }
 
-bool CpBluetooth::registerAgent()
-{
-    static DBusObjectPathVTable vtable;
-    vtable.message_function = &CpBluetooth::agentMessage;
-    vtable.unregister_function = nullptr;
-    if (!dbus_connection_register_object_path(_conn, AGENT_PATH, &vtable, this))
-    {
-        log_e("cp-bt: can't register agent object");
-        return false;
-    }
-
-    const char *path = AGENT_PATH;
-    const char *cap = "DisplayYesNo";
-    for (const char *method : {"RegisterAgent", "RequestDefaultAgent"})
-    {
-        DBusMessage *msg = dbus_message_new_method_call(BLUEZ, "/org/bluez", AGENT_MGR_IFACE, method);
-        DBusMessageIter it;
-        dbus_message_iter_init_append(msg, &it);
-        dbus_message_iter_append_basic(&it, DBUS_TYPE_OBJECT_PATH, &path);
-        if (strcmp(method, "RegisterAgent") == 0)
-            dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &cap);
-
-        DBusError err;
-        dbus_error_init(&err);
-        DBusMessage *reply = dbus_connection_send_with_reply_and_block(_conn, msg, 2000, &err);
-        dbus_message_unref(msg);
-        if (dbus_error_is_set(&err))
-        {
-            log_w("cp-bt: %s > %s", method, err.message);
-            dbus_error_free(&err);
-        }
-        else if (reply)
-            dbus_message_unref(reply);
-    }
-    log_i("cp-bt: pairing agent registered");
-    return true;
-}
-
 static void addDictEntry(DBusMessageIter *dict, const char *key, int type, const void *value)
 {
     DBusMessageIter entry, var;
@@ -272,24 +232,6 @@ bool CpBluetooth::registerProfile(const char *path, const char *uuid, bool serve
         dbus_message_unref(reply);
     log_i("cp-bt: registered profile %s (%s)", uuid, role);
     return true;
-}
-
-DBusHandlerResult CpBluetooth::agentMessage(DBusConnection *conn, DBusMessage *msg, void *)
-{
-    const char *member = dbus_message_get_member(msg);
-    if (!member)
-        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-
-    log_d("cp-bt: agent %s", member);
-    if (strcmp(member, "RequestConfirmation") == 0 || strcmp(member, "RequestAuthorization") == 0 ||
-        strcmp(member, "AuthorizeService") == 0 || strcmp(member, "Cancel") == 0 ||
-        strcmp(member, "Release") == 0 || strcmp(member, "DisplayPasskey") == 0 ||
-        strcmp(member, "DisplayPinCode") == 0)
-    {
-        emptyReply(conn, msg);
-        return DBUS_HANDLER_RESULT_HANDLED;
-    }
-    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
 DBusHandlerResult CpBluetooth::profileMessage(DBusConnection *conn, DBusMessage *msg, void *user)
@@ -374,7 +316,12 @@ bool CpBluetooth::start(const Config &cfg)
         return false;
     }
 
+    // A dbus-daemon restart (`bt off`) must not take the whole app down.
+    dbus_connection_set_exit_on_disconnect(_conn, FALSE);
+
     _running = true;
+    // Pairing itself (the agent) belongs to the app-wide bt::Manager, which is
+    // already up: the iPhone still pairs without a prompt through it.
     setupAdapter();
 
     // Fill in our identity's Bluetooth MAC from the adapter (the phone matches
@@ -383,7 +330,6 @@ bool CpBluetooth::start(const Config &cfg)
     if (adapterAddress(mac))
         _cfg.identity.bluetoothMac = mac;
 
-    registerAgent();
     registerProfile(IAP_SERVER_PATH, IAP_SERVER_UUID, true, IAP_CHANNEL, IAP_SDP_RECORD,
                     "Wireless iAP");
     registerProfile(IAP_CLIENT_PATH, IAP_CLIENT_UUID, false, 0, nullptr, nullptr);
