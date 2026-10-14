@@ -3,6 +3,7 @@
 #ifdef USE_CEDRUS
 
 #include <cstring>
+#include <vector>
 #include <cstdio>
 #include <cerrno>
 
@@ -414,6 +415,26 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
         uint8_t *data_ptr = segment->data();
         int data_size = segment->length();
 
+        // Parameter sets arrive as a segment of their own (CarPlay's
+        // VideoConfig, Android Auto's codec config). Alone it holds no picture,
+        // which the parser and the decoder both reject ("missing picture in
+        // access unit"), so keep it and feed it in front of the next picture
+        // -- one access unit, as the stream would carry it inline.
+        if (!annexbHasPicture(data_ptr, data_size, _codecId == AV_CODEC_ID_HEVC))
+        {
+            if (_prefix.size() + data_size <= MAX_PREFIX_BYTES)
+                _prefix.insert(_prefix.end(), data_ptr, data_ptr + data_size);
+            continue;
+        }
+        if (!_prefix.empty())
+        {
+            // The parser reads up to AV_INPUT_BUFFER_PADDING_SIZE past the end.
+            _prefix.insert(_prefix.end(), data_ptr, data_ptr + data_size);
+            _prefix.resize(_prefix.size() + AV_INPUT_BUFFER_PADDING_SIZE, 0);
+            data_ptr = _prefix.data();
+            data_size = (int)(_prefix.size() - AV_INPUT_BUFFER_PADDING_SIZE);
+        }
+
         while (_active && data_size > 0)
         {
             // The stateless cedrus decoder needs the parser to extract the
@@ -435,15 +456,9 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
             packet->size = pk_size;
 
             const uint64_t t0 = mono_us();
-            int send_ret = avcodec_send_packet(_ctx, packet);
+            int send_ret = avcodec_send_packet(_ctx, packet); // copies: not refcounted
             if (send_ret != 0)
             {
-                // A packet with only parameter sets (CarPlay sends SPS/PPS as
-                // a segment of their own) carries no picture: ffmpeg stores
-                // the sets, then reports "no frame!" as INVALIDDATA.
-                if (send_ret == AVERROR_INVALIDDATA &&
-                    !annexbHasPicture(pk_data, pk_size, _codecId == AV_CODEC_ID_HEVC))
-                    continue;
                 log_w("[V4L2-DRM] can't decode packet > %s", avErrorText(send_ret).c_str());
                 // A stream the hardware cannot actually handle fails on every
                 // packet: the kernel can accept the format and still have no
@@ -472,6 +487,7 @@ void V4l2DrmDecoder::loop(AVPacket *packet, AVFrame *frame)
                 av_frame_unref(frame); // no-op when present() moved the ref out
             }
         }
+        _prefix.clear(); // consumed: data_ptr pointed into it until here
     }
 }
 
