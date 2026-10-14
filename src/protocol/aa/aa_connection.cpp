@@ -728,6 +728,14 @@ bool AaConnection::sendKey(uint32_t keycode)
            sendFrame(AA_CH_INPUT, AA_MSG_INPUT_REPORT, up.data(), up.size(), AA_FLAG_ENC_SIGNAL);
 }
 
+bool AaConnection::sendRelative(uint32_t keycode, int32_t delta)
+{
+    if (!_channels[AA_CH_INPUT].open)
+        return true; // dropped, as in sendKey()
+    aa_proto::Bytes report = aa_proto::inputReportRelative(nowNs(), keycode, delta);
+    return sendFrame(AA_CH_INPUT, AA_MSG_INPUT_REPORT, report.data(), report.size(), AA_FLAG_ENC_SIGNAL);
+}
+
 // Translate the Carlinkit-shaped Messages the application layer produces.
 bool AaConnection::translate(const Message &message)
 {
@@ -848,12 +856,17 @@ bool AaConnection::translate(const Message &message)
             return sendKey(AA_KEY_MEDIA_PREVIOUS);
         case BTN_SIRI:
             return sendKey(AA_KEY_SEARCH);
-        case 16: // night mode on
-        case 17: // night mode off
+        case BTN_ROTATE_NEXT:
+            return sendRelative(AA_KEY_ROTARY_CONTROLLER, 1);
+        case BTN_ROTATE_PREV:
+            return sendRelative(AA_KEY_ROTARY_CONTROLLER, -1);
+        case BTN_NIGHT_ON:
+        case BTN_NIGHT_OFF:
+        case BTN_NIGHT_AUTO: // no light sensor to follow: day, as at connect
         {
             if (!_channels[AA_CH_SENSOR].open)
                 return true;
-            aa_proto::Bytes batch = aa_proto::sensorBatchNightMode(button == 16);
+            aa_proto::Bytes batch = aa_proto::sensorBatchNightMode(button == BTN_NIGHT_ON);
             return sendFrame(AA_CH_SENSOR, AA_MSG_SENSOR_BATCH, batch.data(),
                              batch.size(), AA_FLAG_ENC_SIGNAL);
         }

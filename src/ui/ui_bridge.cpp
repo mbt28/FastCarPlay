@@ -13,7 +13,10 @@ namespace
 std::atomic<bool> g_restart{false};
 std::atomic<bool> g_backgrounded{false};
 std::atomic<bool> g_resume{false};
+std::atomic<bool> g_night{false};
 std::atomic<bool> g_restartNeeded{false};
+std::atomic<bool> g_linkUsb{false};
+std::atomic<bool> g_linkWifi{false};
 std::string g_status = "";
 
 // Protocol id <-> the "protocol" setting string. One table, so the picker,
@@ -85,6 +88,22 @@ bool backgroundedSession()
     return g_backgrounded;
 }
 
+void setPhoneLink(bool usb, bool wifi)
+{
+    g_linkUsb = usb;
+    g_linkWifi = wifi;
+}
+
+bool phoneLinkUsb()
+{
+    return g_linkUsb;
+}
+
+bool phoneLinkWifi()
+{
+    return g_linkWifi;
+}
+
 void requestResume()
 {
     g_resume = true;
@@ -93,6 +112,16 @@ void requestResume()
 bool takeResumeRequest()
 {
     return g_resume.exchange(false);
+}
+
+void nightModeChanged()
+{
+    g_night = true;
+}
+
+bool takeNightModeChange()
+{
+    return g_night.exchange(false);
 }
 
 void setRestartNeeded()

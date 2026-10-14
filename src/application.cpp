@@ -185,13 +185,19 @@ Backend resolveBackend()
 #endif
 }
 
-#ifdef USE_BLUETOOTH
-bool wirelessBackend()
+// The phone pairs over Bluetooth and streams over Wi-Fi (not over USB).
+// Resolved once, like the connection itself: a source picked in the UI is
+// already in Settings::protocol but only runs after the restart.
+[[maybe_unused]] bool wirelessBackend()
 {
-    const Backend b = resolveBackend();
-    return b == Backend::CpWireless || b == Backend::AaWireless;
+    static const bool wireless = [] {
+        const Backend b = resolveBackend();
+        return b == Backend::CpWireless || b == Backend::AaWireless;
+    }();
+    return wireless;
 }
 
+#ifdef USE_BLUETOOTH
 // The Bluetooth manager brackets the connection: up before it (its agent must
 // already answer when a phone pairs) and down after it. Declare it before the
 // connection so destruction runs in that order.
@@ -210,6 +216,22 @@ struct VolumeScope
     VolumeScope() { AudioVolume::instance().start(); }
     ~VolumeScope() { AudioVolume::instance().stop(); }
 };
+
+#ifdef USE_OSD_UI
+// The Night setting as the control the backends understand.
+int nightModeButton()
+{
+    switch ((int)Settings::nightMode)
+    {
+    case 0:
+        return BTN_NIGHT_OFF;
+    case 1:
+        return BTN_NIGHT_ON;
+    default:
+        return BTN_NIGHT_AUTO;
+    }
+}
+#endif
 
 // Discovery competes with a wireless phone session for the shared radio, so
 // the manager hears when one starts and ends. ONLINE counts: the phone is
@@ -520,6 +542,12 @@ void Application::loopDrm()
         if (decoderRunning)
             syncDecoderCodec(decoder, protocol, startedCodec);
         publishStatus(protocol);
+#ifdef USE_OSD_UI
+        // A Night change made on the screens reaches the phone even when it
+        // takes the screen right after.
+        if (ui_bridge::takeNightModeChange())
+            protocol.send(Message::Control(nightModeButton()));
+#endif
         auto state = protocol.state();
         uint32_t frames = drm_display::videoFrames();
         // "Video flowing" = connected and at least one frame was presented
@@ -583,6 +611,9 @@ void Application::loopDrm()
                     state == PROTOCOL_STATUS_CONNECTED && !protocol.videoFocused();
                 ui_bridge::setBackgroundedSession(backgrounded);
                 ui_bridge::setStatus(backgrounded ? "Session paused" : uiStatusText(state));
+                const bool linked =
+                    state == PROTOCOL_STATUS_ONLINE || state == PROTOCOL_STATUS_CONNECTED;
+                ui_bridge::setPhoneLink(linked && !wirelessBackend(), linked && wirelessBackend());
                 if (ui_bridge::takeResumeRequest())
                     protocol.requestVideoFocus();
 #ifdef __linux__

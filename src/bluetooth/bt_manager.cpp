@@ -358,8 +358,8 @@ bool samePrompt(const Prompt &a, const Prompt &b)
 bool sameSnapshot(const Snapshot &a, const Snapshot &b)
 {
     return a.paired == b.paired && a.found == b.found && a.scanning == b.scanning &&
-           a.scanAllowed == b.scanAllowed && a.status == b.status && a.summary == b.summary &&
-           samePrompt(a.prompt, b.prompt);
+           a.scanAllowed == b.scanAllowed && a.phoneConnected == b.phoneConnected &&
+           a.status == b.status && a.summary == b.summary && samePrompt(a.prompt, b.prompt);
 }
 } // namespace
 
@@ -683,17 +683,18 @@ struct Manager::Impl
         return d && isHid(*d);
     }
 
-    // In a wireless mode a phone connected over Bluetooth is its session --
-    // or the handoff before it -- on the radio that discovery would share.
-    bool phoneLinked() const
+    // A phone -- any device that is not an input device -- is connected.
+    bool phoneConnected() const
     {
-        if (!phonePairing)
-            return false;
         for (const auto &kv : devices)
             if (kv.second.connected && !isHid(kv.second))
                 return true;
         return false;
     }
+
+    // In a wireless mode a phone connected over Bluetooth is its session --
+    // or the handoff before it -- on the radio that discovery would share.
+    bool phoneLinked() const { return phonePairing && phoneConnected(); }
 
     bool scanBlocked() const { return sessionActive || phoneLinked(); }
 
@@ -1735,6 +1736,7 @@ struct Manager::Impl
 
         s.scanning = scanWanted;
         s.scanAllowed = !scanBlocked();
+        s.phoneConnected = ready() && phoneConnected();
         if (!transient.empty())
             s.status = transient;
         else if (pairPending)

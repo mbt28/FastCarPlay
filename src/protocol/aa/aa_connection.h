@@ -76,6 +76,7 @@ private:
     // Translate a Carlinkit-shaped Message from the public writeQueue.
     bool translate(const Message &message);
     bool sendKey(uint32_t keycode);
+    bool sendRelative(uint32_t keycode, int32_t delta);
 
     std::unique_ptr<AaTransport> _transport;
 

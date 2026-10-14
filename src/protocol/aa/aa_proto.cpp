@@ -197,7 +197,8 @@ Bytes serviceDiscoveryResponse()
     }
 
     // Input source (channel 8): a touchscreen in the video coordinate space
-    // plus the keycodes the Carlinkit keymap can deliver.
+    // plus the keys and the rotary controller (a knob's turns) that the
+    // Bluetooth keyboards and remotes deliver.
     {
         int width, height;
         aa_resolution(Settings::aaResolution, width, height);
@@ -211,7 +212,8 @@ Bytes serviceDiscoveryResponse()
         static const int32_t keycodes[] = {
             AA_KEY_HOME, AA_KEY_BACK, AA_KEY_DPAD_UP, AA_KEY_DPAD_DOWN, AA_KEY_DPAD_LEFT,
             AA_KEY_DPAD_RIGHT, AA_KEY_DPAD_CENTER, AA_KEY_SEARCH, AA_KEY_PLAY_PAUSE,
-            AA_KEY_MEDIA_NEXT, AA_KEY_MEDIA_PREVIOUS, AA_KEY_MEDIA_PLAY, AA_KEY_MEDIA_PAUSE};
+            AA_KEY_MEDIA_NEXT, AA_KEY_MEDIA_PREVIOUS, AA_KEY_MEDIA_PLAY, AA_KEY_MEDIA_PAUSE,
+            AA_KEY_ROTARY_CONTROLLER};
         input.keycodes_supported_count = sizeof(keycodes) / sizeof(keycodes[0]);
         for (size_t i = 0; i < input.keycodes_supported_count; i++)
             input.keycodes_supported[i] = keycodes[i];
@@ -433,6 +435,17 @@ Bytes inputReportKey(uint64_t timestamp, uint32_t keycode, bool down)
     msg.key_event.keys[0].keycode = keycode;
     msg.key_event.keys[0].down = down;
     msg.key_event.keys[0].metastate = 0;
+    return encode(NS_INPUTMSG(InputReport_fields), msg, 48);
+}
+
+Bytes inputReportRelative(uint64_t timestamp, uint32_t keycode, int32_t delta)
+{
+    NS_INPUTMSG(InputReport) msg = {};
+    msg.timestamp = timestamp;
+    msg.has_relative_event = true;
+    msg.relative_event.data_count = 1;
+    msg.relative_event.data[0].keycode = keycode;
+    msg.relative_event.data[0].delta = delta;
     return encode(NS_INPUTMSG(InputReport_fields), msg, 48);
 }
 

@@ -62,9 +62,10 @@ struct Snapshot
     std::vector<DeviceRow> paired; // bonded HID devices, first-seen order (never re-sorted)
     std::vector<DeviceRow> found;  // discovered, unpaired HID devices, first-seen order
     bool scanning = false;
-    bool scanAllowed = true; // false while a wireless phone session is up
+    bool scanAllowed = true;     // false while a wireless phone session is up
+    bool phoneConnected = false; // a phone (any non-input device) is connected
     std::string status;      // header suffix: "Pairing K380...", "Pairing failed - wrong code"
-    std::string summary;     // Settings row value: "Off", "None", "1 connected", "2 paired"
+    std::string summary;     // Wireless > Bluetooth row value: "Off", "None", "1 connected", "2 paired"
     Prompt prompt;
 };
 

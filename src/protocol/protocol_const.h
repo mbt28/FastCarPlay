@@ -24,6 +24,11 @@
 // Android Auto key translation.
 #define BTN_SIRI 5
 #define BTN_SCREEN_REFRESH 12
+// Day / night appearance for the phone (the Night setting): forced night,
+// forced day, or auto.
+#define BTN_NIGHT_ON 16
+#define BTN_NIGHT_OFF 17
+#define BTN_NIGHT_AUTO 18
 // Navigation buttons
 #define BTN_LEFT 100
 #define BTN_RIGHT 101
@@ -33,6 +38,10 @@
 #define BTN_UP 113
 #define BTN_DOWN 114
 #define BTN_HOME 200
+// A rotary knob's turn, one detent each: focus to the next / previous item
+// (CarPlay's knob wheel, Android Auto's rotary controller).
+#define BTN_ROTATE_NEXT 120
+#define BTN_ROTATE_PREV 121
 // Play control buttons
 #define BTN_PLAY 201
 #define BTN_PAUSE 202

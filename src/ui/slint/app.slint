@@ -10,7 +10,10 @@
 //
 // Input: touch everywhere; a Bluetooth keyboard moves an amber focus ring
 // over the rows (Up/Down), activates (Enter), goes back (Esc/Backspace) and
-// types into the editor -- all fed from C++ (slint_osd.cpp).
+// types into the editor -- all fed from C++ (slint_osd.cpp). Everything is
+// also reachable with a rotary knob alone (turn = next/previous, press =
+// activate): every screen starts with a Back row, and the editor's keys and
+// the dialogs' buttons take the ring too.
 
 import "fonts/font.ttf";
 
@@ -37,6 +40,10 @@ export global Bridge {
     in property <int> volume-level;           // 0..100
     in property <bool> volume-muted;
     in property <bool> volume-bar;            // up for a moment after a change
+    // How the phone is connected right now (the Home screen's icons).
+    in property <bool> link-usb;
+    in property <bool> link-wifi;
+    in property <bool> link-bt;
     in property <string> wifi-ssid;
     in property <string> wifi-pass;
     in property <string> bt-name;
@@ -47,7 +54,7 @@ export global Bridge {
 
     // Bluetooth devices (keyboards, remotes); all text composed in C++.
     in property <bool> bt-available;          // built with Bluetooth support
-    in property <string> bt-summary;          // Settings row value
+    in property <string> bt-summary;          // Wireless > Bluetooth row value
     in property <string> bt-status;           // header suffix ("Searching...")
     in property <bool> bt-scanning;
     in property <bool> bt-scan-allowed: true; // false during a wireless phone session
@@ -63,10 +70,18 @@ export global Bridge {
     in property <string> prompt-hint;
     in property <string> prompt-accept-label;
     in property <int> prompt-focus: -1;      // keyboard ring: 0 accept, 1 Cancel, -1 none
+    // Which volume button has the keyboard ring: 0 "-", 1 "+", -1 neither
+    // (so Left/Right can move between them).
+    in-out property <int> stepper-focus: -1;
+    // The ring's row when it is one that can go away while its screen stays
+    // (the Resume row, a Bluetooth device), "" otherwise: a removed row never
+    // reports losing focus, so C++ watches for it and puts the ring back.
+    in-out property <string> ring-row;
 
     // Navigation, shared so C++ can follow it (discovery runs only while a
     // Bluetooth screen is up) and drive it (the Home key).
-    // 0 home, 1 settings, 2 source, 3 wireless, 4 bluetooth, 5 bt device
+    // 0 home, 1 settings, 2 source, 3 wireless, 4 bluetooth, 5 bt device,
+    // 6 audio
     in-out property <int> screen;
 
     // UI -> app
@@ -76,6 +91,7 @@ export global Bridge {
     callback cycle-night();
     callback cycle-fps();
     callback volume-step(int);                // -1 quieter, +1 louder
+    callback volume-mute();                   // toggle
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -160,6 +176,33 @@ export global Osk {
         root.col = Math.max(0, Math.min(count(root.row) - 1, root.col + dx));
     }
 
+    // One rotary detent: the ring walks every key in reading order --
+    // Cancel, the key rows, the bottom row ending in OK -- and wraps around.
+    // The first one only shows the ring, on the first letter.
+    public function step(d: int) {
+        if (root.row < 0) {
+            root.row = 1;
+            root.col = 0;
+            return;
+        }
+        root.col = Math.max(0, Math.min(count(root.row) - 1, root.col));
+        if (d > 0) {
+            if (root.col + 1 < count(root.row)) {
+                root.col += 1;
+            } else {
+                root.row = root.row == 4 ? 0 : root.row + 1;
+                root.col = 0;
+            }
+        } else if (d < 0) {
+            if (root.col > 0) {
+                root.col -= 1;
+            } else {
+                root.row = root.row == 0 ? 4 : root.row - 1;
+                root.col = count(root.row) - 1;
+            }
+        }
+    }
+
     // Enter/OK on the ringed key: the same as tapping it.
     public function activate() {
         root.col = Math.max(0, Math.min(count(root.row) - 1, root.col));
@@ -219,6 +262,7 @@ component Row inherits Rectangle {
     in property <string> label;
     in property <string> value;
     in property <bool> selected;
+    in property <string> ring-key;            // set on rows that can go away (Bridge.ring-row)
     callback clicked;
 
     height: Style.row-h;
@@ -232,6 +276,16 @@ component Row inherits Rectangle {
         width: 100%;
         height: 100%;
         focus-on-click: false;
+        focus-gained => {
+            if (root.ring-key != "") {
+                Bridge.ring-row = root.ring-key;
+            }
+        }
+        focus-lost => {
+            if (root.ring-key != "" && Bridge.ring-row == root.ring-key) {
+                Bridge.ring-row = "";
+            }
+        }
         key-pressed(event) => {
             if (event.text == Key.Return) {
                 root.clicked();
@@ -267,6 +321,7 @@ component Row inherits Rectangle {
 // a Row: the keyboard ring reaches it and Enter presses it.
 component StepButton inherits Rectangle {
     in property <string> label;
+    in property <int> index;                  // 0 "-", 1 "+" (Bridge.stepper-focus)
     callback clicked;
 
     width: Style.row-h - Style.gap * 2;
@@ -280,6 +335,14 @@ component StepButton inherits Rectangle {
         width: 100%;
         height: 100%;
         focus-on-click: false;
+        focus-gained => {
+            Bridge.stepper-focus = root.index;
+        }
+        focus-lost => {
+            if (Bridge.stepper-focus == root.index) {
+                Bridge.stepper-focus = -1;
+            }
+        }
         key-pressed(event) => {
             if (event.text == Key.Return) {
                 root.clicked();
@@ -330,11 +393,11 @@ component StepperRow inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
-            StepButton { label: "-"; clicked => { root.decrease(); } }
+            StepButton { label: "-"; index: 0; clicked => { root.decrease(); } }
         }
         VerticalLayout {
             alignment: center;
-            StepButton { label: "+"; clicked => { root.increase(); } }
+            StepButton { label: "+"; index: 1; clicked => { root.increase(); } }
         }
     }
 }
@@ -404,6 +467,65 @@ component Header inherits Text {
     overflow: elide;
 }
 
+// How the phone is connected: 24 px line drawings in the text color (drawn
+// here, so no icon font is needed). Shown only while that link is up.
+component IconBluetooth inherits Path {
+    width: 24px;
+    height: 24px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: Style.text;
+    stroke-width: 2px;
+    commands: "M7 7 L17 17 L12 22 L12 2 L17 7 L7 17";
+}
+
+component IconWifi inherits Rectangle {
+    width: 24px;
+    height: 24px;
+    Path {
+        width: 24px;
+        height: 24px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: Style.text;
+        stroke-width: 2px;
+        commands: "M2.5 9.5 A14 14 0 0 1 21.5 9.5 M5.5 13 A9.5 9.5 0 0 1 18.5 13 M8.5 16.5 A5 5 0 0 1 15.5 16.5";
+    }
+    Rectangle {
+        x: 10.5px;
+        y: 18.5px;
+        width: 3px;
+        height: 3px;
+        border-radius: 1.5px;
+        background: Style.text;
+    }
+}
+
+component IconUsb inherits Rectangle {
+    width: 24px;
+    height: 24px;
+    Path {
+        width: 24px;
+        height: 24px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: Style.text;
+        stroke-width: 2px;
+        commands: "M12 4 L12 19 M12 15 L7 11 L7 9 M12 12 L17 9 L17 7.5";
+    }
+    Path {
+        width: 24px;
+        height: 24px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        fill: Style.text;
+        commands: "M12 1 L9 5 L15 5 Z";
+    }
+    Rectangle { x: 15px; y: 4px; width: 4px; height: 4px; background: Style.text; }
+    Rectangle { x: 5px; y: 6px; width: 4px; height: 4px; border-radius: 2px; background: Style.text; }
+    Rectangle { x: 9.5px; y: 18px; width: 5px; height: 5px; border-radius: 2.5px; background: Style.text; }
+}
+
 // Full-screen scrollable column of rows.
 component ListScreen inherits Flickable {
     content-height: col.preferred-height;
@@ -419,12 +541,32 @@ component ListScreen inherits Flickable {
 
 component ScreenHome inherits ListScreen {
     callback goto(int);
-    Header { text: Bridge.source-label + "  -  " + (Bridge.status == "" ? "ready" : Bridge.status); }
+    HorizontalLayout {
+        spacing: Style.gap * 2;
+        padding-right: Style.gap;
+        Header {
+            text: Bridge.source-label + "  -  " + (Bridge.status == "" ? "ready" : Bridge.status);
+            horizontal-stretch: 1;
+        }
+        if Bridge.link-usb: VerticalLayout {
+            alignment: center;
+            IconUsb { }
+        }
+        if Bridge.link-wifi: VerticalLayout {
+            alignment: center;
+            IconWifi { }
+        }
+        if Bridge.link-bt: VerticalLayout {
+            alignment: center;
+            IconBluetooth { }
+        }
+    }
     if Bridge.session-waiting: Row {
         // The hero: twice a normal row, so it is unmistakable at a glance
         // and an easy target on a moving vehicle.
         height: Style.row-h * 2;
         label: "Resume";
+        ring-key: "resume";
         selected: true;
         clicked => { Bridge.resume(); }
     }
@@ -435,22 +577,12 @@ component ScreenSettings inherits ListScreen {
     callback goto(int);
     Header { text: Bridge.restart-needed ? "Settings  -  restart to apply" : "Settings"; }
     // Back at the top (below the header) -- easier to reach on a car screen.
-    // Only four rows fit above the fold: the volume, the one adjusted on the
-    // road, then the connectivity rows.
+    // Only four rows fit above the fold: Audio, the one used on the road,
+    // then the connectivity rows.
     Row { label: "Back"; clicked => { root.goto(0); } }
-    StepperRow {
-        label: "Volume";
-        value: Bridge.volume-label;
-        decrease => { Bridge.volume-step(-1); }
-        increase => { Bridge.volume-step(1); }
-    }
+    Row { label: "Audio"; value: Bridge.volume-label; clicked => { root.goto(6); } }
     Row { label: "Source"; value: Bridge.source-label; clicked => { root.goto(2); } }
     Row { label: "Wireless"; clicked => { root.goto(3); } }
-    if Bridge.bt-available: Row {
-        label: "Bluetooth";
-        value: Bridge.bt-summary;
-        clicked => { root.goto(4); }
-    }
     Row { label: "Night"; value: Bridge.night-label; clicked => { Bridge.cycle-night(); } }
     Row { label: "Video"; value: Bridge.fps-label; clicked => { Bridge.cycle-fps(); } }
     // Only meaningful once something needs it; hidden otherwise rather than
@@ -477,6 +609,25 @@ component ScreenSource inherits ListScreen {
     }
 }
 
+component ScreenAudio inherits ListScreen {
+    callback goto(int);
+    Header { text: "Audio"; }
+    Row { label: "Back"; clicked => { root.goto(1); } }
+    // The level shows while muted too: a volume key unmutes from there.
+    StepperRow {
+        label: "Volume";
+        value: Bridge.volume-level + "%";
+        decrease => { Bridge.volume-step(-1); }
+        increase => { Bridge.volume-step(1); }
+    }
+    Row {
+        label: "Mute";
+        value: Bridge.volume-muted ? "On" : "Off";
+        selected: Bridge.volume-muted;
+        clicked => { Bridge.volume-mute(); }
+    }
+}
+
 component ScreenWireless inherits ListScreen {
     callback goto(int);
     Header { text: Bridge.restart-needed ? "Wireless  -  restart to apply" : "Wireless"; }
@@ -484,6 +635,11 @@ component ScreenWireless inherits ListScreen {
     Row { label: "Name"; value: Bridge.wifi-ssid; clicked => { Bridge.edit-field(0); } }
     Row { label: "Password"; value: Bridge.wifi-pass; clicked => { Bridge.edit-field(1); } }
     Row { label: "BT name"; value: Bridge.bt-name; clicked => { Bridge.edit-field(2); } }
+    if Bridge.bt-available: Row {
+        label: "Bluetooth";
+        value: Bridge.bt-summary;
+        clicked => { root.goto(4); }
+    }
 }
 
 // Paired keyboards/remotes, and pairing new ones. Phones are not listed:
@@ -491,7 +647,7 @@ component ScreenWireless inherits ListScreen {
 component ScreenBluetooth inherits ListScreen {
     callback goto(int);
     Header { text: Bridge.bt-status == "" ? "Bluetooth devices" : "Bluetooth  -  " + Bridge.bt-status; }
-    Row { label: "Back"; clicked => { root.goto(1); } }
+    Row { label: "Back"; clicked => { root.goto(3); } }
     Row {
         label: Bridge.bt-scanning ? "Stop searching" : "Add device";
         value: !Bridge.bt-scan-allowed ? "Not during a session"
@@ -502,6 +658,7 @@ component ScreenBluetooth inherits ListScreen {
     for d in Bridge.bt-paired: Row {
         label: d.name;
         value: d.detail;
+        ring-key: "paired:" + d.id;
         selected: d.connected;
         clicked => {
             Bridge.bt-open(d.id);
@@ -512,6 +669,7 @@ component ScreenBluetooth inherits ListScreen {
     for d in Bridge.bt-found: Row {
         label: d.name;
         value: d.detail;
+        ring-key: "found:" + d.id;
         clicked => { Bridge.bt-pair(d.id); }
     }
 }
@@ -726,7 +884,8 @@ export component AppWindow inherits Window {
         if (Bridge.screen == 0) {
             return false;
         }
-        Bridge.screen = Bridge.screen == 5 ? 4 : Bridge.screen >= 2 ? 1 : 0;
+        // Bluetooth device -> Bluetooth -> Wireless; the rest -> Settings -> Home.
+        Bridge.screen = Bridge.screen == 5 ? 4 : Bridge.screen == 4 ? 3 : Bridge.screen >= 2 ? 1 : 0;
         return true;
     }
 
@@ -736,6 +895,7 @@ export component AppWindow inherits Window {
     if Bridge.screen == 3 && !root.modal: ScreenWireless  { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 4 && !root.modal: ScreenBluetooth { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 5 && !root.modal: ScreenBtDevice  { goto(s) => { Bridge.screen = s; } }
+    if Bridge.screen == 6 && !root.modal: ScreenAudio     { goto(s) => { Bridge.screen = s; } }
     if Bridge.prompt-kind != 0: Prompt {}
     if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}
     // Over everything, including dialogs; display only (no input).

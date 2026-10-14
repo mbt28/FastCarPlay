@@ -108,6 +108,9 @@ private:
     std::atomic<bool> _sessionLive{false};      // :7000 control session up
     std::string _mfiInfo = "no chip";
     bool _started = false;
+    // The knob's select is held: set and cleared by the writer, reset when a
+    // session starts or ends (its release may never come).
+    std::atomic<bool> _knobSelect{false};
 };
 
 #endif /* USE_CP_WIRED */

@@ -46,6 +46,15 @@ bool backgroundedSession();
 // Set by the "Resume" row; the app consumes it and asks the phone to project.
 void requestResume();
 bool takeResumeRequest();
+// Set when the Night setting changes; the app tells a running session.
+void nightModeChanged();
+bool takeNightModeChange();
+
+// How the phone reaches us right now -- a session over USB or over Wi-Fi --
+// for the home screen's icons (Bluetooth comes from the Bluetooth manager).
+void setPhoneLink(bool usb, bool wifi);
+bool phoneLinkUsb();
+bool phoneLinkWifi();
 
 // A change is staged and needs a restart. Nothing restarts under the driver:
 // the settings header says so and an explicit "Restart now" appears.
