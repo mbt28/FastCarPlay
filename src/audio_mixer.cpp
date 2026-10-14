@@ -30,6 +30,9 @@
 // A live source dry this long reverts to needing a prefill (burst gaps shorter
 // than this resume instantly on the hw buffer).
 #define DRY_RELEASE_PERIODS 24
+// Samples at or below this are digital silence (-78 dBFS): what a phone sends
+// while a stream stays open and nothing plays.
+#define SILENCE_LEVEL 4
 
 namespace
 {
@@ -256,6 +259,27 @@ void AudioMixer::capAuxQueue()
         _aux.q->pop();
 }
 
+bool AudioMixer::dropSilence()
+{
+    bool audible = false;
+    for (Source *s : {&_main, &_aux})
+        while (const Message *head = s->q->peek())
+        {
+            const int16_t *p = reinterpret_cast<const int16_t *>(head->data());
+            const size_t n = p ? head->length() / 2 : 0;
+            bool silent = true;
+            for (size_t i = 0; i < n && silent; i++)
+                silent = p[i] <= SILENCE_LEVEL && p[i] >= -SILENCE_LEVEL;
+            if (!silent)
+            {
+                audible = true;
+                break;
+            }
+            s->q->pop();
+        }
+    return audible;
+}
+
 void AudioMixer::loop()
 {
     setThreadName("audio-mixer");
@@ -274,10 +298,13 @@ void AudioMixer::loop()
     {
         if (!_pcm)
         {
-            // Idle: no device, block until either queue has data. Waiting on
+            // Idle: no device, block until either queue has something to
+            // hear. Silence a phone keeps sending while nothing plays is
+            // dropped here, so the codec -- the DAC and the headphone amp,
+            // whose idle hiss is audible -- stays powered down. Waiting on
             // the aux queue keeps voice onset latency minimal; main (music)
             // start tolerates the 100ms poll granularity.
-            if (!_main.q->has(1) && !_aux.q->has(1))
+            if (!dropSilence())
             {
                 _aux.q->waitFor(_active, 100);
                 if (!_active)
@@ -363,10 +390,12 @@ void AudioMixer::loop()
         if (volumeQ15 != 32768 || _volumeQ15 != 32768)
             applyVolume(mix, volumeQ15);
 
+        bool silent = true;
         for (int i = 0; i < MIX_PERIOD * MIX_CHANNELS; i++)
         {
             const int32_t v = mix[i];
             out[i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+            silent = silent && v <= SILENCE_LEVEL && v >= -SILENCE_LEVEL;
         }
 
         snd_pcm_sframes_t w = snd_pcm_writei(_pcm, out, MIX_PERIOD);
@@ -382,9 +411,12 @@ void AudioMixer::loop()
             snd_pcm_writei(_pcm, out, MIX_PERIOD); // retry once after recover
         }
 
-        // Release the codec after a real idle stretch (saves the period wakeups
-        // and lets a future owner reconfigure the hw cleanly).
-        if (mainRendered == 0 && auxRendered == 0 && !_main.q->has(1) && !_aux.q->has(1))
+        // Release the codec after a real idle stretch -- nothing to play, or
+        // only digital silence from a stream the phone keeps open. The kernel
+        // then powers the DAC and the headphone amp down (no idle hiss), the
+        // period wakeups stop, and a future owner can reconfigure the hw.
+        if (silent ||
+            (mainRendered == 0 && auxRendered == 0 && !_main.q->has(1) && !_aux.q->has(1)))
         {
             if (++idlePeriods * MIX_PERIOD_MS > Settings::audioIdleHoldMs)
             {

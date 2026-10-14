@@ -72,6 +72,9 @@ private:
     void applyVolume(int32_t *mix, int32_t targetQ15);
     // Drop stale aux segments past the voice latency cap.
     void capAuxQueue();
+    // With the device closed: drop queued segments of digital silence; true
+    // when audible audio waits.
+    bool dropSilence();
 
     std::thread _thread;
     std::atomic<bool> _active{false};
