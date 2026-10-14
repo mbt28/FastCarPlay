@@ -16,6 +16,7 @@ extern "C"
 
 #include <atomic>
 #include <thread>
+#include <vector>
 
 #include "idecoder.h"
 #include "struct/atomic_queue.h"
@@ -59,6 +60,10 @@ private:
     uint32_t _dropsAtStart = 0;
     AVFrame *_pending = nullptr;
     bool _hasPending = false;
+    // Picture-less packets (parameter sets) waiting to go out in front of the
+    // next picture; bounded so a stream that never sends one can't grow it.
+    static constexpr size_t MAX_PREFIX_BYTES = 64 * 1024;
+    std::vector<uint8_t> _prefix;
     struct
     {
         uint32_t input = 0, decoded = 0, shown = 0, superseded = 0, dropped = 0;
