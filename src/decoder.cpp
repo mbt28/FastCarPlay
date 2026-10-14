@@ -17,7 +17,7 @@ Decoder::~Decoder()
     stop();
 }
 
-void Decoder::start(AtomicQueue<Message> *data, AVCodecID codecId)
+void Decoder::start(AtomicQueue<Message> *data, AVCodecID codecId, bool)
 {
     if (_active)
         stop();

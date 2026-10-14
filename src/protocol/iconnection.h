@@ -17,12 +17,20 @@ extern "C"
 
 // Queue depths bound both memory and latency on a 64 MB board: at 128 slots
 // a stalled consumer could park 6-16 MB of payloads AND 2-4 seconds of A/V
-// behind it. 16 video slots is ~0.27 s at 60 fps (video pushes drop-oldest,
-// so overflow costs latency recovered by a keyframe, never fresh frames);
-// 24 audio slots is ~0.5 s of 48 kHz stereo segments.
+// behind it. 16 video slots is ~0.27 s at 60 fps (Android Auto video pushes
+// drop-oldest, so overflow costs latency recovered by a keyframe, never fresh
+// frames); 24 audio slots is ~0.5 s of 48 kHz stereo segments.
 #define WRITE_QUEUE_SIZE 32
 #define VIDEO_QUEUE_SIZE 16
 #define AUDIO_QUEUE_SIZE 24
+
+// Video over TCP (CarPlay) is pushed with back-pressure instead: past this
+// many queued frames the stream reader waits, TCP flow control slows the
+// phone, and its encoder skips frames -- which, unlike a frame dropped here,
+// breaks no reference chain. Shallow on purpose: every queued frame is
+// display latency. The timeout only guards against a stalled decoder.
+#define VIDEO_BACKPRESSURE_DEPTH 4
+#define VIDEO_BACKPRESSURE_TIMEOUT_MS 500
 
 // Protocol backend interface. Consumers (application loops, decoders, audio,
 // input) interact only through the queues and the members below, so any
@@ -52,10 +60,16 @@ public:
     virtual void stop() = 0;
     virtual const std::string status() const = 0;
 
-    // The codec of the frames fed into videoStream. Carlinkit and Android Auto
-    // are H.264; wireless CarPlay negotiates HEVC. The decoder is started with
-    // this, so a backend that streams H.265 must override it.
+    // The codec of the frames fed into videoStream. Android Auto is H.264;
+    // CarPlay negotiates HEVC when the decoder can do it. The decoder is
+    // started with this, so a backend that streams H.265 must override it.
     virtual AVCodecID videoCodec() const { return AV_CODEC_ID_H264; }
+
+    // True when the backend asks the phone for a keyframe whenever
+    // videoStream drops a frame. The decoder then skips to that keyframe
+    // (holding the last good picture) instead of decoding through the gap,
+    // which smears garbage over moving content until the next keyframe.
+    virtual bool keyframeOnDrop() const { return false; }
 
     // True while the phone is actually projecting. A session can be connected
     // but backgrounded -- the user pressed exit, the phone handed the screen

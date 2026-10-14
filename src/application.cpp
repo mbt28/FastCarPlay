@@ -173,7 +173,7 @@ void Application::startDecoder(IDecoder &decoder, IConnection &protocol, AVCodec
 {
     if (decoderPresentable(codecId))
     {
-        decoder.start(&protocol.videoStream, codecId);
+        decoder.start(&protocol.videoStream, codecId, protocol.keyframeOnDrop());
         return;
     }
     // Decoding frames nobody can show would pin the core for nothing; the
