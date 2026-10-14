@@ -225,6 +225,9 @@ private:
     InputSource *_inputSource = nullptr;
     unsigned _eventCseq = 0; // reverse-HTTP CSeq for our event commands
     std::atomic<bool> _running{true};
+    // RECORD seen: our commands are only valid from then on (an early one
+    // stalls the session bring-up on older iOS).
+    std::atomic<bool> _recorded{false};
     // One ALSA capture client at a time. The phone tears a telephony/Siri
     // stream down and re-SETUPs a fresh one repeatedly; _uplinkGen tags each
     // new input stream so the newest uplink supersedes the previous one and
