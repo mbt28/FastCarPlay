@@ -140,8 +140,9 @@
 # Drop voice audio older than this instead of playing it late.
 #audio-voice-max-latency-ms = 300
 
-# Keep the PCM open this long after the last stream ends (avoids churn
-# between back-to-back prompts).
+# Keep the PCM open this long after the last sound -- a stream ending, or
+# one the phone keeps open sending only silence -- then release it, so the
+# DAC and amplifier power down (avoids churn between back-to-back prompts).
 #audio-idle-hold-ms = 1500
 
 # Software gain (integer multiplier, saturating) applied to captured mic PCM.

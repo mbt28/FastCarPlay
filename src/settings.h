@@ -135,8 +135,9 @@ public:
     // live edge. Media is not capped (smoothness wins).
     static inline Setting<int> audioMaxLatencyMs{"audio-voice-max-latency-ms", 300};
     // The mixer holds the codec open across gaps shorter than this (no reopen
-    // churn mid-call) and releases it after this long of full silence, so an
-    // idle app leaves the codec free and spends no period wakeups.
+    // churn mid-call) and releases it after this long of full silence -- no
+    // audio, or only digital silence from a stream the phone keeps open -- so
+    // the DAC and amp power down and no period wakeups are spent.
     static inline Setting<int> audioIdleHoldMs{"audio-idle-hold-ms", 1500};
     // Software gain applied to captured mic PCM (after the DC blocker) before it
     // is sent to the phone. Integer multiplier with saturation; 1 = unchanged.
