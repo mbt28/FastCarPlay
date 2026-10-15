@@ -175,3 +175,17 @@
 # screen dark.
 #reboot-command = reboot
 #shutdown-command = poweroff
+
+# --- Camera -----------------------------------------------------------------
+# A V4L2 capture device (e.g. a composite reversing camera on the TV decoder)
+# shown full screen from Settings > Video > Test camera, which also sets the
+# rest. The device must give NV12 in contiguous memory (it is scanned out as
+# is). Empty device = the first capture device found.
+#camera-device =
+# Input index (e.g. 0 = TVIN0, 1 = TVIN1) and video standard: auto, pal, ntsc.
+#camera-input = 0
+#camera-standard = auto
+# Picture levels, 0-100 % of the device's range; -1 leaves the device's value.
+#camera-brightness = -1
+#camera-contrast = -1
+#camera-saturation = -1

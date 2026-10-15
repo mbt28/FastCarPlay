@@ -59,6 +59,7 @@ struct VFb
 };
 std::map<int, VFb> vfbCache;
 std::atomic<uint32_t> vframes{0};
+bool videoHeld = false; // the camera owns the video plane: decoder frames wait
 struct PlaneProps
 {
     uint32_t fb, crtc, sx, sy, sw, sh, cx, cy, cw, ch, zpos;
@@ -547,11 +548,13 @@ int height() { return (int)ch; }
 int widthMm()  { return (int)cwmm; }
 int heightMm() { return (int)chmm; }
 
-Show showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
-               int nplanes, const int *dmabufFds, const uint32_t *pitches,
-               const uint32_t *offsets, uint64_t modifier, const char *tag)
+namespace
 {
-    std::lock_guard<std::mutex> lock(mtx);
+// showVideo / showCamera. Caller holds the mutex.
+Show show_locked(uint32_t fourcc, int w, int h, int srcW, int srcH, int nplanes,
+                 const int *dmabufFds, const uint32_t *pitches, const uint32_t *offsets,
+                 uint64_t modifier, const char *tag, bool camera)
+{
     if (fd < 0) return Show::Failed;
 
     int np = nplanes < 4 ? nplanes : 4;
@@ -639,7 +642,8 @@ Show showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
         return Show::Failed; // fb stays cached; a transient commit failure won't drop it
     }
     modeset_done = true;
-    vframes.fetch_add(1, std::memory_order_relaxed);
+    if (!camera) // only the phone's frames say "video is flowing"
+        vframes.fetch_add(1, std::memory_order_relaxed);
 
     // Video owns the primary plane now; the black placeholder can go. Wait one
     // extra commit so the flip that replaced it has certainly completed.
@@ -650,6 +654,32 @@ Show showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
     }
 
     return Show::Shown;
+}
+} // namespace
+
+Show showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
+               int nplanes, const int *dmabufFds, const uint32_t *pitches,
+               const uint32_t *offsets, uint64_t modifier, const char *tag)
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    if (videoHeld)
+        return Show::Busy;
+    return show_locked(fourcc, w, h, srcW, srcH, nplanes, dmabufFds, pitches, offsets,
+                       modifier, tag, false);
+}
+
+Show showCamera(uint32_t fourcc, int w, int h, int nplanes, const int *dmabufFds,
+                const uint32_t *pitches, const uint32_t *offsets, uint64_t modifier)
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    return show_locked(fourcc, w, h, w, h, nplanes, dmabufFds, pitches, offsets, modifier,
+                       "camera", true);
+}
+
+void holdVideo(bool hold)
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    videoHeld = hold;
 }
 
 uint32_t videoFrames()

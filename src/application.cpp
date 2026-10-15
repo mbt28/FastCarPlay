@@ -25,6 +25,7 @@
 #include "v4l2drm_decoder.h" // mainline cedrus (ffmpeg v4l2-request) HW decoder (F1C200s)
 #include "drm_display.h"     // shared DRM session: video plane + UI overlay plane
 #include "serial_input.h"    // TEST-only serial-console navigation (F1C200s)
+#include "camera.h"          // Settings > Video > Test camera, on the video plane
 #endif
 #ifdef __linux__
 #include "touch_input.h" // evdev touchscreen; used on the drm/headless render paths
@@ -530,6 +531,10 @@ void Application::loopDrm()
     bool decoderRunning = true;
     bool uiShowsHome = true;
     bool osdShown = false;
+#ifdef USE_OSD_UI
+    Camera camera;
+    bool cameraDone = false; // ended or failed while its view is still up
+#endif
     uint32_t framesAtConnect = drm_display::videoFrames();
     AVFrame *frame = nullptr;
     uint32_t frameId = 0;
@@ -600,6 +605,53 @@ void Application::loopDrm()
             dirty = true;
         }
 
+#ifdef USE_OSD_UI
+        // Settings > Video > Test camera: the camera owns the screen until a
+        // tap or a key closes its view, whatever the phone does meanwhile.
+        const bool cameraWanted = osd.active() && ui_bridge::cameraTest();
+        if (!cameraWanted)
+            cameraDone = false;
+        if (camera.running() && (!cameraWanted || camera.failed()))
+        {
+            if (camera.failed())
+                ui_bridge::cameraFailed(camera.error());
+            camera.stop();
+            cameraDone = cameraWanted;
+            uiShowsHome = false; // the screens come back with a full repaint
+        }
+        if (cameraWanted && !cameraDone && !camera.running() && !camera.start())
+        {
+            ui_bridge::cameraFailed(camera.error());
+            cameraDone = true;
+        }
+        if (camera.running())
+        {
+            // The camera is on the video plane; the screens give way to the
+            // hint (or the volume bar) in a window of the overlay. Taps and
+            // keys still go to the screens, which close the view.
+            if (uiShowsHome)
+            {
+                drm_display::uiHide();
+                osdShown = false;
+                uiShowsHome = false;
+            }
+#ifdef __linux__
+            touchInput.routeToUi(true);
+            keyInput.routeToUi(true);
+#endif
+            int x, y, w, h;
+            const bool window = osd.overVideo(x, y, w, h);
+            osd.tick(true);
+            if (window)
+            {
+                if (!osdShown)
+                    osdShown = drm_display::uiShowWindow(x, y, w, h, false);
+            }
+            else if (osdShown && drm_display::uiHide(false))
+                osdShown = false;
+        }
+        else
+#endif
         if (!videoActive)
         {
 #ifdef USE_OSD_UI
@@ -702,6 +754,9 @@ void Application::loopDrm()
         std::this_thread::sleep_for(std::chrono::milliseconds(videoActive ? 50 : 16));
     }
 
+#ifdef USE_OSD_UI
+    camera.stop(); // before the display goes
+#endif
     drm_display::uiHide();
     drm_display::close();
 #else

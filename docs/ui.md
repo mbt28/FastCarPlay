@@ -75,9 +75,26 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   UI; Settings.
 - **Settings**: Back on top (easiest reach), Audio, Source, Wireless
   (only four rows fit above the fold: audio, then connectivity), Night
-  (day/night/auto cycle, below), Video (30/60 fps), System, and Restart
-  now -- which appears only once a staged change needs it. Staged changes
+  (day/night/auto cycle, below), Video (screen 8, below), System, and
+  Restart now -- which appears only once a staged change needs it. Staged changes
   never drop a live session; the header says "restart to apply".
+- **Video** (screen 8): Frame rate (30/60 fps, needs a restart), then a
+  Camera section when a V4L2 capture device is there (`camera-device`, or
+  the first one found -- the F1C200s TV decoder for a composite reversing
+  camera): Test camera, Input and Standard (auto/PAL/NTSC) cycles, and
+  Brightness / Contrast / Saturation steppers in 5 % steps of the device's
+  range (the device's own value until changed). The device is probed when
+  the screen opens; the settings apply at the camera's next start.
+- **Camera view** (screen 9, Test camera): the camera full screen on the
+  video plane, no copy -- `src/camera.cpp` exports its capture buffers as
+  dma-bufs and `drm_display::showCamera()` scans them out (NV12 in
+  contiguous memory; the display engine scales 720x576 to the panel). While
+  it is up the phone's frames are held off the plane (`holdVideo`). The
+  overlay is hidden but for "Tap or press any key to close" for 3 s in the
+  volume bar's place; a tap or any key closes it. A camera that cannot
+  start (no device, not enough video memory, no NV12) or stops shows why on
+  the Test camera row. Short of memory beside a phone session, the TV
+  decoder's comb filter (2 MiB) is switched off for the run.
 - **System** (screen 7): Reboot and Shut down. Each asks first, in the
   dialog below; for a knob or Enter the ring starts on Cancel, and a press
   with no ring only shows it, so a double press cannot take the head unit
@@ -134,9 +151,9 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   screen a Bluetooth dialog stays open behind it, ready to finish when the
   UI is back (BlueZ's timeouts end it otherwise).
 - **Navigation state** lives in `Bridge.screen` (0 home, 1 settings,
-  2 source, 3 wireless, 4 bluetooth, 5 bt device, 6 audio, 7 system) so C++
-  can follow it (discovery runs only while 4/5 is visible) and drive it
-  (Home key).
+  2 source, 3 wireless, 4 bluetooth, 5 bt device, 6 audio, 7 system,
+  8 video, 9 camera view) so C++ can follow it (discovery runs only while
+  4/5 is visible, the camera only while 9 is) and drive it (Home key).
 
 ## Design rules (inherited, still binding)
 

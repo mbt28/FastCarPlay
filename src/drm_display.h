@@ -56,6 +56,15 @@ Show showVideo(uint32_t fourcc, int w, int h, int srcW, int srcH,
                int nplanes, const int *dmabufFds, const uint32_t *pitches,
                const uint32_t *offsets, uint64_t modifier, const char *tag);
 
+// A camera on the video plane (Settings > Video > Test camera): the same
+// import and flip, but not counted in videoFrames(), and shown while
+// holdVideo() keeps the decoder's frames off the plane (showVideo() then
+// returns Busy). The caller keeps each buffer alive as showVideo() describes,
+// and calls flushVideo() before freeing its buffers.
+Show showCamera(uint32_t fourcc, int w, int h, int nplanes, const int *dmabufFds,
+                const uint32_t *pitches, const uint32_t *offsets, uint64_t modifier);
+void holdVideo(bool hold);
+
 // Number of video frames presented so far (for "is video flowing" checks).
 // Lock-free: safe to poll from the main loop while a commit is in flight.
 uint32_t videoFrames();

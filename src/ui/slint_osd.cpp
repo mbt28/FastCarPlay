@@ -18,6 +18,7 @@
 #include "drm_display.h"
 #include "protocol/wifi_ap.h"
 #include "audio_volume.h"
+#include "camera.h"
 #include "settings.h"
 #include "ui_bridge.h"
 
@@ -90,6 +91,21 @@ const char *nightModeName(int mode)
     default:
         return "Auto";
     }
+}
+
+// The camera view's "tap to close" stays up this long.
+constexpr uint32_t CAMERA_HINT_MS = 3000;
+
+// The camera's standards as the setting spells them, and as shown.
+const char *const CAMERA_STANDARDS[] = {"auto", "pal", "ntsc"};
+const char *const CAMERA_STANDARD_LABELS[] = {"Auto", "PAL", "NTSC"};
+
+int cameraStandardIndex()
+{
+    for (int i = 0; i < 3; i++)
+        if (Settings::cameraStandard.value == CAMERA_STANDARDS[i])
+            return i;
+    return 0;
 }
 
 // Keyboard focus is only re-seeded for someone actually using a keyboard.
@@ -237,6 +253,51 @@ struct SlintOsd::Impl
         bridge.set_ring_row("");
         if (!switched)
             ringLost = true;
+    }
+
+    // The camera (Settings > Video): what the device offers, probed when the
+    // Video screen opens, and the hint shown over the camera view.
+#ifdef USE_CEDRUS
+    Camera::Info camera;
+#endif
+    bool cameraDirty = true;
+    bool cameraHint = false;
+    uint32_t cameraHintUntil = 0;
+
+    // A picture level: the saved one, or the device's own until changed.
+    static int cameraLevel(const Setting<int> &saved, int device)
+    {
+        return saved.value >= 0 ? saved.value : device;
+    }
+
+    void pumpCamera(const Bridge &bridge)
+    {
+        if (!cameraDirty)
+            return;
+        cameraDirty = false;
+#ifdef USE_CEDRUS
+        auto label = [](int level) {
+            char text[8];
+            snprintf(text, sizeof(text), "%d%%", level);
+            return level < 0 ? slint::SharedString() : slint::SharedString(text);
+        };
+        bridge.set_camera_available(camera.present);
+        const int input = Settings::cameraInput;
+        bridge.set_camera_input_label(
+            camera.inputs.size() < 2 ? slint::SharedString()
+            : input >= 0 && input < (int)camera.inputs.size()
+                ? slint::SharedString(camera.inputs[(size_t)input])
+                : slint::SharedString("Input " + std::to_string(input)));
+        bridge.set_camera_standard_label(CAMERA_STANDARD_LABELS[cameraStandardIndex()]);
+        bridge.set_camera_brightness_label(
+            label(camera.brightness < 0 ? -1 : cameraLevel(Settings::cameraBrightness, camera.brightness)));
+        bridge.set_camera_contrast_label(
+            label(camera.contrast < 0 ? -1 : cameraLevel(Settings::cameraContrast, camera.contrast)));
+        bridge.set_camera_saturation_label(
+            label(camera.saturation < 0 ? -1 : cameraLevel(Settings::cameraSaturation, camera.saturation)));
+#else
+        (void)bridge;
+#endif
     }
 
     // The dialog shows Bluetooth's prompt -- pairing has a deadline, so it
@@ -427,6 +488,13 @@ struct SlintOsd::Impl
             default:
                 break;
             }
+            return;
+        }
+        // The camera view: any key closes it.
+        if (bridge.get_screen() == 9)
+        {
+            if (!repeat)
+                bridge.set_screen(8);
             return;
         }
         if (editing >= 0)
@@ -635,8 +703,41 @@ struct SlintOsd::Impl
             bridge.set_bt_name(slint::SharedString(pBt));
         }
 
+        // A camera that could not start (or stopped): back to Video, saying why.
+        if (std::string why; ui_bridge::takeCameraFailure(why))
+        {
+            bridge.set_camera_error(slint::SharedString(why));
+            if (bridge.get_screen() == 9)
+                bridge.set_screen(8);
+        }
+        if (cameraHint && due(mono_ms(), cameraHintUntil))
+        {
+            cameraHint = false;
+            bridge.set_camera_hint(false);
+        }
+
         const int screen = bridge.get_screen();
         const bool modal = bridge.get_prompt_kind() != 0 || editing >= 0;
+        if (screen != pScreen)
+        {
+            // The loop runs the camera while its view is up.
+            ui_bridge::setCameraTest(screen == 9);
+            if (screen == 9)
+            {
+                bridge.set_camera_error("");
+                cameraHint = true;
+                cameraHintUntil = mono_ms() + CAMERA_HINT_MS;
+                bridge.set_camera_hint(true);
+            }
+#ifdef USE_CEDRUS
+            else if (screen == 8 && pScreen != 9)
+            {
+                camera = Camera::probe(); // opens the device for a moment
+                cameraDirty = true;
+            }
+#endif
+        }
+        pumpCamera(bridge);
         if (screen != pScreen || modal != pModal)
         {
             focusSeed = true;
@@ -855,6 +956,38 @@ bool SlintOsd::beginDrm(int width, int height)
     });
     bridge.on_osk_ok([impl] { impl->saveField(); });
     bridge.on_osk_cancel([impl] { impl->setEditing(-1); });
+    bridge.on_camera_cycle_input([impl] {
+#ifdef USE_CEDRUS
+        const int n = (int)impl->camera.inputs.size();
+        if (n > 1)
+            persist("camera-input", std::to_string((Settings::cameraInput + 1) % n).c_str(), false);
+#endif
+        impl->cameraDirty = true;
+    });
+    bridge.on_camera_cycle_standard([impl] {
+        persist("camera-standard", CAMERA_STANDARDS[(cameraStandardIndex() + 1) % 3], false);
+        impl->cameraDirty = true;
+    });
+    bridge.on_camera_step([impl](int which, int direction) {
+#ifdef USE_CEDRUS
+        static const char *const keys[] = {"camera-brightness", "camera-contrast",
+                                           "camera-saturation"};
+        const Setting<int> *const saved[] = {&Settings::cameraBrightness,
+                                             &Settings::cameraContrast,
+                                             &Settings::cameraSaturation};
+        const int device[] = {impl->camera.brightness, impl->camera.contrast,
+                              impl->camera.saturation};
+        if (which < 0 || which > 2 || device[which] < 0)
+            return;
+        const int level =
+            std::clamp(Impl::cameraLevel(*saved[which], device[which]) + 5 * direction, 0, 100);
+        persist(keys[which], std::to_string(level).c_str(), false);
+#else
+        (void)which;
+        (void)direction;
+#endif
+        impl->cameraDirty = true;
+    });
     bridge.on_system_ask([impl](int what) {
         impl->systemAsk = what;
         impl->dialogDirty = true;
@@ -947,10 +1080,12 @@ bool SlintOsd::overVideo(int &x, int &y, int &w, int &h)
     if (_impl == nullptr || _impl->win == nullptr)
         return false;
     const Impl &impl = *_impl;
-    // A change the next tick() has not pumped yet brings the bar up too.
+    // A change the next tick() has not pumped yet brings the bar up too. The
+    // camera view's hint sits in the same place.
     const bool pending =
         impl.volumeSeen && AudioVolume::instance().generation() != impl.pVolumeGen;
-    if (!pending && !(impl.volumeBar && !due(mono_ms(), impl.volumeBarUntil)))
+    if (!pending && !(impl.volumeBar && !due(mono_ms(), impl.volumeBarUntil)) &&
+        !(impl.cameraHint && !due(mono_ms(), impl.cameraHintUntil)))
         return false;
     const auto &bar = impl.ui->global<VolumeBar>();
     x = (int)bar.get_x();
