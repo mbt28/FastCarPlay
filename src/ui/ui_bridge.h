@@ -10,6 +10,7 @@
 #ifdef USE_SLINT
 
 #include <cstdint>
+#include <string>
 
 // Plain-C variable surface the screens are wired to:
 // integer -> int32_t, string -> const char *.
@@ -55,6 +56,14 @@ bool takeNightModeChange();
 void setPhoneLink(bool usb, bool wifi);
 bool phoneLinkUsb();
 bool phoneLinkWifi();
+
+// Settings > Video > Test camera: the screens ask for the camera and the
+// loop runs it; a camera that cannot start (or stops) says why, and the
+// screens go back to Video showing it.
+void setCameraTest(bool on);
+bool cameraTest();
+void cameraFailed(const std::string &why);
+bool takeCameraFailure(std::string &why);
 
 // Settings > System: reboot or shut down the head unit. The loops exit and
 // main runs the system's command (reboot-command / shutdown-command).

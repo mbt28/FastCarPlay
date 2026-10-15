@@ -152,6 +152,16 @@ public:
     static inline Setting<std::string> rebootCommand{"reboot-command", "reboot"};
     static inline Setting<std::string> shutdownCommand{"shutdown-command", "poweroff"};
 
+    // Camera (Settings > Video): a V4L2 capture device shown on the video
+    // plane. Empty device = the first capture device found. The picture
+    // levels are 0-100 % of the device's own range; -1 leaves its value.
+    static inline Setting<std::string> cameraDevice{"camera-device", ""};
+    static inline Setting<int> cameraInput{"camera-input", 0};
+    static inline Setting<std::string> cameraStandard{"camera-standard", "auto"};
+    static inline Setting<int> cameraBrightness{"camera-brightness", -1};
+    static inline Setting<int> cameraContrast{"camera-contrast", -1};
+    static inline Setting<int> cameraSaturation{"camera-saturation", -1};
+
     // Debug section
     static inline Setting<bool> codecLowDelay{"decode-low-delay", true};
     static inline Setting<bool> codecFast{"decode-fast", true};

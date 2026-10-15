@@ -3,6 +3,7 @@
 #ifdef USE_SLINT
 
 #include <atomic>
+#include <mutex>
 #include <string>
 
 #include "common/logger.h"
@@ -15,6 +16,10 @@ std::atomic<bool> g_backgrounded{false};
 std::atomic<bool> g_resume{false};
 std::atomic<bool> g_night{false};
 std::atomic<int> g_power{0}; // ui_bridge::Power
+std::atomic<bool> g_camera{false};
+std::atomic<bool> g_cameraFailed{false};
+std::mutex g_cameraMutex;
+std::string g_cameraWhy;
 std::atomic<bool> g_restartNeeded{false};
 std::atomic<bool> g_linkUsb{false};
 std::atomic<bool> g_linkWifi{false};
@@ -147,6 +152,34 @@ void requestRestart()
 {
     setStatus("Restarting...");
     g_restart = true;
+}
+
+void setCameraTest(bool on)
+{
+    g_camera = on;
+}
+
+bool cameraTest()
+{
+    return g_camera;
+}
+
+void cameraFailed(const std::string &why)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_cameraMutex);
+        g_cameraWhy = why;
+    }
+    g_cameraFailed = true;
+}
+
+bool takeCameraFailure(std::string &why)
+{
+    if (!g_cameraFailed.exchange(false))
+        return false;
+    std::lock_guard<std::mutex> lock(g_cameraMutex);
+    why = g_cameraWhy;
+    return true;
 }
 
 void requestPower(Power action)
