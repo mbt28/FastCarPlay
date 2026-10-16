@@ -139,7 +139,7 @@ counts are not detents (a Surface Dial makes 3600 a turn).
 | Key | To the phone | In FastCarPlay's screens |
 |---|---|---|
 | Up / Down | CarPlay: knob up / down; Android Auto: one knob turn, as the wheel (repeats) | focus previous / next row; in the editor and dialogs, move the ring (repeats) |
-| Left / Right | knob left / right; in Android Auto a jump between areas (repeats) | Left = Back on the lists, except on the Volume row: Right on `-` moves to `+`, Left on `+` moves to `-` (Left on `-` is still Back); in the editor and dialogs, move the ring (repeats) |
+| Left / Right | knob left / right; in Android Auto a jump between areas (repeats) | Left = Back on the lists; on a Settings row picking in place, move along its options (Audio: quieter / louder); in the editor and dialogs, move the ring (repeats) |
 | Enter, keypad Enter, OK, Select | select (held while held) | activate the focused row; in the editor press the ringed key (no ring: save); in a dialog press the ringed button (no ring: accept) |
 | Space | -- | activate the focused row; types a space in the editor |
 | Esc, Back | back | back (cancels a dialog or the editor) |

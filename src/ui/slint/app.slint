@@ -41,7 +41,14 @@ export global Bridge {
     in property <string> source-label;        // short label of the active source
     in property <bool> session-waiting;       // backgrounded session behind the UI
     in property <bool> restart-needed;        // a staged change awaits a restart
-    in property <int> protocol;               // active source id (radio list)
+    // Settings rows picked in place, driven from C++: which one is (0 none,
+    // 1 Source, 2 Night, 3 Power, 4 Audio's level), its step (Source: 1
+    // wired or wireless, 2 Android Auto or CarPlay), the option shown as
+    // taken, and the medium Source took in step 1 (0 wired, 1 wireless).
+    in property <int> pick;
+    in property <int> pick-step;
+    in property <int> pick-choice;
+    in property <int> source-medium;
     in property <string> night-label;         // "Day" / "Night" / "Auto"
     in property <string> fps-label;           // "30 fps" / "60 fps"
     in property <string> volume-label;        // "60%" / "Muted"
@@ -92,7 +99,6 @@ export global Bridge {
     in property <int> prompt-focus: -1;      // keyboard ring: 0 accept, 1 Cancel, -1 none
     // Which volume button has the keyboard ring: 0 "-", 1 "+", -1 neither
     // (so Left/Right can move between them).
-    in-out property <int> stepper-focus: -1;
     // The ring's row when it is one that can go away while its screen stays
     // (the Resume row, a Bluetooth device), "" otherwise: a removed row never
     // reports losing focus, so C++ watches for it and puts the ring back.
@@ -105,14 +111,12 @@ export global Bridge {
     in-out property <int> screen;
 
     // UI -> app
-    callback select-protocol(int);
+    callback pick-press(int);                 // Enter or a tap on a picked row (Bridge.pick)
+    callback pick-option(int);                // a tap on one of its options
     callback resume();
     callback restart-now();
-    callback cycle-night();
     callback cycle-fps();
     callback volume-step(int);                // -1 quieter, +1 louder
-    callback volume-mute();                   // toggle
-    callback system-ask(int);                 // 1 reboot, 2 shut down: asks first
     callback camera-select(int);              // a tap on a row
     callback camera-adjust(int);              // -/+ on the ringed row
     callback camera-picture();                // a tap on the picture: the column hides
@@ -343,32 +347,126 @@ component Row inherits Rectangle {
     }
 }
 
-// A square button inside a row (the volume -/+). Focusable on its own, like
-// a Row: the keyboard ring reaches it and Enter presses it.
-component StepButton inherits Rectangle {
+// A row whose value is picked in place, from two options side by side:
+// Enter (or a tap) starts it, the knob or the arrows move between them --
+// in C++, which drives choosing / choice -- and Enter takes the one shown;
+// a tap takes the one tapped.
+component ChoiceRow inherits Rectangle {
     in property <string> label;
-    in property <int> index;                  // 0 "-", 1 "+" (Bridge.stepper-focus)
+    in property <string> value;               // shown while not choosing
+    in property <bool> choosing;
+    in property <[string]> options;
+    in property <int> choice;                 // the option shown as taken
+    in property <length> option-width: 180px;
     callback clicked;
+    callback picked(int);
 
-    width: Style.row-h - Style.gap * 2;
-    height: Style.row-h - Style.gap * 2;
+    height: Style.row-h;
     border-radius: Style.gap;
-    background: ta.pressed ? Style.row-pressed : Style.bg;
-    border-width: fs.has-focus ? 4px : 1px;
+    background: ta.pressed ? Style.row-pressed : Style.row;
+    border-width: fs.has-focus ? 4px : root.choosing ? 2px : 0px;
     border-color: fs.has-focus ? Style.focus : Style.edge;
 
     fs := FocusScope {
         width: 100%;
         height: 100%;
         focus-on-click: false;
-        focus-gained => {
-            Bridge.stepper-focus = root.index;
+        key-pressed(event) => {
+            if (event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
         }
-        focus-lost => {
-            if (Bridge.stepper-focus == root.index) {
-                Bridge.stepper-focus = -1;
+    }
+    ta := TouchArea {
+        enabled: !root.choosing;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Style.gap * 3;
+        padding-right: root.choosing ? Style.gap * 1.5 : Style.gap * 3;
+        padding-top: Style.gap * 1.5;
+        padding-bottom: Style.gap * 1.5;
+        spacing: Style.gap * 2;
+        Text {
+            text: root.label;
+            color: Style.text;
+            font-size: Style.font;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        if !root.choosing: Text {
+            text: root.value;
+            color: Style.dim;
+            font-size: Style.font;
+            vertical-alignment: center;
+        }
+        if root.choosing: HorizontalLayout {
+            spacing: Style.gap;
+            for option[i] in root.options: Rectangle {
+                width: root.option-width;
+                border-radius: Style.gap;
+                background: i == root.choice ? Style.row-on : Style.bg;
+                border-width: i == root.choice ? 0px : 1px;
+                border-color: Style.edge;
+                TouchArea { clicked => { root.picked(i); } }
+                Text {
+                    text: option;
+                    color: i == root.choice ? Style.text : Style.dim;
+                    font-size: Style.font;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
         }
+    }
+}
+
+// A square button inside a level row, for touch: the knob and the arrows
+// step the level through C++, so it never takes the keyboard ring.
+component StepKey inherits Rectangle {
+    in property <string> label;
+    callback clicked;
+
+    width: Style.row-h - Style.gap * 3;
+    border-radius: Style.gap;
+    background: ta.pressed ? Style.row-pressed : Style.bg;
+    border-width: 1px;
+    border-color: Style.edge;
+    ta := TouchArea { clicked => { root.clicked(); } }
+    Text {
+        text: root.label;
+        color: Style.text;
+        font-size: 36px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A row holding a level, changed in place: Enter (or a tap) starts it, the
+// knob or the arrows step it -- in C++, which drives editing -- and Enter
+// (or a tap beside the buttons) ends it; - / + step it by touch.
+component LevelRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;               // shown while not editing
+    in property <string> level;               // between - and + while editing
+    in property <bool> editing;
+    callback clicked;
+    callback step(int);
+
+    height: Style.row-h;
+    border-radius: Style.gap;
+    background: ta.pressed ? Style.row-pressed : Style.row;
+    border-width: fs.has-focus ? 4px : root.editing ? 2px : 0px;
+    border-color: fs.has-focus ? Style.focus : Style.edge;
+
+    fs := FocusScope {
+        width: 100%;
+        height: 100%;
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return) {
                 root.clicked();
@@ -378,52 +476,43 @@ component StepButton inherits Rectangle {
         }
     }
     ta := TouchArea { clicked => { root.clicked(); } }
-    Text {
-        text: root.label;
-        color: Style.text;
-        font-size: 40px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-// A row holding a level: label, value, and -/+ buttons (the row itself is
-// not a button, so a tap beside them does nothing).
-component StepperRow inherits Rectangle {
-    in property <string> label;
-    in property <string> value;
-    callback decrease;
-    callback increase;
-
-    height: Style.row-h;
-    border-radius: Style.gap;
-    background: Style.row;
 
     HorizontalLayout {
         padding-left: Style.gap * 3;
-        padding-right: Style.gap;
+        padding-right: root.editing ? Style.gap * 1.5 : Style.gap * 3;
+        padding-top: Style.gap * 1.5;
+        padding-bottom: Style.gap * 1.5;
         spacing: Style.gap * 2;
-        alignment: stretch;
         Text {
             text: root.label;
             color: Style.text;
             font-size: Style.font;
             vertical-alignment: center;
+            overflow: elide;
             horizontal-stretch: 1;
         }
-        Text {
+        if !root.editing: Text {
             text: root.value;
             color: Style.dim;
             font-size: Style.font;
             vertical-alignment: center;
         }
-        VerticalLayout {
-            alignment: center;
-            StepButton { label: "-"; index: 0; clicked => { root.decrease(); } }
-        }
-        VerticalLayout {
-            alignment: center;
-            StepButton { label: "+"; index: 1; clicked => { root.increase(); } }
+        if root.editing: HorizontalLayout {
+            spacing: Style.gap;
+            StepKey { label: "-"; clicked => { root.step(-1); } }
+            Rectangle {
+                width: 120px;
+                border-radius: Style.gap;
+                background: Style.row-on;
+                Text {
+                    text: root.level;
+                    color: Style.text;
+                    font-size: Style.font;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            StepKey { label: "+"; clicked => { root.step(1); } }
         }
     }
 }
@@ -620,37 +709,59 @@ component ScreenSettings inherits ListScreen {
     callback goto(int);
     Header { text: Bridge.restart-needed ? "Settings  -  restart to apply" : "Settings"; }
     // Back at the top (below the header) -- easier to reach on a car screen.
-    // Only four rows fit above the fold: Audio, the one used on the road,
-    // then the connectivity rows.
+    // Only four rows fit above the fold: Audio, used on the road, then the
+    // connectivity rows. Audio, Source, Night and Power are changed in their
+    // own rows, built for the knob: no screen to open and come back from.
     Row { label: "Back"; clicked => { root.goto(0); } }
-    Row { label: "Audio"; value: Bridge.volume-label; clicked => { root.goto(6); } }
-    Row { label: "Source"; value: Bridge.source-label; clicked => { root.goto(2); } }
+    // Down to 0 is muted; a step up from there (or from a mute key) unmutes.
+    LevelRow {
+        label: "Audio";
+        value: Bridge.volume-label;
+        level: Bridge.volume-label;
+        editing: Bridge.pick == 4;
+        clicked => { Bridge.pick-press(4); }
+        step(direction) => { Bridge.volume-step(direction); }
+    }
+    // Wired or wireless, then Android Auto or CarPlay; the pick is saved and
+    // waits for a restart, a live session is never dropped.
+    ChoiceRow {
+        label: Bridge.pick != 1 || Bridge.pick-step != 2 ? "Source"
+             : Bridge.source-medium == 0 ? "Wired" : "Wireless";
+        value: Bridge.source-label;
+        choosing: Bridge.pick == 1;
+        options: Bridge.pick-step == 2 ? ["Android Auto", "CarPlay"] : ["Wired", "Wireless"];
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(1); }
+        picked(i) => { Bridge.pick-option(i); }
+    }
     Row { label: "Wireless"; clicked => { root.goto(3); } }
-    Row { label: "Night"; value: Bridge.night-label; clicked => { Bridge.cycle-night(); } }
+    // A running session switches at once.
+    ChoiceRow {
+        label: "Night";
+        value: Bridge.night-label;
+        choosing: Bridge.pick == 2;
+        options: ["Day", "Night", "Auto"];
+        option-width: 140px;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(2); }
+        picked(i) => { Bridge.pick-option(i); }
+    }
     Row { label: "Video"; value: Bridge.fps-label; clicked => { root.goto(8); } }
-    Row { label: "System"; clicked => { root.goto(7); } }
+    // Each asks first, in the dialog; the app then closes down cleanly and
+    // the system's own reboot / poweroff takes over. It opens on Cancel,
+    // the way out for a knob, which has no Back.
+    ChoiceRow {
+        label: "Power";
+        choosing: Bridge.pick == 3;
+        options: ["Reboot", "Power off", "Cancel"];
+        option-width: 140px;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(3); }
+        picked(i) => { Bridge.pick-option(i); }
+    }
     // Only meaningful once something needs it; hidden otherwise rather than
     // inviting a pointless restart.
     if Bridge.restart-needed: Row { label: "Restart now"; clicked => { Bridge.restart-now(); } }
-}
-
-component ScreenSource inherits ListScreen {
-    callback goto(int);
-    Header { text: "Source"; }
-    Row { label: "Back"; clicked => { root.goto(1); } }
-    // Protocol ids match ui_bridge::Protocol. Selecting stages the change
-    // (persist + "restart to apply"); it never drops a live session.
-    for src in [
-        { id: 1, label: "AA Wired" },
-        { id: 2, label: "AA Wireless" },
-        { id: 3, label: "CarPlay Wired" },
-        { id: 4, label: "CarPlay Wireless" },
-    ]: Row {
-        label: src.label;
-        selected: Bridge.protocol == src.id;
-        value: Bridge.protocol == src.id ? "Active" : "";
-        clicked => { Bridge.select-protocol(src.id); }
-    }
 }
 
 // The phone's frame rate, and the camera: its view shows it full screen
@@ -677,35 +788,6 @@ component ScreenVideo inherits ListScreen {
         label: "Fast switch";
         value: Bridge.camera-fastswitch ? "On" : "Off";
         clicked => { Bridge.camera-fastswitch-toggle(); }
-    }
-}
-
-// Reboot and shut down. Each asks first, in the dialog; the app then closes
-// down cleanly and the system's own reboot / poweroff takes over.
-component ScreenSystem inherits ListScreen {
-    callback goto(int);
-    Header { text: "System"; }
-    Row { label: "Back"; clicked => { root.goto(1); } }
-    Row { label: "Reboot"; clicked => { Bridge.system-ask(1); } }
-    Row { label: "Shut down"; clicked => { Bridge.system-ask(2); } }
-}
-
-component ScreenAudio inherits ListScreen {
-    callback goto(int);
-    Header { text: "Audio"; }
-    Row { label: "Back"; clicked => { root.goto(1); } }
-    // The level shows while muted too: a volume key unmutes from there.
-    StepperRow {
-        label: "Volume";
-        value: Bridge.volume-level + "%";
-        decrease => { Bridge.volume-step(-1); }
-        increase => { Bridge.volume-step(1); }
-    }
-    Row {
-        label: "Mute";
-        value: Bridge.volume-muted ? "On" : "Off";
-        selected: Bridge.volume-muted;
-        clicked => { Bridge.volume-mute(); }
     }
 }
 
@@ -1048,12 +1130,9 @@ export component AppWindow inherits Window {
 
     if Bridge.screen == 0 && !root.modal: ScreenHome      { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 1 && !root.modal: ScreenSettings  { goto(s) => { Bridge.screen = s; } }
-    if Bridge.screen == 2 && !root.modal: ScreenSource    { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 3 && !root.modal: ScreenWireless  { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 4 && !root.modal: ScreenBluetooth { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 5 && !root.modal: ScreenBtDevice  { goto(s) => { Bridge.screen = s; } }
-    if Bridge.screen == 6 && !root.modal: ScreenAudio     { goto(s) => { Bridge.screen = s; } }
-    if Bridge.screen == 7 && !root.modal: ScreenSystem    { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 8 && !root.modal: ScreenVideo     { goto(s) => { Bridge.screen = s; } }
     if Bridge.screen == 9 && !root.modal: ScreenCamera    { goto(s) => { Bridge.screen = s; } }
     if Bridge.prompt-kind != 0: Prompt {}

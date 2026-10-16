@@ -150,6 +150,9 @@ constexpr uint32_t HOLD_MAX_MS = 2000;
 // Keyboard focus is only re-seeded for someone actually using a keyboard.
 constexpr uint32_t KEY_RECENT_MS = 10000;
 
+// A row picked in place stops this long after the last input.
+constexpr uint32_t PICK_MS = 10000;
+
 // The volume bar stays up this long after the last change.
 constexpr uint32_t VOLUME_BAR_MS = 2000;
 
@@ -276,7 +279,6 @@ struct SlintOsd::Impl
     bool volumeBar = false; // the bar is up (in the scene)
     uint32_t volumeBarUntil = 0;
     bool pLinkUsb = false, pLinkWifi = false;
-    int pProtocol = -1;
     bool pWaiting = false, pRestartNeeded = false;
 
     // Keyboard. Switching a screen or closing a dialog destroys the focused
@@ -298,6 +300,136 @@ struct SlintOsd::Impl
         bridge.set_ring_row("");
         if (!switched)
             ringLost = true;
+    }
+
+    // Settings rows picked in place (Bridge.pick): Source -- wired or
+    // wireless, then Android Auto or CarPlay: protocol id 1 + wireless +
+    // 2 * carplay (ui_bridge::Protocol) --, Night (day, night, auto), Power
+    // (reboot or power off, each asked first, or cancel: a knob has no Back)
+    // and Audio, whose level the knob turns. Turns and arrows move along the options (stopping at the
+    // ends, so a fast spin cannot land anywhere unexpected), Enter takes the
+    // one shown, Back goes a step back.
+    enum : int
+    {
+        PickNone = 0,
+        PickSource = 1,
+        PickNight = 2,
+        PickPower = 3,
+        PickVolume = 4,
+    };
+    int pick = PickNone;
+    int pickStep = 0;   // Source: 1 the medium, 2 the phone
+    int pickChoice = 0; // the option shown as taken
+    int srcMedium = 0;  // taken in Source's step 1: 0 wired, 1 wireless
+    uint32_t pickLastMs = 0;
+
+    void showPick(const Bridge &bridge)
+    {
+        bridge.set_pick(pick);
+        bridge.set_pick_step(pickStep);
+        bridge.set_pick_choice(pickChoice);
+        bridge.set_source_medium(srcMedium);
+        pickLastMs = mono_ms();
+    }
+
+    // Enter (or a tap) on a picked row: starts it, or takes what it shows.
+    void pickPress(const Bridge &bridge, int row)
+    {
+        const int current = get_var_protocol() - 1; // bit 0 wireless, bit 1 CarPlay
+        if (pick != row)
+        {
+            pick = row;
+            pickStep = row == PickSource ? 1 : 0;
+            pickChoice = row == PickSource  ? current & 1
+                         : row == PickNight ? std::clamp((int)Settings::nightMode, 0, 2)
+                         : row == PickPower ? 2 // Cancel: nothing goes down by accident
+                                            : 0;
+        }
+        else if (row == PickSource && pickStep == 1)
+        {
+            srcMedium = pickChoice;
+            pickStep = 2;
+            pickChoice = (current >> 1) & 1;
+        }
+        else
+        {
+            const int taken = pickChoice;
+            pick = PickNone;
+            pickStep = 0;
+            switch (row)
+            {
+            case PickSource:
+                set_var_protocol(1 + srcMedium + 2 * taken); // saved: restart to apply
+                break;
+            case PickNight:
+                if (taken != Settings::nightMode)
+                {
+                    persist("night-mode", std::to_string(taken).c_str(), false);
+                    ui_bridge::nightModeChanged(); // a running session switches at once
+                }
+                break;
+            case PickPower:
+                if (taken < 2) // 2: Cancel
+                {
+                    systemAsk = taken == 0 ? 1 : 2; // asked first
+                    dialogDirty = true;
+                }
+                break;
+            default: // Audio: each step applied at once
+                break;
+            }
+        }
+        showPick(bridge);
+    }
+
+    void pickKey(const Bridge &bridge, OsdKey nav, bool repeat)
+    {
+        int direction = 0;
+        switch (nav)
+        {
+        case OsdKey::Next:
+        case OsdKey::Right:
+            direction = 1;
+            break;
+        case OsdKey::Prev:
+        case OsdKey::Left:
+            direction = -1;
+            break;
+        // Up is louder on the level, back along the options elsewhere.
+        case OsdKey::Up:
+            direction = pick == PickVolume ? 1 : -1;
+            break;
+        case OsdKey::Down:
+            direction = pick == PickVolume ? -1 : 1;
+            break;
+        case OsdKey::Ok:
+            if (!repeat)
+                pickPress(bridge, pick);
+            return;
+        case OsdKey::Back:
+        case OsdKey::Erase:
+            if (repeat)
+                return;
+            if (pick == PickSource && pickStep == 2)
+            {
+                pickStep = 1;
+                pickChoice = srcMedium;
+            }
+            else
+            {
+                pick = PickNone;
+                pickStep = 0;
+            }
+            showPick(bridge);
+            return;
+        default:
+            return;
+        }
+        if (pick == PickVolume)
+            AudioVolume::instance().step(direction);
+        else
+            pickChoice = std::clamp(pickChoice + direction, 0, pick == PickSource ? 1 : 2);
+        showPick(bridge);
     }
 
     // The camera view (screen 9): the settings column over the picture is
@@ -739,6 +871,12 @@ struct SlintOsd::Impl
             }
             return;
         }
+        // A row picking in place: every key is its own.
+        if (pick != PickNone && bridge.get_screen() == 1)
+        {
+            pickKey(bridge, nav, repeat);
+            return;
+        }
 #ifdef USE_CEDRUS
         // The camera view: its settings column.
         if (bridge.get_screen() == 9)
@@ -803,17 +941,6 @@ struct SlintOsd::Impl
             }
             return;
         }
-        // The volume row's -/+ sit side by side: there Left/Right move
-        // between them (Left on "-" is still Back). A screen switched by an
-        // earlier key of this tick has not reported its focus yet.
-        const int stepper = bridge.get_screen() == pScreen ? bridge.get_stepper_focus() : -1;
-        if ((nav == OsdKey::Right && stepper == 0) || (nav == OsdKey::Left && stepper == 1))
-        {
-            dispatchKey(nav == OsdKey::Right ? slint::platform::key_codes::Tab
-                                             : slint::platform::key_codes::Backtab,
-                        repeat);
-            return;
-        }
         switch (nav)
         {
         case OsdKey::Down:
@@ -873,12 +1000,6 @@ struct SlintOsd::Impl
             bridge.set_restart_needed(restartNeeded);
             pRestartNeeded = restartNeeded;
         }
-        const int protocol = get_var_protocol();
-        if (protocol != pProtocol)
-        {
-            bridge.set_protocol(protocol);
-            pProtocol = protocol;
-        }
         const std::string night = nightModeName(Settings::nightMode);
         if (night != pNight)
         {
@@ -901,14 +1022,17 @@ struct SlintOsd::Impl
             const bool change = volumeSeen;
             volumeSeen = true;
             pVolumeGen = volumeGen;
+            // 0% is silent too (AudioVolume::apply), and shown as muted:
+            // there is no Mute row, turning the level down to 0 is muting.
+            const bool muted = volume.muted() || volume.level() <= 0;
             char label[16];
-            if (volume.muted())
+            if (muted)
                 snprintf(label, sizeof(label), "Muted");
             else
                 snprintf(label, sizeof(label), "%d%%", volume.level());
             bridge.set_volume_label(slint::SharedString(label));
             bridge.set_volume_level(volume.level());
-            bridge.set_volume_muted(volume.muted());
+            bridge.set_volume_muted(muted);
             if (change)
             {
                 volumeBarUntil = mono_ms() + VOLUME_BAR_MS;
@@ -985,6 +1109,16 @@ struct SlintOsd::Impl
             bridge.set_camera_fastswitch(pFastSwitch != 0);
         }
 
+        // A row picking in place stops off its screen, under a dialog, or
+        // left alone.
+        if (pick != PickNone && (bridge.get_screen() != 1 || bridge.get_prompt_kind() != 0 ||
+                                 mono_ms() - pickLastMs >= PICK_MS))
+        {
+            pick = PickNone;
+            pickStep = 0;
+            showPick(bridge);
+        }
+
         const int screen = bridge.get_screen();
         const bool modal = bridge.get_prompt_kind() != 0 || editing >= 0;
         if (screen != pScreen)
@@ -1024,7 +1158,6 @@ struct SlintOsd::Impl
             switched = true;
             ringLost = false; // the switch re-seeds the ring anyway
             // A screen that went away does not report losing focus.
-            bridge.set_stepper_focus(-1);
             bridge.set_ring_row("");
 #ifdef USE_BLUETOOTH
             const bool btNow = screen == 4 || screen == 5;
@@ -1206,23 +1339,24 @@ bool SlintOsd::beginDrm(int width, int height)
     // UI -> app wiring. Callbacks run inside tick() on the loop thread.
     const auto &bridge = ui->global<Bridge>();
     bridge.set_editing(-1);
-    bridge.on_select_protocol([](int id) { set_var_protocol(id); });
     bridge.on_resume([] { ui_bridge::requestResume(); });
     bridge.on_restart_now([] { ui_bridge::requestRestart(); });
-    bridge.on_cycle_night([] {
-        // 0 day -> 1 night -> 2 auto -> 0; a running session switches at once.
-        char buffer[8];
-        snprintf(buffer, sizeof(buffer), "%d", (int)((Settings::nightMode + 1) % 3));
-        persist("night-mode", buffer, false);
-        ui_bridge::nightModeChanged();
-    });
     bridge.on_cycle_fps([] {
         persist("aa-video-fps", Settings::aaFps >= 60 ? "30" : "60", true);
     });
-    // Applies at once (no restart) and saves itself a moment later.
-    bridge.on_volume_step([](int direction) { AudioVolume::instance().step(direction); });
-    bridge.on_volume_mute([] { AudioVolume::instance().toggleMute(); });
     Impl *impl = _impl;
+    // Applies at once (no restart) and saves itself a moment later.
+    bridge.on_volume_step([impl](int direction) {
+        AudioVolume::instance().step(direction);
+        impl->pickLastMs = mono_ms(); // the level row stays up while used
+    });
+    bridge.on_pick_press([impl](int row) { impl->pickPress(impl->ui->global<Bridge>(), row); });
+    bridge.on_pick_option([impl](int option) {
+        if (impl->pick == Impl::PickNone || impl->pick == Impl::PickVolume)
+            return;
+        impl->pickChoice = option;
+        impl->pickPress(impl->ui->global<Bridge>(), impl->pick);
+    });
     bridge.on_edit_field([impl](int id) {
         if (id >= 0 && id < FIELD_COUNT)
             impl->setEditing(id);
@@ -1269,10 +1403,6 @@ bool SlintOsd::beginDrm(int width, int height)
     bridge.on_camera_fastswitch_toggle(
         [] { persist("camera-fastswitch", Settings::cameraFastSwitch ? "false" : "true", false); });
 #endif
-    bridge.on_system_ask([impl](int what) {
-        impl->systemAsk = what;
-        impl->dialogDirty = true;
-    });
     // The dialog answers whoever asked: our own question, or Bluetooth.
     bridge.on_prompt_accept([impl] {
         if (impl->dialogLocal)

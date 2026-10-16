@@ -36,10 +36,9 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   own focus traversal and scroll-into-view move an amber ring over the rows;
   Enter activates the focused row (each `Row` has a `FocusScope`). Back/Esc,
   Backspace and Left call the exported `back()` function and Home sets the
-  screen directly, so neither depends on focus. The one exception is the
-  Volume row: its `-` and `+` report their focus (`stepper-focus`), so Right
-  on `-` moves to `+` and Left on `+` moves to `-` (Left on `-` is still
-  Back). While the editor or a dialog is open, keys go straight to its
+  screen directly, so neither depends on focus. While a Settings row picks
+  in place (below), every key is that row's (`pickKey`). While the editor
+  or a dialog is open, keys go straight to its
   callbacks (typed characters -> `osk-key`). In the editor the arrows move a
   ring over the on-screen keyboard (`Osk` global: layout, shift/symbols,
   ring position, `move()` / `activate()`), Enter presses the ringed key or,
@@ -73,11 +72,19 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   a phone is connected over Bluetooth (line drawings, `Path`); a
   double-height Resume row only while a connected session waits behind the
   UI; Settings.
-- **Settings**: Back on top (easiest reach), Audio, Source, Wireless
-  (only four rows fit above the fold: audio, then connectivity), Night
-  (day/night/auto cycle, below), Video (screen 8, below), System, and
-  Restart now -- which appears only once a staged change needs it. Staged changes
-  never drop a live session; the header says "restart to apply".
+- **Settings**: Back on top (easiest reach), Audio, Source, Wireless (only
+  four rows fit above the fold: audio, used on the road, then
+  connectivity), Night, Video (screen 8, below), Power, and Restart now -- which
+  appears only once a staged change needs it. Staged changes never drop a
+  live session; the header says "restart to apply".
+- **Rows picked in place** -- Audio, Source, Night, Power -- have no screen
+  of their own: built for the knob. Enter (or a tap) starts one; a turn or
+  an arrow moves along its options, stopping at the ends so a fast spin
+  cannot land anywhere unexpected; Enter takes the one shown, a tap takes
+  the one tapped. Back goes a step back, then out; leaving the screen, a
+  dialog, or 10 s untouched also ends it. `ChoiceRow` / `LevelRow` in
+  app.slint, driven by `slint_osd.cpp` (`Bridge.pick`, `pickPress` /
+  `pickKey`).
 - **Video** (screen 8): Frame rate (30/60 fps, needs a restart), and
   Camera when a V4L2 capture device is there (`camera-device`, or the first
   one found -- the F1C200s TV decoder for a composite reversing camera); its
@@ -140,8 +147,9 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
     never touched (noise, memory corruption on the bench). A camera that
     cannot start or stops goes back to Video saying why; short of memory
     beside a phone session, the comb filter (2 MiB) stays off.
-- **System** (screen 7): Reboot and Shut down. Each asks first, in the
-  dialog below; for a knob or Enter the ring starts on Cancel, and a press
+- **Power**: Reboot | Power off | Cancel in its row, opening on Cancel --
+  the way out for a knob, which has no Back. Each of the others asks first,
+  in the dialog below; for a knob or Enter the ring starts on Cancel, and a press
   with no ring only shows it, so a double press cannot take the head unit
   down. The question does not wait behind the video. Then the app closes
   down cleanly (phone session, audio, the saved volume) and `main` runs the
@@ -149,13 +157,17 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   `poweroff` by default -- so init stops every service. Should the command
   fail, or the system not go down within 60 s, the app starts again rather
   than leave the screen dark.
-- **Night** applies at once, to a running session too. CarPlay: Night
+- **Night**: Day | Night | Auto in its row, the current one taken. It
+  applies at once, to a running session too. CarPlay: Night
   darkens it, Day keeps it light even after sunset (the display's
   appearance, `uiAppearanceUpdate`), Auto leaves it to the phone, which
   darkens at sunset where it is; `setNightMode` goes along, and `/info`
   carries the same at connect. Android Auto: its night-mode sensor; it
   follows nothing by itself, so Auto shows day.
-- **Audio** (screen 6): Volume with -/+ and Mute. The volume / mute keys of
+- **Audio**: the level in its row -- Enter starts it, the knob (or Up and
+  Down, Left and Right) turns it live, Enter or Back ends it; - and + by
+  touch. There is no Mute row: 0% is silent and shows as Muted (the volume
+  bar too), and a step up unmutes, as from a mute key. The volume / mute keys of
   a Bluetooth keyboard or remote work whatever is on screen. A change
   applies at once, shows the volume bar for 2 s and is saved 2 s after the
   last one; mute is never saved. `src/audio_volume.cpp` sets it through the
@@ -174,8 +186,9 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   non-blocking commit shows it, one hides it (a pending video flip only
   means retrying on the next loop turn). It is rendered before it shows and
   hidden before it is redrawn, so no frame of a screen lands on the video.
-- **Source**: radio list of the four backends; selecting persists
-  `protocol` to usersettings and stages a restart.
+- **Source**: Wired | Wireless in its row, the current one taken; then
+  the row reads Wired (or Wireless) with Android Auto | CarPlay, and taking
+  that persists `protocol` to usersettings, staging a restart.
 - **Wireless**: SSID / passphrase / BT name, each opening a
   full-screen editor with an on-screen keyboard (letters, shift, symbols).
   WPA2 limits are enforced before saving (SSID 1-32, passphrase 8-63
