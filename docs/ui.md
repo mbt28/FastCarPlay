@@ -78,23 +78,39 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   (day/night/auto cycle, below), Video (screen 8, below), System, and
   Restart now -- which appears only once a staged change needs it. Staged changes
   never drop a live session; the header says "restart to apply".
-- **Video** (screen 8): Frame rate (30/60 fps, needs a restart), then a
-  Camera section when a V4L2 capture device is there (`camera-device`, or
-  the first one found -- the F1C200s TV decoder for a composite reversing
-  camera): Test camera, Input and Standard (auto/PAL/NTSC) cycles, and
-  Brightness / Contrast / Saturation steppers in 5 % steps of the device's
-  range (the device's own value until changed). The device is probed when
-  the screen opens; the settings apply at the camera's next start.
-- **Camera view** (screen 9, Test camera): the camera full screen on the
-  video plane, no copy -- `src/camera.cpp` exports its capture buffers as
-  dma-bufs and `drm_display::showCamera()` scans them out (NV12 in
-  contiguous memory; the display engine scales 720x576 to the panel). While
-  it is up the phone's frames are held off the plane (`holdVideo`). The
-  overlay is hidden but for "Tap or press any key to close" for 3 s in the
-  volume bar's place; a tap or any key closes it. A camera that cannot
-  start (no device, not enough video memory, no NV12) or stops shows why on
-  the Test camera row. Short of memory beside a phone session, the TV
-  decoder's comb filter (2 MiB) is switched off for the run.
+- **Video** (screen 8): Frame rate (30/60 fps, needs a restart), and
+  Camera when a V4L2 capture device is there (`camera-device`, or the first
+  one found -- the F1C200s TV decoder for a composite reversing camera); its
+  value is why the camera last could not run.
+- **Camera view** (screen 9): the camera full screen on the video plane, no
+  copy -- `src/camera.cpp` exports its capture buffers as dma-bufs and
+  `drm_display::showCamera()` scans them out (NV12 in contiguous memory; the
+  display engine scales 720x576 to the panel), the phone's frames held off
+  the plane meanwhile (`holdVideo`). Over it, a settings column at the
+  right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
+  window of the overlay; it hides 5 s after the last input, and a tap on
+  the picture hides it at once.
+  - Rows, only for what the device has: Input, Standard (Auto/PAL/NTSC),
+    Brightness, Contrast, Saturation, Hue, Sharpness, Chroma gain, Chroma
+    enhance; then X (close), - and +. Every change applies at once.
+    Changing the input is live; a standard the stream is not in restarts
+    it (half a second of black). Auto follows the input, checked once a
+    second, as does "No signal" on the Input row.
+  - Each input keeps its own settings (`camera-0` .. `camera-3`, raw
+    control values; one left out is at its default -- never the other
+    input's), saved 2 s after the last change and when the view closes.
+  - Touch: a row selects it, - / + change it, X closes. With the column
+    hidden a touch only brings it back.
+  - Keys and knob: while hidden anything brings the column back (Back
+    closes the view). Turn / Up / Down move the ring over the rows and X;
+    Left / Right change the ringed row; Enter or a click turns a level
+    into edit mode (turning then changes it; Enter or Back ends it),
+    cycles Input or Standard, or on X closes. Input and Standard never
+    change by turning.
+  - The TV decoder's burst gate, comb filter and blue screen controls are
+    never touched (noise, memory corruption on the bench). A camera that
+    cannot start or stops goes back to Video saying why; short of memory
+    beside a phone session, the comb filter (2 MiB) stays off.
 - **System** (screen 7): Reboot and Shut down. Each asks first, in the
   dialog below; for a knob or Enter the ring starts on Cancel, and a press
   with no ring only shows it, so a double press cannot take the head unit
@@ -122,7 +138,8 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   otherwise a ramped gain in AudioMixer does the work. The first start takes
   over the card's current level without writing it.
 - **Volume bar**: 480x64, bottom centre, over the screens and over live
-  video. Over video it is a window of the overlay plane
+  video (in the camera view 180x48 at the foot of the settings column, so
+  the overlay window never grows). Over video it is a window of the overlay plane
   (`drm_display::uiShowWindow`) that the display engine composites: no video
   frame is touched, and while it is up no commit happens at all -- one
   non-blocking commit shows it, one hides it (a pending video flip only

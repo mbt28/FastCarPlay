@@ -152,15 +152,17 @@ public:
     static inline Setting<std::string> rebootCommand{"reboot-command", "reboot"};
     static inline Setting<std::string> shutdownCommand{"shutdown-command", "poweroff"};
 
-    // Camera (Settings > Video): a V4L2 capture device shown on the video
-    // plane. Empty device = the first capture device found. The picture
-    // levels are 0-100 % of the device's own range; -1 leaves its value.
+    // Camera (Settings > Video > Camera): a V4L2 capture device shown on the
+    // video plane. Empty device = the first capture device found. Each input
+    // has its own settings, written by the camera view (see camera.h):
+    // "standard=auto|pal|ntsc" then raw control values, e.g. ",contrast=140";
+    // a control left out is at its default.
     static inline Setting<std::string> cameraDevice{"camera-device", ""};
     static inline Setting<int> cameraInput{"camera-input", 0};
-    static inline Setting<std::string> cameraStandard{"camera-standard", "auto"};
-    static inline Setting<int> cameraBrightness{"camera-brightness", -1};
-    static inline Setting<int> cameraContrast{"camera-contrast", -1};
-    static inline Setting<int> cameraSaturation{"camera-saturation", -1};
+    static inline Setting<std::string> cameraProfile0{"camera-0", ""};
+    static inline Setting<std::string> cameraProfile1{"camera-1", ""};
+    static inline Setting<std::string> cameraProfile2{"camera-2", ""};
+    static inline Setting<std::string> cameraProfile3{"camera-3", ""};
 
     // Debug section
     static inline Setting<bool> codecLowDelay{"decode-low-delay", true};

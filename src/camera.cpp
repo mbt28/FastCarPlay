@@ -2,8 +2,10 @@
 
 #if defined(USE_CEDRUS) && defined(__linux__)
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <fcntl.h>
@@ -11,9 +13,9 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-#include <linux/videodev2.h>
 #include <drm_fourcc.h>
 
+#include "common/clock.h"
 #include "common/logger.h"
 #include "common/threading.h"
 #include "drm_display.h"
@@ -28,6 +30,51 @@ constexpr unsigned MIN_BUFFERS = 3;
 
 // A display that keeps refusing frames is not coming back.
 constexpr int MAX_REFUSED = 10;
+
+// How often the signal (and, on Auto, the standard) is looked at.
+constexpr uint32_t POLL_MS = 1000;
+// A standard or input change waits this long for the next press, so cycling
+// through them restarts the stream once.
+constexpr uint32_t RESTART_DELAY_MS = 300;
+// Changes are saved this long after the last one (NAND writes).
+constexpr uint32_t SAVE_DELAY_MS = 2000;
+
+// The per-input profiles: camera-0 .. camera-3.
+Setting<std::string> *const PROFILES[4] = {&Settings::cameraProfile0, &Settings::cameraProfile1,
+                                           &Settings::cameraProfile2, &Settings::cameraProfile3};
+
+const char *const STANDARDS[] = {"auto", "pal", "ntsc"};
+const char *const STANDARD_LABELS[] = {"Auto", "PAL", "NTSC"};
+
+int standardIndex(const std::string &s)
+{
+    for (int i = 0; i < 3; i++)
+        if (s == STANDARDS[i])
+            return i;
+    return 0;
+}
+
+// The standard a profile asks for; 0 = Auto (whatever the input carries).
+v4l2_std_id wanted(const std::string &s)
+{
+    return s == "pal" ? V4L2_STD_PAL : s == "ntsc" ? V4L2_STD_NTSC_M : 0;
+}
+
+// A detection can match several (625 lines: PAL and PAL-Nc); plain PAL /
+// NTSC win.
+v4l2_std_id plain(v4l2_std_id std)
+{
+    if (std & V4L2_STD_NTSC_M)
+        return V4L2_STD_NTSC_M;
+    if (std & V4L2_STD_PAL)
+        return V4L2_STD_PAL;
+    return std;
+}
+
+bool due(uint32_t now, uint32_t deadline)
+{
+    return (int32_t)(now - deadline) >= 0;
+}
 
 int xioctl(int fd, unsigned long request, void *arg)
 {
@@ -86,70 +133,7 @@ int openDevice(std::string *error)
     return -1;
 }
 
-// A control as 0-100 % of its range; -1 when the device has none.
-int levelOf(int fd, uint32_t id)
-{
-    v4l2_queryctrl q{};
-    q.id = id;
-    if (xioctl(fd, VIDIOC_QUERYCTRL, &q) < 0 || (q.flags & V4L2_CTRL_FLAG_DISABLED) ||
-        q.maximum <= q.minimum)
-        return -1;
-    v4l2_control c{};
-    c.id = id;
-    if (xioctl(fd, VIDIOC_G_CTRL, &c) < 0)
-        return -1;
-    return (int)(((int64_t)(c.value - q.minimum) * 100 + (q.maximum - q.minimum) / 2) /
-                 (q.maximum - q.minimum));
-}
-
-void setLevel(int fd, uint32_t id, int level, const char *name)
-{
-    if (level < 0)
-        return; // the device's own value
-    v4l2_queryctrl q{};
-    q.id = id;
-    if (xioctl(fd, VIDIOC_QUERYCTRL, &q) < 0 || q.maximum <= q.minimum)
-        return;
-    v4l2_control c{};
-    c.id = id;
-    c.value = q.minimum + (int)(((int64_t)(q.maximum - q.minimum) * (level > 100 ? 100 : level) + 50) / 100);
-    if (xioctl(fd, VIDIOC_S_CTRL, &c) < 0)
-        log_w("camera: %s = %d: %s", name, c.value, strerror(errno));
-}
-
-// The video standard: the setting, or what the input carries. A detection
-// can match several (625 lines: PAL and PAL-Nc); plain PAL / NTSC win.
-void setStandard(int fd)
-{
-    const std::string &want = Settings::cameraStandard.value;
-    v4l2_std_id std = 0;
-    if (want == "pal")
-        std = V4L2_STD_PAL;
-    else if (want == "ntsc")
-        std = V4L2_STD_NTSC_M;
-    else
-    {
-        // The decoder only locks a few hundred ms after it is powered up.
-        for (int i = 0; i < 8 && std == 0; i++)
-        {
-            v4l2_std_id seen = 0;
-            if (xioctl(fd, VIDIOC_QUERYSTD, &seen) == 0 && seen != V4L2_STD_UNKNOWN)
-                std = seen;
-            else
-                usleep(100 * 1000);
-        }
-        if (std == 0)
-            return; // no signal yet: keep the current one
-        if (std & V4L2_STD_NTSC_M)
-            std = V4L2_STD_NTSC_M;
-        else if (std & V4L2_STD_PAL)
-            std = V4L2_STD_PAL;
-    }
-    if (xioctl(fd, VIDIOC_S_STD, &std) < 0)
-        log_w("camera: set standard: %s", strerror(errno));
-}
-
-// A boolean control by name (driver-private ones have no fixed id), or 0.
+// A control by name (driver-private ones have no fixed id), or 0.
 uint32_t findControl(int fd, const char *name)
 {
     v4l2_queryctrl q{};
@@ -162,28 +146,176 @@ uint32_t findControl(int fd, const char *name)
     }
     return 0;
 }
+
+// What the column offers, in its order: standard controls by id, the TV
+// decoder's private ones by name. Nothing else is ever touched -- some of
+// the decoder's controls make noise or misbehave (burst gates, comb filter).
+struct Wanted
+{
+    uint32_t id;
+    const char *name; // the name to look for when the id is not there
+    const char *key;
+    const char *label;
+};
+const Wanted WANTED[] = {
+    {V4L2_CID_BRIGHTNESS, nullptr, "brightness", "Brightness"},
+    {V4L2_CID_CONTRAST, nullptr, "contrast", "Contrast"},
+    {V4L2_CID_SATURATION, nullptr, "saturation", "Saturation"},
+    {V4L2_CID_HUE, nullptr, "hue", "Hue"},
+    {V4L2_CID_SHARPNESS, nullptr, "sharpness", "Sharpness"},
+    {V4L2_CID_CHROMA_GAIN, "Chroma Gain", "chroma-gain", "Chroma gain"},
+    {0, "Chroma Enhance", "chroma-enhance", "Chroma enh."},
+};
+
+// "standard=pal,brightness=40,..."; anything unknown or broken is skipped.
+void parseProfile(const std::string &text, std::string &standard,
+                  std::vector<std::pair<std::string, int>> &values)
+{
+    size_t pos = 0;
+    while (pos < text.size())
+    {
+        size_t end = text.find(',', pos);
+        if (end == std::string::npos)
+            end = text.size();
+        const std::string item = text.substr(pos, end - pos);
+        pos = end + 1;
+        const size_t eq = item.find('=');
+        if (eq == std::string::npos)
+            continue;
+        const std::string key = item.substr(0, eq), value = item.substr(eq + 1);
+        if (key == "standard")
+        {
+            standard = STANDARDS[standardIndex(value)];
+            continue;
+        }
+        char *rest = nullptr;
+        const long v = strtol(value.c_str(), &rest, 10);
+        if (!value.empty() && rest && *rest == 0)
+            values.emplace_back(key, (int)v);
+    }
+}
 } // namespace
 
-Camera::Info Camera::probe()
+int Camera::Profile::get(const char *key, int fallback) const
 {
-    Info info;
+    for (const auto &kv : values)
+        if (kv.first == key)
+            return kv.second;
+    return fallback;
+}
+
+void Camera::Profile::set(const char *key, int value)
+{
+    for (auto &kv : values)
+        if (kv.first == key)
+        {
+            kv.second = value;
+            return;
+        }
+    values.emplace_back(key, value);
+}
+
+Camera &Camera::instance()
+{
+    static Camera camera;
+    return camera;
+}
+
+bool Camera::present()
+{
     const int fd = openDevice(nullptr);
     if (fd < 0)
-        return info;
-    info.present = true;
-    for (uint32_t i = 0; i < 8; i++)
-    {
-        v4l2_input in{};
-        in.index = i;
-        if (xioctl(fd, VIDIOC_ENUMINPUT, &in) < 0)
-            break;
-        info.inputs.emplace_back((const char *)in.name);
-    }
-    info.brightness = levelOf(fd, V4L2_CID_BRIGHTNESS);
-    info.contrast = levelOf(fd, V4L2_CID_CONTRAST);
-    info.saturation = levelOf(fd, V4L2_CID_SATURATION);
+        return false;
     ::close(fd);
-    return info;
+    return true;
+}
+
+void Camera::scanControls()
+{
+    _controls.clear();
+    for (const Wanted &w : WANTED)
+    {
+        v4l2_queryctrl q{};
+        q.id = w.id;
+        if ((w.id == 0 || xioctl(_fd, VIDIOC_QUERYCTRL, &q) < 0) && w.name)
+        {
+            q = {};
+            q.id = findControl(_fd, w.name);
+            if (q.id == 0 || xioctl(_fd, VIDIOC_QUERYCTRL, &q) < 0)
+                continue;
+        }
+        else if (w.id == 0)
+            continue;
+        if ((q.flags & (V4L2_CTRL_FLAG_DISABLED | V4L2_CTRL_FLAG_READ_ONLY)) ||
+            q.maximum <= q.minimum)
+            continue;
+        Control c{q.id, w.key, w.label, q.minimum, q.maximum, q.step > 0 ? q.step : 1,
+                  q.default_value, q.default_value, q.type == V4L2_CTRL_TYPE_MENU, {}};
+        if (c.menu)
+            for (int i = q.minimum; i <= q.maximum; i++)
+            {
+                v4l2_querymenu m{};
+                m.id = q.id;
+                m.index = (uint32_t)i;
+                if (xioctl(_fd, VIDIOC_QUERYMENU, &m) == 0)
+                    c.items.emplace_back(i, (const char *)m.name);
+            }
+        if (c.menu && c.items.empty())
+            continue;
+        _controls.push_back(std::move(c));
+    }
+}
+
+// Input, standard (std 0 = Auto: detect, blocking -- only on the first open,
+// when the screen is black anyway), then the levels: a standard change
+// resets some of them on the TV decoder. Buffers must be freed: S_STD is
+// refused while any exist.
+void Camera::configure(v4l2_std_id std)
+{
+    int input = _input;
+    if (xioctl(_fd, VIDIOC_S_INPUT, &input) < 0 && errno != ENOTTY)
+        log_w("camera: input %d: %s", input, strerror(errno));
+    v4l2_input in{};
+    in.index = (uint32_t)_input;
+    _hasStd = xioctl(_fd, VIDIOC_ENUMINPUT, &in) == 0 && (in.capabilities & V4L2_IN_CAP_STD);
+    if (_hasStd)
+    {
+        // The decoder only locks a few hundred ms after it is powered up.
+        for (int i = 0; i < 8 && std == 0; i++)
+        {
+            v4l2_std_id seen = 0;
+            if (xioctl(_fd, VIDIOC_QUERYSTD, &seen) == 0 && seen != V4L2_STD_UNKNOWN)
+                std = plain(seen);
+            else
+                usleep(100 * 1000);
+        }
+        if (std != 0 && xioctl(_fd, VIDIOC_S_STD, &std) < 0)
+            log_w("camera: set standard: %s", strerror(errno));
+        xioctl(_fd, VIDIOC_G_STD, &_std);
+    }
+    applyProfile();
+}
+
+// Every control to the current input's value, or to the control's default
+// (read again: it can follow the standard). Never the device's current
+// value -- that would carry one input's tuning over to another.
+void Camera::applyProfile()
+{
+    for (Control &c : _controls)
+    {
+        v4l2_queryctrl q{};
+        q.id = c.id;
+        if (xioctl(_fd, VIDIOC_QUERYCTRL, &q) == 0)
+            c.def = q.default_value;
+        v4l2_control ctrl{};
+        ctrl.id = c.id;
+        ctrl.value = std::clamp(profile().get(c.key, c.def), c.min, c.max);
+        if (xioctl(_fd, VIDIOC_S_CTRL, &ctrl) < 0)
+            log_w("camera: %s = %d: %s", c.key, ctrl.value, strerror(errno));
+        ctrl.value = c.def;
+        xioctl(_fd, VIDIOC_G_CTRL, &ctrl);
+        c.value = ctrl.value;
+    }
 }
 
 bool Camera::queue(int index)
@@ -195,43 +327,23 @@ bool Camera::queue(int index)
     return xioctl(_fd, VIDIOC_QBUF, &b) == 0;
 }
 
-bool Camera::start()
+// The format the standard gives, buffers exported for the display, stream on,
+// and the capture thread. False with _error set.
+bool Camera::streamOn()
 {
-    if (_fd >= 0)
-        return true;
-    _error.clear();
-    _failed = false;
-    _fd = openDevice(&_error);
-    if (_fd < 0)
-        return false;
-
-    auto give_up = [this](const std::string &why) {
-        _error = why;
-        log_w("camera: %s", why.c_str());
-        stop();
-        return false;
-    };
-
-    // Input, then standard, then the levels (a standard change resets some,
-    // e.g. saturation on the TV decoder), then the format the standard gives.
-    int input = Settings::cameraInput;
-    if (xioctl(_fd, VIDIOC_S_INPUT, &input) < 0 && errno != ENOTTY)
-        log_w("camera: input %d: %s", input, strerror(errno));
-    v4l2_input in{};
-    in.index = (uint32_t)input;
-    if (xioctl(_fd, VIDIOC_ENUMINPUT, &in) == 0 && (in.capabilities & V4L2_IN_CAP_STD))
-        setStandard(_fd);
-    setLevel(_fd, V4L2_CID_BRIGHTNESS, Settings::cameraBrightness, "brightness");
-    setLevel(_fd, V4L2_CID_CONTRAST, Settings::cameraContrast, "contrast");
-    setLevel(_fd, V4L2_CID_SATURATION, Settings::cameraSaturation, "saturation");
-
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (xioctl(_fd, VIDIOC_G_FMT, &fmt) < 0)
-        return give_up("Camera format unknown");
+    {
+        _error = "Camera format unknown";
+        return false;
+    }
     fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
     if (xioctl(_fd, VIDIOC_S_FMT, &fmt) < 0 || fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_NV12)
-        return give_up("Camera has no NV12");
+    {
+        _error = "Camera has no NV12";
+        return false;
+    }
     _width = (int)fmt.fmt.pix.width;
     _height = (int)fmt.fmt.pix.height;
     _pitch = (int)fmt.fmt.pix.bytesperline;
@@ -241,7 +353,10 @@ bool Camera::start()
     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
     if (xioctl(_fd, VIDIOC_REQBUFS, &req) < 0 || req.count < MIN_BUFFERS)
-        return give_up("Not enough video memory for the camera");
+    {
+        _error = "Not enough video memory for the camera";
+        return false;
+    }
     for (uint32_t i = 0; i < req.count; i++)
     {
         v4l2_exportbuffer eb{};
@@ -249,10 +364,16 @@ bool Camera::start()
         eb.index = i;
         eb.flags = O_RDWR | O_CLOEXEC;
         if (xioctl(_fd, VIDIOC_EXPBUF, &eb) < 0)
-            return give_up("Camera buffers cannot be shared");
+        {
+            _error = "Camera buffers cannot be shared";
+            return false;
+        }
         _dmabufs.push_back(eb.fd);
         if (!queue((int)i))
-            return give_up("Camera refused a buffer");
+        {
+            _error = "Camera refused a buffer";
+            return false;
+        }
     }
 
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -267,17 +388,122 @@ bool Camera::start()
         off.id = comb;
         if (comb == 0 || xioctl(_fd, VIDIOC_S_CTRL, &off) < 0 ||
             xioctl(_fd, VIDIOC_STREAMON, &type) < 0)
-            return give_up(err == ENOMEM ? "Not enough video memory for the camera"
-                                         : std::string("Camera does not start: ") + strerror(err));
+        {
+            _error = err == ENOMEM ? "Not enough video memory for the camera"
+                                   : std::string("Camera does not start: ") + strerror(err);
+            return false;
+        }
         log_i("camera: comb filter off -- not enough memory for it");
     }
 
-    drm_display::holdVideo(true);
+    if (!_held)
+    {
+        drm_display::holdVideo(true);
+        _held = true;
+    }
     _streaming = true;
-    log_i("camera: %dx%d NV12, %u buffers, input %d", _width, _height, req.count, input);
+    log_i("camera: %dx%d NV12, %u buffers, input %d", _width, _height, req.count, _input);
     _run = true;
     _thread = std::thread(&Camera::loop, this);
     return true;
+}
+
+// The stream and its buffers; with release, also the device and the plane.
+// Without, the device stays open -- closing it powers the decoder down, and
+// it would have to lock again.
+void Camera::streamOff(bool release)
+{
+    _run = false;
+    if (_thread.joinable())
+        _thread.join();
+    if (_streaming)
+    {
+        int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        xioctl(_fd, VIDIOC_STREAMOFF, &type);
+        // A buffer may still be on scanout: the display lets go of them first.
+        drm_display::flushVideo();
+        _streaming = false;
+    }
+    for (int fd : _dmabufs)
+        ::close(fd);
+    _dmabufs.clear();
+    v4l2_requestbuffers req{};
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
+    xioctl(_fd, VIDIOC_REQBUFS, &req);
+    if (!release)
+        return;
+    if (_held)
+    {
+        drm_display::holdVideo(false);
+        _held = false;
+    }
+    ::close(_fd);
+    _fd = -1;
+}
+
+bool Camera::start()
+{
+    if (_fd >= 0)
+        return true;
+    _error.clear();
+    _failed = false;
+    _fd = openDevice(&_error);
+    if (_fd < 0)
+        return false;
+
+    _inputs.clear();
+    for (uint32_t i = 0; i < 8; i++)
+    {
+        v4l2_input in{};
+        in.index = i;
+        if (xioctl(_fd, VIDIOC_ENUMINPUT, &in) < 0)
+            break;
+        _inputs.emplace_back((const char *)in.name);
+    }
+    for (int i = 0; i < 4; i++)
+    {
+        _profiles[i] = Profile();
+        parseProfile(PROFILES[i]->value, _profiles[i].standard, _profiles[i].values);
+    }
+    _input = std::clamp((int)Settings::cameraInput, 0,
+                        std::min(3, std::max(0, (int)_inputs.size() - 1)));
+    _restartAt = 0;
+    _noSignal = false;
+    _unsaved = false;
+    scanControls();
+    configure(wanted(profile().standard));
+    if (!streamOn())
+    {
+        const std::string why = _error;
+        log_w("camera: %s", why.c_str());
+        stop();
+        _error = why;
+        return false;
+    }
+    _pollAt = mono_ms() + POLL_MS;
+    changed(false);
+    return true;
+}
+
+void Camera::restart()
+{
+    streamOff(false);
+    configure(_restartStd);
+    if (!streamOn())
+        fail(_error);
+    changed(false);
+}
+
+void Camera::stop()
+{
+    if (_fd < 0)
+        return;
+    if (_unsaved)
+        save();
+    streamOff(true);
+    _rows.clear();
+    _generation++;
 }
 
 void Camera::fail(const std::string &why)
@@ -337,31 +563,193 @@ void Camera::loop()
     }
 }
 
-void Camera::stop()
+void Camera::tick()
 {
-    if (_fd < 0)
+    if (_fd < 0 || _failed)
         return;
-    _run = false;
-    if (_thread.joinable())
-        _thread.join();
-    if (_streaming)
+    const uint32_t now = mono_ms();
+    if (_restartAt != 0 && due(now, _restartAt))
     {
-        int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        xioctl(_fd, VIDIOC_STREAMOFF, &type);
-        // A buffer may still be on scanout: the display lets go of them first.
-        drm_display::flushVideo();
-        drm_display::holdVideo(false);
-        _streaming = false;
+        _restartAt = 0;
+        restart();
+        _pollAt = now + POLL_MS;
     }
-    for (int fd : _dmabufs)
-        ::close(fd);
-    _dmabufs.clear();
-    v4l2_requestbuffers req{};
-    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    req.memory = V4L2_MEMORY_MMAP;
-    xioctl(_fd, VIDIOC_REQBUFS, &req);
-    ::close(_fd);
-    _fd = -1;
+    if (due(now, _pollAt))
+    {
+        _pollAt = now + POLL_MS;
+        v4l2_input in{};
+        in.index = (uint32_t)_input;
+        if (xioctl(_fd, VIDIOC_ENUMINPUT, &in) == 0)
+        {
+            const bool none = (in.status & V4L2_IN_ST_NO_SIGNAL) != 0;
+            if (none != _noSignal)
+            {
+                _noSignal = none;
+                changed(false);
+            }
+        }
+        // Auto follows the input: a reversing camera often powers up only
+        // in reverse, after the view is open.
+        v4l2_std_id seen = 0;
+        if (_hasStd && wanted(profile().standard) == 0 && !_noSignal && _restartAt == 0 &&
+            xioctl(_fd, VIDIOC_QUERYSTD, &seen) == 0 && seen != V4L2_STD_UNKNOWN &&
+            !(plain(seen) & _std))
+        {
+            _restartStd = plain(seen);
+            _restartAt = now;
+        }
+    }
+    if (_unsaved && due(now, _saveAt))
+        save();
+}
+
+void Camera::adjust(int row, int direction)
+{
+    if (_fd < 0 || row < 0 || row >= (int)_rows.size() || direction == 0)
+        return;
+    const uint32_t now = mono_ms();
+    const int step = direction > 0 ? 1 : -1;
+    switch (_rows[(size_t)row].kind)
+    {
+    case RowKind::Input:
+    {
+        // Live: the levels follow at once; the stream restarts only when
+        // this input wants another standard.
+        const int n = std::min(4, (int)_inputs.size());
+        _input = (_input + step + n) % n;
+        int input = _input;
+        xioctl(_fd, VIDIOC_S_INPUT, &input);
+        v4l2_input in{};
+        in.index = (uint32_t)_input;
+        _hasStd = xioctl(_fd, VIDIOC_ENUMINPUT, &in) == 0 && (in.capabilities & V4L2_IN_CAP_STD);
+        const v4l2_std_id want = wanted(profile().standard);
+        if (_hasStd && want != 0 && want != _std)
+        {
+            _restartStd = want;
+            _restartAt = now + RESTART_DELAY_MS;
+        }
+        else
+        {
+            applyProfile();
+            _pollAt = now + 400; // Auto: look at the new input soon
+        }
+        _noSignal = false;
+        break;
+    }
+    case RowKind::Standard:
+    {
+        profile().standard = STANDARDS[(standardIndex(profile().standard) + step + 3) % 3];
+        const v4l2_std_id want = wanted(profile().standard);
+        if (want != 0 && want != _std)
+        {
+            _restartStd = want;
+            _restartAt = now + RESTART_DELAY_MS;
+        }
+        else
+        {
+            _restartAt = 0;
+            _pollAt = now; // Auto: check the input now
+        }
+        break;
+    }
+    case RowKind::Control:
+    {
+        // Rows: [Input] [Standard] then the controls, in order.
+        const int first = (int)_rows.size() - (int)_controls.size();
+        Control &c = _controls[(size_t)(row - first)];
+        int value = c.value;
+        if (c.menu)
+        {
+            size_t i = 0;
+            while (i < c.items.size() && c.items[i].first != c.value)
+                i++;
+            const int at = std::clamp((int)i + step, 0, (int)c.items.size() - 1);
+            value = c.items[(size_t)at].first;
+        }
+        else
+        {
+            // 5 % of the range, in whole steps of the control.
+            const int stride = std::max(c.step, ((c.max - c.min) / 20 / c.step) * c.step);
+            value = std::clamp(c.value + step * stride, c.min, c.max);
+        }
+        v4l2_control ctrl{};
+        ctrl.id = c.id;
+        ctrl.value = value;
+        if (xioctl(_fd, VIDIOC_S_CTRL, &ctrl) < 0)
+            log_w("camera: %s = %d: %s", c.key, value, strerror(errno));
+        ctrl.value = value;
+        xioctl(_fd, VIDIOC_G_CTRL, &ctrl);
+        c.value = ctrl.value;
+        profile().set(c.key, c.value);
+        break;
+    }
+    }
+    changed(true);
+}
+
+void Camera::buildRows()
+{
+    _rows.clear();
+    if (_inputs.size() > 1)
+        _rows.push_back({RowKind::Input, "Input",
+                         _noSignal ? "No signal" : std::to_string(_input + 1)});
+    if (_hasStd)
+        _rows.push_back(
+            {RowKind::Standard, "Standard", STANDARD_LABELS[standardIndex(profile().standard)]});
+    for (const Control &c : _controls)
+    {
+        std::string value;
+        if (c.menu)
+        {
+            for (const auto &item : c.items)
+                if (item.first == c.value)
+                    value = item.second;
+        }
+        else
+        {
+            char text[16];
+            if (c.min < 0) // centred (hue): an offset either way
+                snprintf(text, sizeof(text), "%+d%%",
+                         (int)((int64_t)c.value * 100 / std::max(-c.min, c.max)));
+            else
+                snprintf(text, sizeof(text), "%d%%",
+                         (int)(((int64_t)(c.value - c.min) * 100 + (c.max - c.min) / 2) /
+                               (c.max - c.min)));
+            value = text;
+        }
+        _rows.push_back({RowKind::Control, c.label, value});
+    }
+}
+
+void Camera::changed(bool save)
+{
+    buildRows();
+    _generation++;
+    if (save)
+    {
+        _unsaved = true;
+        _saveAt = mono_ms() + SAVE_DELAY_MS;
+    }
+}
+
+void Camera::save()
+{
+    _unsaved = false;
+    for (int i = 0; i < 4; i++)
+    {
+        const Profile &p = _profiles[i];
+        std::string text;
+        if (p.standard != "auto" || !p.values.empty())
+        {
+            text = "standard=" + p.standard;
+            for (const auto &kv : p.values)
+                text += "," + kv.first + "=" + std::to_string(kv.second);
+        }
+        if (text != PROFILES[i]->value)
+            Settings::setUser(PROFILES[i]->name, text);
+    }
+    if (_input != Settings::cameraInput)
+        Settings::setUser("camera-input", std::to_string(_input));
 }
 
 #endif

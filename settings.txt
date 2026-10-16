@@ -178,14 +178,14 @@
 
 # --- Camera -----------------------------------------------------------------
 # A V4L2 capture device (e.g. a composite reversing camera on the TV decoder)
-# shown full screen from Settings > Video > Test camera, which also sets the
-# rest. The device must give NV12 in contiguous memory (it is scanned out as
-# is). Empty device = the first capture device found.
+# shown full screen from Settings > Video > Camera, with a settings column over
+# the picture. The device must give NV12 in contiguous memory (it is scanned
+# out as is). Empty device = the first capture device found.
 #camera-device =
-# Input index (e.g. 0 = TVIN0, 1 = TVIN1) and video standard: auto, pal, ntsc.
+# The input last shown (0 = TVIN0, 1 = TVIN1).
 #camera-input = 0
-#camera-standard = auto
-# Picture levels, 0-100 % of the device's range; -1 leaves the device's value.
-#camera-brightness = -1
-#camera-contrast = -1
-#camera-saturation = -1
+# Each input's own settings, written by the camera view: the video standard
+# (auto, pal, ntsc), then raw control values; a control left out is at its
+# default. For example:
+#camera-0 = standard=pal,brightness=40,contrast=140,saturation=96
+#camera-1 =

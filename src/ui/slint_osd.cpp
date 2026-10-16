@@ -93,20 +93,8 @@ const char *nightModeName(int mode)
     }
 }
 
-// The camera view's "tap to close" stays up this long.
-constexpr uint32_t CAMERA_HINT_MS = 3000;
-
-// The camera's standards as the setting spells them, and as shown.
-const char *const CAMERA_STANDARDS[] = {"auto", "pal", "ntsc"};
-const char *const CAMERA_STANDARD_LABELS[] = {"Auto", "PAL", "NTSC"};
-
-int cameraStandardIndex()
-{
-    for (int i = 0; i < 3; i++)
-        if (Settings::cameraStandard.value == CAMERA_STANDARDS[i])
-            return i;
-    return 0;
-}
+// The camera view's settings column hides this long after the last input.
+constexpr uint32_t CAMERA_PANEL_MS = 5000;
 
 // Keyboard focus is only re-seeded for someone actually using a keyboard.
 constexpr uint32_t KEY_RECENT_MS = 10000;
@@ -255,50 +243,140 @@ struct SlintOsd::Impl
             ringLost = true;
     }
 
-    // The camera (Settings > Video): what the device offers, probed when the
-    // Video screen opens, and the hint shown over the camera view.
+    // The camera view (screen 9): the settings column over the picture is
+    // up for a few seconds after the last input; the selection and editing
+    // live here, the rows and their values in Camera.
+    bool panelUp = false;
+    uint32_t panelUntil = 0;
+    int camRow = 0;           // the ring: a row, or the row count for X
+    bool camEditing = false;  // the ringed row is being turned
+    int pCamRow = -1;
+    bool pCamEditing = false;
+    bool touchSwallow = false; // a touch that only brought the column back
 #ifdef USE_CEDRUS
-    Camera::Info camera;
+    std::shared_ptr<slint::VectorModel<CameraRow>> camRows =
+        std::make_shared<slint::VectorModel<CameraRow>>();
+    bool camSeen = false;
+    uint32_t pCamGen = 0;
 #endif
-    bool cameraDirty = true;
-    bool cameraHint = false;
-    uint32_t cameraHintUntil = 0;
 
-    // A picture level: the saved one, or the device's own until changed.
-    static int cameraLevel(const Setting<int> &saved, int device)
+    void showPanel()
     {
-        return saved.value >= 0 ? saved.value : device;
+        panelUp = true;
+        panelUntil = mono_ms() + CAMERA_PANEL_MS;
     }
 
-    void pumpCamera(const Bridge &bridge)
+    void hidePanel()
     {
-        if (!cameraDirty)
+        panelUp = false;
+        camEditing = false;
+    }
+
+#ifdef USE_CEDRUS
+    // A key in the camera view. Turning never changes Input or Standard: a
+    // standard change restarts the stream.
+    void cameraKey(const Bridge &bridge, OsdKey nav, bool repeat)
+    {
+        Camera &camera = Camera::instance();
+        const int count = (int)camera.rows().size(); // row `count` is X
+        if (!panelUp)
+        {
+            // Hidden: only Back leaves; anything else brings the column back.
+            if (!repeat && (nav == OsdKey::Back || nav == OsdKey::Erase))
+                bridge.set_screen(8);
+            else if (!repeat)
+                showPanel();
             return;
-        cameraDirty = false;
-#ifdef USE_CEDRUS
-        auto label = [](int level) {
-            char text[8];
-            snprintf(text, sizeof(text), "%d%%", level);
-            return level < 0 ? slint::SharedString() : slint::SharedString(text);
-        };
-        bridge.set_camera_available(camera.present);
-        const int input = Settings::cameraInput;
-        bridge.set_camera_input_label(
-            camera.inputs.size() < 2 ? slint::SharedString()
-            : input >= 0 && input < (int)camera.inputs.size()
-                ? slint::SharedString(camera.inputs[(size_t)input])
-                : slint::SharedString("Input " + std::to_string(input)));
-        bridge.set_camera_standard_label(CAMERA_STANDARD_LABELS[cameraStandardIndex()]);
-        bridge.set_camera_brightness_label(
-            label(camera.brightness < 0 ? -1 : cameraLevel(Settings::cameraBrightness, camera.brightness)));
-        bridge.set_camera_contrast_label(
-            label(camera.contrast < 0 ? -1 : cameraLevel(Settings::cameraContrast, camera.contrast)));
-        bridge.set_camera_saturation_label(
-            label(camera.saturation < 0 ? -1 : cameraLevel(Settings::cameraSaturation, camera.saturation)));
-#else
-        (void)bridge;
-#endif
+        }
+        showPanel();
+        camRow = std::min(camRow, count);
+        const bool onRow = camRow < count;
+        const bool turnable =
+            onRow && camera.rows()[(size_t)camRow].kind == Camera::RowKind::Control;
+        switch (nav)
+        {
+        case OsdKey::Back:
+        case OsdKey::Erase:
+            if (repeat)
+                break;
+            if (camEditing)
+                camEditing = false;
+            else
+                bridge.set_screen(8);
+            break;
+        case OsdKey::Ok:
+            if (repeat)
+                break;
+            if (camEditing)
+                camEditing = false;
+            else if (!onRow)
+                bridge.set_screen(8);
+            else if (turnable)
+                camEditing = true;
+            else
+                camera.adjust(camRow, 1);
+            break;
+        case OsdKey::Next:
+        case OsdKey::Down:
+            if (camEditing)
+                camera.adjust(camRow, nav == OsdKey::Next ? 1 : -1);
+            else
+                camRow = (camRow + 1) % (count + 1);
+            break;
+        case OsdKey::Prev:
+        case OsdKey::Up:
+            if (camEditing)
+                camera.adjust(camRow, nav == OsdKey::Prev ? -1 : 1);
+            else
+                camRow = (camRow + count) % (count + 1);
+            break;
+        case OsdKey::Left:
+        case OsdKey::Right:
+            if (onRow)
+                camera.adjust(camRow, nav == OsdKey::Right ? 1 : -1);
+            break;
+        default:
+            break;
+        }
     }
+
+    // Camera -> the column: rows on the camera's generation (one load per
+    // tick otherwise), the ring and editing on change, the timed hide.
+    void pumpCamera(const Bridge &bridge, int screen)
+    {
+        const Camera &camera = Camera::instance();
+        if (!camSeen || camera.generation() != pCamGen)
+        {
+            camSeen = true;
+            pCamGen = camera.generation();
+            const auto &rows = camera.rows();
+            while (camRows->row_count() > rows.size())
+                camRows->erase(camRows->row_count() - 1);
+            for (size_t i = 0; i < rows.size(); i++)
+            {
+                const CameraRow want{slint::SharedString(rows[i].label),
+                                     slint::SharedString(rows[i].value)};
+                if (i >= camRows->row_count())
+                    camRows->push_back(want);
+                else if (!(camRows->row_data(i) == want))
+                    camRows->set_row_data(i, want);
+            }
+            camRow = std::min(camRow, (int)rows.size());
+        }
+        if (panelUp && (screen != 9 || due(mono_ms(), panelUntil)))
+            hidePanel();
+        if (camRow != pCamRow)
+        {
+            pCamRow = camRow;
+            bridge.set_camera_row(camRow);
+        }
+        if (camEditing != pCamEditing)
+        {
+            pCamEditing = camEditing;
+            bridge.set_camera_editing(camEditing);
+        }
+    }
+#endif
 
     // The dialog shows Bluetooth's prompt -- pairing has a deadline, so it
     // wins -- or else our own question from the System screen.
@@ -490,13 +568,14 @@ struct SlintOsd::Impl
             }
             return;
         }
-        // The camera view: any key closes it.
+#ifdef USE_CEDRUS
+        // The camera view: its settings column.
         if (bridge.get_screen() == 9)
         {
-            if (!repeat)
-                bridge.set_screen(8);
+            cameraKey(bridge, nav, repeat);
             return;
         }
+#endif
         if (editing >= 0)
         {
             // Arrows move the on-screen keyboard's ring (how a remote types)
@@ -710,11 +789,10 @@ struct SlintOsd::Impl
             if (bridge.get_screen() == 9)
                 bridge.set_screen(8);
         }
-        if (cameraHint && due(mono_ms(), cameraHintUntil))
-        {
-            cameraHint = false;
-            bridge.set_camera_hint(false);
-        }
+        // A dialog over the camera view would be under the picture: show it
+        // on the Video screen instead.
+        if (bridge.get_screen() == 9 && bridge.get_prompt_kind() != 0)
+            bridge.set_screen(8);
 
         const int screen = bridge.get_screen();
         const bool modal = bridge.get_prompt_kind() != 0 || editing >= 0;
@@ -724,20 +802,20 @@ struct SlintOsd::Impl
             ui_bridge::setCameraTest(screen == 9);
             if (screen == 9)
             {
+                // The column comes up with the ring on its first row.
                 bridge.set_camera_error("");
-                cameraHint = true;
-                cameraHintUntil = mono_ms() + CAMERA_HINT_MS;
-                bridge.set_camera_hint(true);
+                camRow = 0;
+                camEditing = false;
+                showPanel();
             }
 #ifdef USE_CEDRUS
             else if (screen == 8 && pScreen != 9)
-            {
-                camera = Camera::probe(); // opens the device for a moment
-                cameraDirty = true;
-            }
+                bridge.set_camera_available(Camera::present()); // opens it for a moment
 #endif
         }
-        pumpCamera(bridge);
+#ifdef USE_CEDRUS
+        pumpCamera(bridge, screen);
+#endif
         if (screen != pScreen || modal != pModal)
         {
             focusSeed = true;
@@ -956,38 +1034,21 @@ bool SlintOsd::beginDrm(int width, int height)
     });
     bridge.on_osk_ok([impl] { impl->saveField(); });
     bridge.on_osk_cancel([impl] { impl->setEditing(-1); });
-    bridge.on_camera_cycle_input([impl] {
 #ifdef USE_CEDRUS
-        const int n = (int)impl->camera.inputs.size();
-        if (n > 1)
-            persist("camera-input", std::to_string((Settings::cameraInput + 1) % n).c_str(), false);
+    // The camera view's column, by touch; any of it keeps the column up.
+    bridge.set_camera_rows(impl->camRows);
+    bridge.on_camera_select([impl](int row) {
+        impl->camRow = row;
+        impl->camEditing = false;
+        impl->showPanel();
+    });
+    bridge.on_camera_adjust([impl](int direction) {
+        impl->showPanel();
+        Camera::instance().adjust(impl->camRow, direction);
+    });
+    bridge.on_camera_close([impl] { impl->ui->global<Bridge>().set_screen(8); });
+    bridge.on_camera_picture([impl] { impl->hidePanel(); });
 #endif
-        impl->cameraDirty = true;
-    });
-    bridge.on_camera_cycle_standard([impl] {
-        persist("camera-standard", CAMERA_STANDARDS[(cameraStandardIndex() + 1) % 3], false);
-        impl->cameraDirty = true;
-    });
-    bridge.on_camera_step([impl](int which, int direction) {
-#ifdef USE_CEDRUS
-        static const char *const keys[] = {"camera-brightness", "camera-contrast",
-                                           "camera-saturation"};
-        const Setting<int> *const saved[] = {&Settings::cameraBrightness,
-                                             &Settings::cameraContrast,
-                                             &Settings::cameraSaturation};
-        const int device[] = {impl->camera.brightness, impl->camera.contrast,
-                              impl->camera.saturation};
-        if (which < 0 || which > 2 || device[which] < 0)
-            return;
-        const int level =
-            std::clamp(Impl::cameraLevel(*saved[which], device[which]) + 5 * direction, 0, 100);
-        persist(keys[which], std::to_string(level).c_str(), false);
-#else
-        (void)which;
-        (void)direction;
-#endif
-        impl->cameraDirty = true;
-    });
     bridge.on_system_ask([impl](int what) {
         impl->systemAsk = what;
         impl->dialogDirty = true;
@@ -1080,12 +1141,21 @@ bool SlintOsd::overVideo(int &x, int &y, int &w, int &h)
     if (_impl == nullptr || _impl->win == nullptr)
         return false;
     const Impl &impl = *_impl;
-    // A change the next tick() has not pumped yet brings the bar up too. The
-    // camera view's hint sits in the same place.
+    // The camera view's settings column while it is up -- the volume bar
+    // then sits inside it, at its foot.
+    if (impl.pScreen == 9 && impl.panelUp)
+    {
+        const auto &panel = impl.ui->global<CameraPanel>();
+        x = (int)panel.get_x();
+        y = (int)panel.get_y();
+        w = (int)panel.get_width();
+        h = (int)panel.get_height();
+        return true;
+    }
+    // A change the next tick() has not pumped yet brings the bar up too.
     const bool pending =
         impl.volumeSeen && AudioVolume::instance().generation() != impl.pVolumeGen;
-    if (!pending && !(impl.volumeBar && !due(mono_ms(), impl.volumeBarUntil)) &&
-        !(impl.cameraHint && !due(mono_ms(), impl.cameraHintUntil)))
+    if (!pending && !(impl.volumeBar && !due(mono_ms(), impl.volumeBarUntil)))
         return false;
     const auto &bar = impl.ui->global<VolumeBar>();
     x = (int)bar.get_x();
@@ -1118,7 +1188,21 @@ bool SlintOsd::tick(bool overVideo)
         const bool down = _pressed;
         const slint::LogicalPosition pos({(float)_px.load(), (float)_py.load()});
         auto &window = impl.win->window();
-        if (down && !impl.lastDown)
+        // The camera view with its column down: a touch only brings the
+        // column back, the tap itself goes nowhere. Any touch keeps it up.
+        const bool began = !impl.lastDown && (down || seen);
+        if (began && impl.pScreen == 9)
+        {
+            if (!impl.panelUp)
+                impl.touchSwallow = true;
+            impl.showPanel();
+        }
+        if (impl.touchSwallow)
+        {
+            if (!down)
+                impl.touchSwallow = false;
+        }
+        else if (down && !impl.lastDown)
             window.dispatch_pointer_press_event(pos, slint::PointerEventButton::Left);
         else if (!down && impl.lastDown)
             window.dispatch_pointer_release_event(pos, slint::PointerEventButton::Left);
