@@ -81,15 +81,23 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
 - **Video** (screen 8): Frame rate (30/60 fps, needs a restart), and
   Camera when a V4L2 capture device is there (`camera-device`, or the first
   one found -- the F1C200s TV decoder for a composite reversing camera); its
-  value is why the camera last could not run.
+  value is why the camera last could not run. Camera key: asks for a key on
+  a Bluetooth keyboard and learns the next one pressed (`camera-key`; Esc
+  cancels, Clear removes it). That key then switches to the camera and back
+  from anywhere -- the screens or phone video -- and does nothing else.
+  Code calls the same switch with `ui_bridge::requestCamera()` (Toggle, On,
+  Off -- e.g. for a reverse signal later).
 - **Camera view** (screen 9): the camera full screen on the video plane, no
   copy -- `src/camera.cpp` exports its capture buffers as dma-bufs and
   `drm_display::showCamera()` scans them out (NV12 in contiguous memory; the
   display engine scales 720x576 to the panel), the phone's frames held off
-  the plane meanwhile (`holdVideo`). Over it, a settings column at the
+  the plane meanwhile (`holdVideo`); leaving it goes back to where it was
+  opened from (a phone's video gets a fresh keyframe). Over it, a settings
+  column at the
   right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
   window of the overlay; it hides 5 s after the last input, and a tap on
-  the picture hides it at once.
+  the picture hides it at once. Switched on by the camera key it starts
+  hidden: just the picture.
   - Two pages. The menu: Back (leaves the view), one row per input (the
     one on screen is filled; "No signal" when it has none), Standard
     (Auto/PAL/NTSC) and Picture. Picture: Back (to the menu), then the

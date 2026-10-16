@@ -17,6 +17,9 @@ std::atomic<bool> g_resume{false};
 std::atomic<bool> g_night{false};
 std::atomic<int> g_power{0}; // ui_bridge::Power
 std::atomic<bool> g_camera{false};
+std::atomic<int> g_cameraRequest{0}; // ui_bridge::CameraRequest
+std::atomic<bool> g_keyLearning{false};
+std::atomic<int> g_learnedKey{0};    // 0: none yet
 std::atomic<bool> g_cameraFailed{false};
 std::mutex g_cameraMutex;
 std::string g_cameraWhy;
@@ -180,6 +183,39 @@ bool takeCameraFailure(std::string &why)
     std::lock_guard<std::mutex> lock(g_cameraMutex);
     why = g_cameraWhy;
     return true;
+}
+
+void requestCamera(CameraRequest request)
+{
+    g_cameraRequest = (int)request;
+}
+
+CameraRequest takeCameraRequest()
+{
+    return (CameraRequest)g_cameraRequest.exchange(0);
+}
+
+void setKeyLearning(bool on)
+{
+    g_learnedKey = 0;
+    g_keyLearning = on;
+}
+
+bool keyLearning()
+{
+    return g_keyLearning;
+}
+
+void keyLearned(int code)
+{
+    g_keyLearning = false;
+    g_learnedKey = code;
+}
+
+bool takeLearnedKey(int &code)
+{
+    code = g_learnedKey.exchange(0);
+    return code != 0;
 }
 
 void requestPower(Power action)

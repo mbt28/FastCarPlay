@@ -152,6 +152,7 @@ counts are not detents (a Surface Dial makes 3600 a turn).
 | Next / Previous song | next / previous track | (phone) |
 | Voice command, Search, Assistant | Siri / assistant | (phone) |
 | letters, digits, punctuation | -- | typed into the editor (US layout) |
+| The camera key (any key, learned in Settings > Video > Camera key) | switches to the camera and back | switches to the camera and back |
 
 Both phones have a native rotary knob, and the wheel drives it: one detent
 is one knob step (CarPlay's knob wheel, Android Auto's rotary controller;

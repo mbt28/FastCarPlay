@@ -25,6 +25,11 @@
 #include <vector>
 
 #include "audio_volume.h"
+#include "settings.h"
+#include "ui/osd.h" // defines USE_OSD_UI when the screens are built
+#ifdef USE_OSD_UI
+#include "ui/ui_bridge.h"
+#endif
 #include "common/clock.h"
 #include "common/logger.h"
 #include "common/threading.h"
@@ -376,6 +381,22 @@ struct KeyInput::Impl
     void press(Device &dev, int code)
     {
         const uint32_t now = mono_ms();
+#ifdef USE_OSD_UI
+        // Settings > Video > Camera key: the next key is learned, not used
+        // (Esc and Back still cancel the question). The learned key then
+        // switches to the camera and back from anywhere, and does nothing
+        // else. Neither press leaves a held entry, so the release is dropped.
+        if (ui_bridge::keyLearning() && code != KEY_ESC && code != KEY_BACK)
+        {
+            ui_bridge::keyLearned(code);
+            return;
+        }
+        if (code != 0 && code == Settings::cameraKey)
+        {
+            ui_bridge::requestCamera(ui_bridge::CameraRequest::Toggle);
+            return;
+        }
+#endif
         if (phoneOnly(code))
         {
             sendPhone(phoneButton(code));
