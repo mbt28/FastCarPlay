@@ -461,13 +461,14 @@ bool Camera::start()
             break;
         _inputs.emplace_back((const char *)in.name);
     }
+    if (_inputs.size() > 4)
+        _inputs.resize(4); // one saved profile each
     for (int i = 0; i < 4; i++)
     {
         _profiles[i] = Profile();
         parseProfile(PROFILES[i]->value, _profiles[i].standard, _profiles[i].values);
     }
-    _input = std::clamp((int)Settings::cameraInput, 0,
-                        std::min(3, std::max(0, (int)_inputs.size() - 1)));
+    _input = std::clamp((int)Settings::cameraInput, 0, std::max(0, (int)_inputs.size() - 1));
     _restartAt = 0;
     _noSignal = false;
     _unsaved = false;
@@ -502,7 +503,7 @@ void Camera::stop()
     if (_unsaved)
         save();
     streamOff(true);
-    _rows.clear();
+    _levels.clear();
     _generation++;
 }
 
@@ -603,99 +604,94 @@ void Camera::tick()
         save();
 }
 
-void Camera::adjust(int row, int direction)
+const char *Camera::standardLabel() const
 {
-    if (_fd < 0 || row < 0 || row >= (int)_rows.size() || direction == 0)
+    return STANDARD_LABELS[standardIndex(profile().standard)];
+}
+
+void Camera::selectInput(int input)
+{
+    if (_fd < 0 || input < 0 || input >= (int)_inputs.size() || input == _input)
         return;
     const uint32_t now = mono_ms();
-    const int step = direction > 0 ? 1 : -1;
-    switch (_rows[(size_t)row].kind)
+    _input = input;
+    int which = _input;
+    xioctl(_fd, VIDIOC_S_INPUT, &which);
+    v4l2_input in{};
+    in.index = (uint32_t)_input;
+    _hasStd = xioctl(_fd, VIDIOC_ENUMINPUT, &in) == 0 && (in.capabilities & V4L2_IN_CAP_STD);
+    const v4l2_std_id want = wanted(profile().standard);
+    if (_hasStd && want != 0 && want != _std)
     {
-    case RowKind::Input:
-    {
-        // Live: the levels follow at once; the stream restarts only when
-        // this input wants another standard.
-        const int n = std::min(4, (int)_inputs.size());
-        _input = (_input + step + n) % n;
-        int input = _input;
-        xioctl(_fd, VIDIOC_S_INPUT, &input);
-        v4l2_input in{};
-        in.index = (uint32_t)_input;
-        _hasStd = xioctl(_fd, VIDIOC_ENUMINPUT, &in) == 0 && (in.capabilities & V4L2_IN_CAP_STD);
-        const v4l2_std_id want = wanted(profile().standard);
-        if (_hasStd && want != 0 && want != _std)
-        {
-            _restartStd = want;
-            _restartAt = now + RESTART_DELAY_MS;
-        }
-        else
-        {
-            applyProfile();
-            _pollAt = now + 400; // Auto: look at the new input soon
-        }
-        _noSignal = false;
-        break;
+        _restartStd = want;
+        _restartAt = now + RESTART_DELAY_MS;
     }
-    case RowKind::Standard:
+    else
     {
-        profile().standard = STANDARDS[(standardIndex(profile().standard) + step + 3) % 3];
-        const v4l2_std_id want = wanted(profile().standard);
-        if (want != 0 && want != _std)
-        {
-            _restartStd = want;
-            _restartAt = now + RESTART_DELAY_MS;
-        }
-        else
-        {
-            _restartAt = 0;
-            _pollAt = now; // Auto: check the input now
-        }
-        break;
+        applyProfile();
+        _pollAt = now + 400; // Auto: look at the new input soon
     }
-    case RowKind::Control:
+    _noSignal = false;
+    changed(true);
+}
+
+void Camera::cycleStandard(int direction)
+{
+    if (_fd < 0 || !_hasStd || direction == 0)
+        return;
+    const uint32_t now = mono_ms();
+    profile().standard =
+        STANDARDS[(standardIndex(profile().standard) + (direction > 0 ? 1 : 2)) % 3];
+    const v4l2_std_id want = wanted(profile().standard);
+    if (want != 0 && want != _std)
     {
-        // Rows: [Input] [Standard] then the controls, in order.
-        const int first = (int)_rows.size() - (int)_controls.size();
-        Control &c = _controls[(size_t)(row - first)];
-        int value = c.value;
-        if (c.menu)
-        {
-            size_t i = 0;
-            while (i < c.items.size() && c.items[i].first != c.value)
-                i++;
-            const int at = std::clamp((int)i + step, 0, (int)c.items.size() - 1);
-            value = c.items[(size_t)at].first;
-        }
-        else
-        {
-            // 5 % of the range, in whole steps of the control.
-            const int stride = std::max(c.step, ((c.max - c.min) / 20 / c.step) * c.step);
-            value = std::clamp(c.value + step * stride, c.min, c.max);
-        }
-        v4l2_control ctrl{};
-        ctrl.id = c.id;
-        ctrl.value = value;
-        if (xioctl(_fd, VIDIOC_S_CTRL, &ctrl) < 0)
-            log_w("camera: %s = %d: %s", c.key, value, strerror(errno));
-        ctrl.value = value;
-        xioctl(_fd, VIDIOC_G_CTRL, &ctrl);
-        c.value = ctrl.value;
-        profile().set(c.key, c.value);
-        break;
+        _restartStd = want;
+        _restartAt = now + RESTART_DELAY_MS;
     }
+    else
+    {
+        _restartAt = 0;
+        _pollAt = now; // Auto: check the input now
     }
     changed(true);
 }
 
-void Camera::buildRows()
+void Camera::adjustLevel(int level, int direction)
 {
-    _rows.clear();
-    if (_inputs.size() > 1)
-        _rows.push_back({RowKind::Input, "Input",
-                         _noSignal ? "No signal" : std::to_string(_input + 1)});
-    if (_hasStd)
-        _rows.push_back(
-            {RowKind::Standard, "Standard", STANDARD_LABELS[standardIndex(profile().standard)]});
+    if (_fd < 0 || level < 0 || level >= (int)_controls.size() || direction == 0)
+        return;
+    const int step = direction > 0 ? 1 : -1;
+    Control &c = _controls[(size_t)level];
+    int value = c.value;
+    if (c.menu)
+    {
+        size_t i = 0;
+        while (i < c.items.size() && c.items[i].first != c.value)
+            i++;
+        const int at = std::clamp((int)i + step, 0, (int)c.items.size() - 1);
+        value = c.items[(size_t)at].first;
+    }
+    else
+    {
+        // 5 % of the range, in whole steps of the control.
+        const int stride = std::max(c.step, ((c.max - c.min) / 20 / c.step) * c.step);
+        value = std::clamp(c.value + step * stride, c.min, c.max);
+    }
+    v4l2_control ctrl{};
+    ctrl.id = c.id;
+    ctrl.value = value;
+    if (xioctl(_fd, VIDIOC_S_CTRL, &ctrl) < 0)
+        log_w("camera: %s = %d: %s", c.key, value, strerror(errno));
+    ctrl.value = value;
+    xioctl(_fd, VIDIOC_G_CTRL, &ctrl);
+    c.value = ctrl.value;
+    profile().set(c.key, c.value);
+    changed(true);
+}
+
+void Camera::buildLevels()
+{
+    _levels.clear();
     for (const Control &c : _controls)
     {
         std::string value;
@@ -717,13 +713,13 @@ void Camera::buildRows()
                                (c.max - c.min)));
             value = text;
         }
-        _rows.push_back({RowKind::Control, c.label, value});
+        _levels.push_back({c.label, value});
     }
 }
 
 void Camera::changed(bool save)
 {
-    buildRows();
+    buildLevels();
     _generation++;
     if (save)
     {

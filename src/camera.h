@@ -5,8 +5,9 @@
 // TV decoder -- shown full screen on the DRM video plane with no copy: its
 // buffers are exported as dma-bufs and scanned out as they are, so it must
 // give NV12 in contiguous memory. Settings > Video > Camera opens it with a
-// settings column over the picture; every change applies at once, and each
-// input keeps its own settings (camera-0 .. camera-3).
+// settings column over the picture (the input, its standard and its picture
+// levels); every change applies at once, and each input keeps its own
+// settings (camera-0 .. camera-3).
 //
 // Everything runs on the main loop thread except the capture thread, which
 // only dequeues frames, shows them and queues them back.
@@ -30,16 +31,9 @@ public:
     // Is there a camera at all (opens the device for a moment).
     static bool present();
 
-    // One row of the settings column.
-    enum class RowKind : uint8_t
+    // A picture level (or a menu control) as the column shows it.
+    struct Level
     {
-        Input,    // which input -- changes on a press, not a turn
-        Standard, // Auto / PAL / NTSC -- likewise (a change restarts the stream)
-        Control,  // a level or a menu, turned freely
-    };
-    struct Row
-    {
-        RowKind kind;
         std::string label;
         std::string value;
     };
@@ -60,11 +54,22 @@ public:
     // of the signal (and, on Auto, of the standard), the delayed save.
     void tick();
 
-    // The column. Any change bumps generation().
-    const std::vector<Row> &rows() const { return _rows; }
+    // What the column shows; any change bumps generation().
+    const std::vector<std::string> &inputs() const { return _inputs; }
+    int input() const { return _input; }
+    bool noSignal() const { return _noSignal; }
+    bool hasStandard() const { return _hasStd; }
+    const char *standardLabel() const;
+    const std::vector<Level> &levels() const { return _levels; }
     uint32_t generation() const { return _generation; }
-    // Row `row` one step up (+1) or down (-1); Input and Standard cycle.
-    void adjust(int row, int direction);
+
+    // Live: the levels follow at once; the stream restarts only for a
+    // standard it is not in.
+    void selectInput(int input);
+    // Auto -> PAL -> NTSC (direction +1) and back.
+    void cycleStandard(int direction);
+    // Level `level` one step up (+1) or down (-1).
+    void adjustLevel(int level, int direction);
 
 private:
     struct Control
@@ -94,10 +99,11 @@ private:
     bool queue(int index);
     void fail(const std::string &why);
     void loop();
-    void buildRows();
+    void buildLevels();
     void changed(bool save);
     void save();
     Profile &profile() { return _profiles[_input < 4 ? _input : 0]; }
+    const Profile &profile() const { return _profiles[_input < 4 ? _input : 0]; }
 
     // Device
     int _fd = -1;
@@ -124,7 +130,7 @@ private:
     uint32_t _saveAt = 0;
     bool _held = false;      // holdVideo(true) is ours to undo
 
-    std::vector<Row> _rows;
+    std::vector<Level> _levels;
     uint32_t _generation = 0;
 };
 
