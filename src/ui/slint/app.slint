@@ -21,9 +21,11 @@ import "fonts/font.ttf";
 // carry it rather than a row index, because a row can move between a tap's
 // press and its release.
 // One row of the camera view's settings column; text composed in C++.
+// `active` marks the input on screen.
 export struct CameraRow {
     label: string,
     value: string,
+    active: bool,
 }
 
 export struct BtRow {
@@ -51,10 +53,12 @@ export global Bridge {
     in property <bool> link-wifi;
     in property <bool> link-bt;
     // The camera (Settings > Video > Camera) and its view's settings column,
-    // driven from C++: the rows, the ring (a row, or rows.length for the X
-    // button) and whether the ringed row is being turned.
+    // driven from C++: the page (0 the menu: Back, the inputs, Standard,
+    // Picture; 1 Picture: Back, the levels, - / +), its rows, the ring and
+    // whether the ringed row is being turned.
     in property <bool> camera-available;
     in property <string> camera-error;        // why the camera could not run
+    in property <int> camera-page;
     in property <[CameraRow]> camera-rows;
     in property <int> camera-row;
     in property <bool> camera-editing;
@@ -109,7 +113,6 @@ export global Bridge {
     callback system-ask(int);                 // 1 reboot, 2 shut down: asks first
     callback camera-select(int);              // a tap on a row
     callback camera-adjust(int);              // -/+ on the ringed row
-    callback camera-close();
     callback camera-picture();                // a tap on the picture: the column hides
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
@@ -435,8 +438,8 @@ export global CameraPanel {
     out property <length> width: 180px;
     out property <length> x: 800px - root.width;
     out property <length> y: 0px;
-    out property <length> height:
-        Bridge.camera-rows.length * root.row-h + root.buttons-h + 2 * root.padding;
+    out property <length> height: Bridge.camera-rows.length * root.row-h
+        + (Bridge.camera-page == 1 ? root.buttons-h : 0px) + 2 * root.padding;
 }
 
 // In the camera view the bar sits at the foot of the settings column, so
@@ -775,10 +778,12 @@ component CameraRowView inherits Rectangle {
     in property <string> value;
     in property <bool> ringed;
     in property <bool> editing;
+    in property <bool> active; // the input on screen
     callback clicked;
     height: CameraPanel.row-h;
     border-radius: 6px;
-    background: root.editing ? Style.row-on : ta.pressed ? Style.row-pressed : Style.bg;
+    background: root.editing || root.active ? Style.row-on
+              : ta.pressed ? Style.row-pressed : Style.bg;
     border-width: root.ringed ? 3px : 0px;
     border-color: Style.focus;
     ta := TouchArea { clicked => { root.clicked(); } }
@@ -796,7 +801,7 @@ component CameraRowView inherits Rectangle {
         }
         Text {
             text: root.value;
-            color: root.editing ? Style.text : Style.dim;
+            color: root.editing || root.active ? Style.text : Style.dim;
             font-size: 16px;
             vertical-alignment: center;
         }
@@ -823,19 +828,16 @@ component ScreenCamera inherits Rectangle {
             for r[i] in Bridge.camera-rows: CameraRowView {
                 label: r.label;
                 value: r.value;
+                active: r.active;
                 ringed: Bridge.camera-row == i;
                 editing: Bridge.camera-editing && Bridge.camera-row == i;
                 clicked => { Bridge.camera-select(i); }
             }
-            HorizontalLayout {
+            // Picture: - / + change the ringed level (touch; keys turn it).
+            if Bridge.camera-page == 1: HorizontalLayout {
                 height: CameraPanel.buttons-h;
                 padding-top: 6px;
                 spacing: 4px;
-                OskKey {
-                    label: "X";
-                    focused: Bridge.camera-row == Bridge.camera-rows.length;
-                    pressed => { Bridge.camera-close(); }
-                }
                 OskKey { label: "-"; pressed => { Bridge.camera-adjust(-1); } }
                 OskKey { label: "+"; pressed => { Bridge.camera-adjust(1); } }
             }

@@ -244,16 +244,33 @@ struct SlintOsd::Impl
     }
 
     // The camera view (screen 9): the settings column over the picture is
-    // up for a few seconds after the last input; the selection and editing
-    // live here, the rows and their values in Camera.
+    // up for a few seconds after the last input. Two pages: the menu (Back,
+    // the inputs, Standard, Picture) and Picture (Back, the levels). The
+    // page, ring and editing live here; the values in Camera.
     bool panelUp = false;
     uint32_t panelUntil = 0;
-    int camRow = 0;           // the ring: a row, or the row count for X
-    bool camEditing = false;  // the ringed row is being turned
-    int pCamRow = -1;
+    int camPage = 0;          // 0 the menu, 1 Picture
+    int camRow = 0;           // the ring; -1: the menu's last row (Picture)
+    bool camEditing = false;  // the ringed level is being turned
+    int pCamPage = -1, pCamRow = -1;
     bool pCamEditing = false;
+    bool camRowsDirty = true;  // the page changed: rebuild its rows
     bool touchSwallow = false; // a touch that only brought the column back
 #ifdef USE_CEDRUS
+    enum class CamItem : uint8_t
+    {
+        Back,
+        Input,
+        Standard,
+        Picture,
+        Level,
+    };
+    struct CamRef
+    {
+        CamItem item;
+        int index; // the input or the level
+    };
+    std::vector<CamRef> camItems; // what each row of the page is
     std::shared_ptr<slint::VectorModel<CameraRow>> camRows =
         std::make_shared<slint::VectorModel<CameraRow>>();
     bool camSeen = false;
@@ -273,12 +290,99 @@ struct SlintOsd::Impl
     }
 
 #ifdef USE_CEDRUS
-    // A key in the camera view. Turning never changes Input or Standard: a
-    // standard change restarts the stream.
+    // The page's rows from the camera's state, synced into the model in place.
+    void buildCameraRows()
+    {
+        const Camera &camera = Camera::instance();
+        std::vector<CameraRow> rows;
+        camItems.clear();
+        auto add = [&](CamItem item, int index, const std::string &label,
+                       const std::string &value, bool active) {
+            camItems.push_back({item, index});
+            rows.push_back({slint::SharedString(label), slint::SharedString(value), active});
+        };
+        add(CamItem::Back, 0, "Back", "", false);
+        if (camPage == 0)
+        {
+            for (int i = 0; i < (int)camera.inputs().size(); i++)
+            {
+                const bool on = i == camera.input();
+                add(CamItem::Input, i, "Input " + std::to_string(i + 1),
+                    on && camera.noSignal() ? "No signal" : "", on);
+            }
+            if (camera.hasStandard())
+                add(CamItem::Standard, 0, "Standard", camera.standardLabel(), false);
+            if (!camera.levels().empty())
+                add(CamItem::Picture, 0, "Picture", ">", false);
+        }
+        else
+            for (int i = 0; i < (int)camera.levels().size(); i++)
+                add(CamItem::Level, i, camera.levels()[(size_t)i].label,
+                    camera.levels()[(size_t)i].value, false);
+
+        while (camRows->row_count() > rows.size())
+            camRows->erase(camRows->row_count() - 1);
+        for (size_t i = 0; i < rows.size(); i++)
+        {
+            if (i >= camRows->row_count())
+                camRows->push_back(rows[i]);
+            else if (!(camRows->row_data(i) == rows[i]))
+                camRows->set_row_data(i, rows[i]);
+        }
+        const int last = (int)rows.size() - 1;
+        camRow = camRow < 0 ? last : std::min(camRow, last);
+    }
+
+    // Back from Picture to the menu (the ring on Picture), or out of the view.
+    void cameraBack(const Bridge &bridge)
+    {
+        camEditing = false;
+        if (camPage == 1)
+        {
+            camPage = 0;
+            camRow = -1;
+            camRowsDirty = true;
+        }
+        else
+            bridge.set_screen(8);
+    }
+
+    // A press on a row -- Enter, a knob click (key) or a tap: Back goes
+    // back, an input becomes the one shown, Standard cycles, Picture opens
+    // its page, a level starts editing (a tap only rings it: - / + change it).
+    void cameraPress(const Bridge &bridge, int row, bool key)
+    {
+        if (row < 0 || row >= (int)camItems.size())
+            return;
+        Camera &camera = Camera::instance();
+        const CamRef ref = camItems[(size_t)row];
+        switch (ref.item)
+        {
+        case CamItem::Back:
+            cameraBack(bridge);
+            break;
+        case CamItem::Input:
+            camera.selectInput(ref.index);
+            break;
+        case CamItem::Standard:
+            camera.cycleStandard(1);
+            break;
+        case CamItem::Picture:
+            camPage = 1;
+            camRow = 1; // the first level
+            camRowsDirty = true;
+            break;
+        case CamItem::Level:
+            camEditing = key;
+            break;
+        }
+    }
+
+    // A key in the camera view. Turning never changes an input or the
+    // standard: a standard change restarts the stream.
     void cameraKey(const Bridge &bridge, OsdKey nav, bool repeat)
     {
         Camera &camera = Camera::instance();
-        const int count = (int)camera.rows().size(); // row `count` is X
         if (!panelUp)
         {
             // Hidden: only Back leaves; anything else brings the column back.
@@ -289,10 +393,15 @@ struct SlintOsd::Impl
             return;
         }
         showPanel();
-        camRow = std::min(camRow, count);
-        const bool onRow = camRow < count;
-        const bool turnable =
-            onRow && camera.rows()[(size_t)camRow].kind == Camera::RowKind::Control;
+        const int count = (int)camItems.size();
+        if (count == 0)
+            return;
+        camRow = std::clamp(camRow, 0, count - 1);
+        const CamRef ref = camItems[(size_t)camRow];
+        auto turn = [&](int direction) {
+            if (ref.item == CamItem::Level)
+                camera.adjustLevel(ref.index, direction);
+        };
         switch (nav)
         {
         case OsdKey::Back:
@@ -302,69 +411,62 @@ struct SlintOsd::Impl
             if (camEditing)
                 camEditing = false;
             else
-                bridge.set_screen(8);
+                cameraBack(bridge);
             break;
         case OsdKey::Ok:
             if (repeat)
                 break;
             if (camEditing)
                 camEditing = false;
-            else if (!onRow)
-                bridge.set_screen(8);
-            else if (turnable)
-                camEditing = true;
             else
-                camera.adjust(camRow, 1);
+                cameraPress(bridge, camRow, true);
             break;
         case OsdKey::Next:
         case OsdKey::Down:
             if (camEditing)
-                camera.adjust(camRow, nav == OsdKey::Next ? 1 : -1);
+                turn(nav == OsdKey::Next ? 1 : -1);
             else
-                camRow = (camRow + 1) % (count + 1);
+                camRow = (camRow + 1) % count;
             break;
         case OsdKey::Prev:
         case OsdKey::Up:
             if (camEditing)
-                camera.adjust(camRow, nav == OsdKey::Prev ? -1 : 1);
+                turn(nav == OsdKey::Prev ? -1 : 1);
             else
-                camRow = (camRow + count) % (count + 1);
+                camRow = (camRow + count - 1) % count;
             break;
         case OsdKey::Left:
         case OsdKey::Right:
-            if (onRow)
-                camera.adjust(camRow, nav == OsdKey::Right ? 1 : -1);
+            if (ref.item == CamItem::Standard)
+                camera.cycleStandard(nav == OsdKey::Right ? 1 : -1);
+            else
+                turn(nav == OsdKey::Right ? 1 : -1);
             break;
         default:
             break;
         }
     }
 
-    // Camera -> the column: rows on the camera's generation (one load per
-    // tick otherwise), the ring and editing on change, the timed hide.
+    // Camera -> the column: rows on the camera's generation or a page change
+    // (one load per tick otherwise), the page, ring and editing on change,
+    // the timed hide.
     void pumpCamera(const Bridge &bridge, int screen)
     {
         const Camera &camera = Camera::instance();
-        if (!camSeen || camera.generation() != pCamGen)
+        if (!camSeen || camera.generation() != pCamGen || camRowsDirty)
         {
             camSeen = true;
             pCamGen = camera.generation();
-            const auto &rows = camera.rows();
-            while (camRows->row_count() > rows.size())
-                camRows->erase(camRows->row_count() - 1);
-            for (size_t i = 0; i < rows.size(); i++)
-            {
-                const CameraRow want{slint::SharedString(rows[i].label),
-                                     slint::SharedString(rows[i].value)};
-                if (i >= camRows->row_count())
-                    camRows->push_back(want);
-                else if (!(camRows->row_data(i) == want))
-                    camRows->set_row_data(i, want);
-            }
-            camRow = std::min(camRow, (int)rows.size());
+            camRowsDirty = false;
+            buildCameraRows();
         }
         if (panelUp && (screen != 9 || due(mono_ms(), panelUntil)))
             hidePanel();
+        if (camPage != pCamPage)
+        {
+            pCamPage = camPage;
+            bridge.set_camera_page(camPage);
+        }
         if (camRow != pCamRow)
         {
             pCamRow = camRow;
@@ -802,10 +904,12 @@ struct SlintOsd::Impl
             ui_bridge::setCameraTest(screen == 9);
             if (screen == 9)
             {
-                // The column comes up with the ring on its first row.
+                // The column comes up on the menu, the ring on Back.
                 bridge.set_camera_error("");
+                camPage = 0;
                 camRow = 0;
                 camEditing = false;
+                camRowsDirty = true;
                 showPanel();
             }
 #ifdef USE_CEDRUS
@@ -1038,15 +1142,17 @@ bool SlintOsd::beginDrm(int width, int height)
     // The camera view's column, by touch; any of it keeps the column up.
     bridge.set_camera_rows(impl->camRows);
     bridge.on_camera_select([impl](int row) {
+        impl->showPanel();
         impl->camRow = row;
         impl->camEditing = false;
-        impl->showPanel();
+        impl->cameraPress(impl->ui->global<Bridge>(), row, false);
     });
     bridge.on_camera_adjust([impl](int direction) {
         impl->showPanel();
-        Camera::instance().adjust(impl->camRow, direction);
+        if (impl->camRow >= 0 && impl->camRow < (int)impl->camItems.size() &&
+            impl->camItems[(size_t)impl->camRow].item == Impl::CamItem::Level)
+            Camera::instance().adjustLevel(impl->camItems[(size_t)impl->camRow].index, direction);
     });
-    bridge.on_camera_close([impl] { impl->ui->global<Bridge>().set_screen(8); });
     bridge.on_camera_picture([impl] { impl->hidePanel(); });
 #endif
     bridge.on_system_ask([impl](int what) {

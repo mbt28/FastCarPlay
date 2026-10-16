@@ -90,23 +90,26 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
   window of the overlay; it hides 5 s after the last input, and a tap on
   the picture hides it at once.
-  - Rows, only for what the device has: Input, Standard (Auto/PAL/NTSC),
-    Brightness, Contrast, Saturation, Hue, Sharpness, Chroma gain, Chroma
-    enhance; then X (close), - and +. Every change applies at once.
-    Changing the input is live; a standard the stream is not in restarts
-    it (half a second of black). Auto follows the input, checked once a
-    second, as does "No signal" on the Input row.
+  - Two pages. The menu: Back (leaves the view), one row per input (the
+    one on screen is filled; "No signal" when it has none), Standard
+    (Auto/PAL/NTSC) and Picture. Picture: Back (to the menu), then the
+    levels the device has -- Brightness, Contrast, Saturation, Hue,
+    Sharpness, Chroma gain, Chroma enhance -- and - / + under them. Every
+    change applies at once. Choosing an input is live; a standard the
+    stream is not in restarts it (half a second of black). Auto follows the
+    input, checked once a second, as does "No signal".
   - Each input keeps its own settings (`camera-0` .. `camera-3`, raw
     control values; one left out is at its default -- never the other
     input's), saved 2 s after the last change and when the view closes.
-  - Touch: a row selects it, - / + change it, X closes. With the column
-    hidden a touch only brings it back.
+  - Touch: Back, an input, Standard and Picture act on a tap; a level is
+    ringed by a tap and changed with - / +. With the column hidden a touch
+    only brings it back.
   - Keys and knob: while hidden anything brings the column back (Back
-    closes the view). Turn / Up / Down move the ring over the rows and X;
-    Left / Right change the ringed row; Enter or a click turns a level
-    into edit mode (turning then changes it; Enter or Back ends it),
-    cycles Input or Standard, or on X closes. Input and Standard never
-    change by turning.
+    leaves the view). Turn / Up / Down move the ring; Enter or a click acts
+    on the ringed row, and on a level starts editing (turning then changes
+    it; Enter or Back ends it); Left / Right change a level or the
+    standard; Back goes up a page, then leaves. An input or the standard
+    never changes by turning.
   - The TV decoder's burst gate, comb filter and blue screen controls are
     never touched (noise, memory corruption on the bench). A camera that
     cannot start or stops goes back to Video saying why; short of memory
