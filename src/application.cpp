@@ -532,7 +532,7 @@ void Application::loopDrm()
     bool uiShowsHome = true;
     bool osdShown = false;
 #ifdef USE_OSD_UI
-    Camera camera;
+    Camera &camera = Camera::instance();
     bool cameraDone = false; // ended or failed while its view is still up
 #endif
     uint32_t framesAtConnect = drm_display::videoFrames();
@@ -606,8 +606,8 @@ void Application::loopDrm()
         }
 
 #ifdef USE_OSD_UI
-        // Settings > Video > Test camera: the camera owns the screen until a
-        // tap or a key closes its view, whatever the phone does meanwhile.
+        // Settings > Video > Camera: the camera owns the screen until its
+        // view is closed, whatever the phone does meanwhile.
         const bool cameraWanted = osd.active() && ui_bridge::cameraTest();
         if (!cameraWanted)
             cameraDone = false;
@@ -626,9 +626,9 @@ void Application::loopDrm()
         }
         if (camera.running())
         {
-            // The camera is on the video plane; the screens give way to the
-            // hint (or the volume bar) in a window of the overlay. Taps and
-            // keys still go to the screens, which close the view.
+            // The camera is on the video plane; the screens give way to its
+            // settings column (or the volume bar) in a window of the
+            // overlay. Taps and keys go to the screens, which drive it.
             if (uiShowsHome)
             {
                 drm_display::uiHide();
@@ -639,16 +639,17 @@ void Application::loopDrm()
             touchInput.routeToUi(true);
             keyInput.routeToUi(true);
 #endif
+            camera.tick();
+            // Hidden before it is redrawn; shown (or moved: column <-> bar)
+            // after. Neither commit waits, and an unchanged window costs
+            // nothing.
             int x, y, w, h;
             const bool window = osd.overVideo(x, y, w, h);
-            osd.tick(true);
-            if (window)
-            {
-                if (!osdShown)
-                    osdShown = drm_display::uiShowWindow(x, y, w, h, false);
-            }
-            else if (osdShown && drm_display::uiHide(false))
+            if (!window && osdShown && drm_display::uiHide(false))
                 osdShown = false;
+            osd.tick(true);
+            if (window && drm_display::uiShowWindow(x, y, w, h, false))
+                osdShown = true;
         }
         else
 #endif
@@ -751,7 +752,12 @@ void Application::loopDrm()
         // and refresh timers run every period and touch feedback lands
         // within one frame; this is cheap now that an unchanged screen costs
         // nothing. With video up the loop only shepherds the session.
-        std::this_thread::sleep_for(std::chrono::milliseconds(videoActive ? 50 : 16));
+#ifdef USE_OSD_UI
+        const bool fast = !videoActive || camera.running(); // a screen is being used
+#else
+        const bool fast = !videoActive;
+#endif
+        std::this_thread::sleep_for(std::chrono::milliseconds(fast ? 16 : 50));
     }
 
 #ifdef USE_OSD_UI
