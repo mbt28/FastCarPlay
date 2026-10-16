@@ -672,13 +672,28 @@ void Application::loopDrm()
             const bool again = cameraWanted && camera.outOfMemory() && decoderRunning;
             if (camera.failed() && !again)
                 ui_bridge::cameraFailed(camera.error());
+            // Back to the screens: they cover the picture before it goes,
+            // or the plane would show the phone's frames (fast switch) or
+            // nothing while they are drawn.
+            const bool covered =
+                !cameraWanted && osd.active() &&
+                !(phoneHadScreen && protocol.state() == PROTOCOL_STATUS_CONNECTED);
+            if (covered)
+            {
+                osd.invalidate();
+                osd.tick();
+                drm_display::uiShow(0, uiHeight); // waits for the flip
+                uiShowsHome = true;
+                osdShown = false;
+            }
             camera.stop();
             if (again)
                 parkPhoneVideo(true);
             else
             {
                 cameraDone = cameraWanted;
-                uiShowsHome = false; // the screens come back with a full repaint
+                if (!covered)
+                    uiShowsHome = false; // the screens come back with a full repaint
                 resumePhoneVideo();
             }
         }

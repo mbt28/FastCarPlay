@@ -108,7 +108,10 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   is on the plane (`Camera::pictureReady()`, at most 1 s): the view's own
   drawing is held off the overlay meanwhile (`SlintOsd::releaseHeld()`), so
   the switch goes straight from the screens to the picture -- not through
-  black, or the phone's last frame under the overlay. Over it, a settings
+  black, or the phone's last frame under the overlay. Going back to the
+  screens is the same the other way: they are drawn and shown over the
+  picture before the camera stops (back to the phone's video, its own
+  frames take over the plane). Over it, a settings
   column at the right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
   window of the overlay; it hides 5 s after the last input, and a tap on
   the picture hides it at once. Switched on by the camera key it starts
