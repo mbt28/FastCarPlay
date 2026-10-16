@@ -51,6 +51,9 @@ public:
     const std::string &error() const { return _error; }
     // The last start or restart failed for lack of video memory.
     bool outOfMemory() const { return _noMemory; }
+    // Its first frame is on the video plane since start() -- or it has had
+    // long enough: what covers the plane can give way.
+    bool pictureReady() const;
 
     // Every loop turn while running: a due restart, the once-a-second check
     // of the signal (and, on Auto, of the standard), the delayed save.
@@ -115,6 +118,8 @@ private:
     std::thread _thread;
     std::atomic<bool> _run{false};
     std::atomic<bool> _failed{false};
+    std::atomic<bool> _firstShown{false};
+    uint32_t _startMs = 0;
     std::string _error;
     bool _noMemory = false;
 

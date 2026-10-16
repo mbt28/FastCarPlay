@@ -143,6 +143,9 @@ const char *nightModeName(int mode)
 
 // The camera view's settings column hides this long after the last input.
 constexpr uint32_t CAMERA_PANEL_MS = 5000;
+// The plane is held for the camera's first frame at most this long (the
+// loop releases it sooner, see Camera::pictureReady()).
+constexpr uint32_t HOLD_MAX_MS = 2000;
 
 // Keyboard focus is only re-seeded for someone actually using a keyboard.
 constexpr uint32_t KEY_RECENT_MS = 10000;
@@ -253,6 +256,12 @@ struct SlintOsd::Impl
     int width = 0;
     int height = 0;
     bool fullPush = true; // first frame pushes everything
+    // The camera view coming up: the plane keeps the screen it has until
+    // the camera's first frame is under it (releaseHeld()); what is drawn
+    // meanwhile -- rows heldY0..heldY1 -- is pushed then.
+    bool held = false;
+    uint32_t heldSince = 0;
+    int heldY0 = 0, heldY1 = 0;
     bool lastDown = false;
 
     // Editor state: the buffer is owned here, the UI only displays it.
@@ -988,6 +997,8 @@ struct SlintOsd::Impl
                 // a request (the camera key) switched the camera on: then
                 // the picture alone, until a touch or a key.
                 bridge.set_camera_error("");
+                held = true;
+                heldSince = mono_ms();
                 camReturn = pScreen >= 0 && pScreen != 9 ? pScreen : 8;
                 camPage = 0;
                 camRow = 0;
@@ -1476,10 +1487,16 @@ bool SlintOsd::tick(bool overVideo)
     }
     slint::platform::update_timers_and_animations();
 
+    // Held for the camera, at most this long and only on its view.
+    if (impl.held && (impl.pScreen != 9 || mono_ms() - impl.heldSince >= HOLD_MAX_MS))
+        impl.held = false;
+    const bool flushHeld = !impl.held && impl.heldY1 > impl.heldY0;
+
     // Over video only the bar's window is up: a pending whole-frame push
     // waits for the screens (copying 750 KB here would be wasted work).
     const bool fullPush = impl.fullPush && !overVideo;
-    if (!impl.win->dirty && !impl.win->window().has_active_animations() && !fullPush)
+    if (!impl.win->dirty && !impl.win->window().has_active_animations() && !fullPush &&
+        !flushHeld)
         return false;
     impl.win->dirty = false;
     if (fullPush)
@@ -1497,15 +1514,38 @@ bool SlintOsd::tick(bool overVideo)
     {
         const auto origin = region.bounding_box_origin();
         const auto size = region.bounding_box_size();
-        if (size.width == 0 || size.height == 0)
-            return false; // nothing actually changed
-        y0 = origin.y;
-        y1 = origin.y + (int)size.height;
+        y0 = impl.height;
+        y1 = 0;
+        if (size.width != 0 && size.height != 0)
+        {
+            y0 = origin.y;
+            y1 = origin.y + (int)size.height;
+        }
     }
+    if (impl.held)
+    {
+        impl.heldY0 = std::min(impl.heldY0, y0);
+        impl.heldY1 = std::max(impl.heldY1, y1);
+        return false;
+    }
+    if (flushHeld)
+    {
+        y0 = std::min(y0, impl.heldY0);
+        y1 = std::max(y1, impl.heldY1);
+        impl.heldY0 = impl.heldY1 = 0;
+    }
+    if (y1 <= y0)
+        return false; // nothing actually changed
     drm_display::uiWriteRect(0, y0, impl.width, y1 - y0,
                              (const uint8_t *)(impl.buffer.get() + (size_t)y0 * impl.width),
                              impl.width * 2);
     return true;
+}
+
+void SlintOsd::releaseHeld()
+{
+    if (_impl != nullptr)
+        _impl->held = false;
 }
 
 void SlintOsd::invalidate()

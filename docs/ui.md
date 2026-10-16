@@ -104,7 +104,12 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   focus) and given it back. With Fast switch the camera first tries next to
   the running decoder (whose newest frame waits to be shown again), and
   parks it only when its buffers do not fit -- also on a restart for a new
-  standard. Over it, a settings column at the right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
+  standard. The screens stay as they were until the camera's first frame
+  is on the plane (`Camera::pictureReady()`, at most 1 s): the view's own
+  drawing is held off the overlay meanwhile (`SlintOsd::releaseHeld()`), so
+  the switch goes straight from the screens to the picture -- not through
+  black, or the phone's last frame under the overlay. Over it, a settings
+  column at the right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
   window of the overlay; it hides 5 s after the last input, and a tap on
   the picture hides it at once. Switched on by the camera key it starts
   hidden: just the picture.
