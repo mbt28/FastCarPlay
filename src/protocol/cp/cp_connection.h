@@ -73,6 +73,7 @@ private:
 
     void writerLoop();
     void handleInput(const Message &m);
+    void replayParamSets();
     void enqueueCommand(std::vector<uint8_t> body);
     void clearInput();
 
@@ -104,6 +105,8 @@ private:
     // The knob's select is held: set and cleared by the writer, reset when a
     // session starts or ends (its release may never come).
     std::atomic<bool> _knobSelect{false};
+    std::mutex _paramMutex;
+    std::vector<uint8_t> _paramSets; // the stream's last SPS/PPS (VPS) segment
 };
 
 #endif /* USE_CP_WIRELESS */

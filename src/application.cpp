@@ -534,10 +534,49 @@ void Application::loopDrm()
 #ifdef USE_OSD_UI
     Camera &camera = Camera::instance();
     bool cameraDone = false; // ended or failed while its view is still up
+    // The camera needs the video memory the phone's decoder holds (~19 of
+    // 24 MiB): the decoder is parked while the camera shows -- and the phone,
+    // if it had the screen, told so -- and both come back after.
+    bool decoderParked = false;
+    bool phoneHadScreen = false;
 #endif
     uint32_t framesAtConnect = drm_display::videoFrames();
     AVFrame *frame = nullptr;
     uint32_t frameId = 0;
+
+#ifdef USE_OSD_UI
+    auto parkPhoneVideo = [&] {
+        phoneHadScreen =
+            protocol.state() == PROTOCOL_STATUS_CONNECTED && protocol.videoFocused();
+        if (phoneHadScreen)
+            protocol.send(Message::Control(501)); // Android Auto: the phone stops its video
+        if (decoderRunning)
+        {
+            decoder->stop(); // returns its CMA pool
+            decoderRunning = false;
+            decoderParked = true;
+        }
+    };
+    auto resumePhoneVideo = [&] {
+        if (decoderParked && protocol.state() == PROTOCOL_STATUS_CONNECTED)
+        {
+            // The frames queued meanwhile have holes: start clean, from the
+            // parameter sets and a keyframe (CarPlay) or a restarted stream
+            // (Android Auto, on the focus below).
+            protocol.videoStream.clear();
+            decoder = makeDecoder(startedCodec);
+            startDecoder(*decoder, protocol, startedCodec);
+            decoderRunning = true;
+            decoder->buffer.reset();
+            framesAtConnect = drm_display::videoFrames();
+            protocol.send(Message::Control(BTN_SCREEN_REFRESH));
+        }
+        decoderParked = false;
+        if (phoneHadScreen && protocol.state() == PROTOCOL_STATUS_CONNECTED)
+            protocol.requestVideoFocus();
+        phoneHadScreen = false;
+    };
+#endif
 
     while (_active && !g_quit)
     {
@@ -578,6 +617,11 @@ void Application::loopDrm()
                 // hang that needed a reboot. (If the decoder is somehow still
                 // live -- e.g. a direct UNKNOWN->CONNECTED first connect -- a
                 // flush suffices.)
+#ifdef USE_OSD_UI
+                if (!decoderRunning && camera.running())
+                    decoderParked = true; // the camera has the memory: built when it closes
+                else
+#endif
                 if (!decoderRunning)
                 {
                     decoder = makeDecoder(startedCodec);
@@ -600,6 +644,10 @@ void Application::loopDrm()
                 decoder->stop();
                 decoderRunning = false;
             }
+#ifdef USE_OSD_UI
+            if (state != PROTOCOL_STATUS_CONNECTED)
+                decoderParked = phoneHadScreen = false; // no session to come back to
+#endif
             noteSession(state);
             lastState = state;
             dirty = true;
@@ -620,15 +668,17 @@ void Application::loopDrm()
             camera.stop();
             cameraDone = cameraWanted;
             uiShowsHome = false; // the screens come back with a full repaint
-            // The phone's picture comes back: its decoder skipped frames
-            // while the camera had the plane, so ask for a fresh keyframe.
-            if (state == PROTOCOL_STATUS_CONNECTED)
-                protocol.send(Message::Control(BTN_SCREEN_REFRESH));
+            resumePhoneVideo();
         }
-        if (cameraWanted && !cameraDone && !camera.running() && !camera.start())
+        if (cameraWanted && !cameraDone && !camera.running())
         {
-            ui_bridge::cameraFailed(camera.error());
-            cameraDone = true;
+            parkPhoneVideo();
+            if (!camera.start())
+            {
+                ui_bridge::cameraFailed(camera.error());
+                cameraDone = true;
+                resumePhoneVideo();
+            }
         }
         if (camera.running())
         {

@@ -875,10 +875,13 @@ bool AaConnection::translate(const Message &message)
                              batch.size(), AA_FLAG_ENC_SIGNAL);
         }
         case 500: // video focus
-        case 501: // video release
+        case 501: // video release: the head unit's own screen (e.g. the camera)
         {
             if (!_channels[AA_CH_VIDEO].open)
                 return true;
+            // Tracked like a release the phone asks for, so requestVideoFocus()
+            // then gets the stream back (restarted: config and a keyframe).
+            _videoFocused = button == 500;
             aa_proto::Bytes focus = aa_proto::videoFocusNotification(button == 500, true);
             return sendFrame(AA_CH_VIDEO, AA_MSG_VIDEO_FOCUS_NOTIFICATION,
                              focus.data(), focus.size(), AA_FLAG_ENC_SIGNAL);
