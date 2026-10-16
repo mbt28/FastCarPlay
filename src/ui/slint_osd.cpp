@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 
+#include <linux/input-event-codes.h> // the camera key's name
+
 #include <slint-platform.h>
 
 #include "app_window.h" // generated from src/ui/slint/app.slint
@@ -78,6 +80,52 @@ void persist(const char *key, const char *value, bool needsRestart)
     }
     if (needsRestart)
         ui_bridge::setRestartNeeded();
+}
+
+// A key as the Video screen names it.
+std::string keyName(int code)
+{
+    static const struct
+    {
+        int code;
+        const char *name;
+    } NAMES[] = {
+        {KEY_ESC, "Esc"},        {KEY_TAB, "Tab"},           {KEY_SPACE, "Space"},
+        {KEY_ENTER, "Enter"},    {KEY_BACKSPACE, "Backspace"}, {KEY_INSERT, "Insert"},
+        {KEY_DELETE, "Delete"},  {KEY_HOME, "Home"},         {KEY_END, "End"},
+        {KEY_PAGEUP, "Page Up"}, {KEY_PAGEDOWN, "Page Down"}, {KEY_UP, "Up"},
+        {KEY_DOWN, "Down"},      {KEY_LEFT, "Left"},         {KEY_RIGHT, "Right"},
+        {KEY_SYSRQ, "Print"},    {KEY_SCROLLLOCK, "Scroll Lock"}, {KEY_PAUSE, "Pause"},
+        {KEY_CAPSLOCK, "Caps Lock"}, {KEY_NUMLOCK, "Num Lock"}, {KEY_COMPOSE, "Menu"},
+        {KEY_HOMEPAGE, "Home page"}, {KEY_SEARCH, "Search"}, {KEY_BACK, "Back"},
+        {KEY_PLAYPAUSE, "Play/Pause"}, {KEY_NEXTSONG, "Next"}, {KEY_PREVIOUSSONG, "Previous"},
+        {KEY_STOPCD, "Stop"},    {KEY_MAIL, "Mail"},         {KEY_CALC, "Calculator"},
+        {KEY_CAMERA, "Camera"},  {KEY_MENU, "Menu"},         {KEY_LEFTMETA, "Win"},
+        {KEY_RIGHTMETA, "Win"},  {KEY_LEFTCTRL, "Ctrl"},     {KEY_RIGHTCTRL, "Ctrl"},
+        {KEY_LEFTALT, "Alt"},    {KEY_RIGHTALT, "Alt Gr"},   {KEY_LEFTSHIFT, "Shift"},
+        {KEY_RIGHTSHIFT, "Shift"},
+    };
+    if (code <= 0)
+        return "None";
+    if (code >= KEY_F1 && code <= KEY_F10)
+        return "F" + std::to_string(code - KEY_F1 + 1);
+    if (code == KEY_F11 || code == KEY_F12)
+        return code == KEY_F11 ? "F11" : "F12";
+    for (const auto &n : NAMES)
+        if (n.code == code)
+            return n.name;
+    static const char ROW1[] = "qwertyuiop", ROW2[] = "asdfghjkl", ROW3[] = "zxcvbnm";
+    if (code >= KEY_Q && code < KEY_Q + 10)
+        return std::string(1, (char)(ROW1[code - KEY_Q] - 32));
+    if (code >= KEY_A && code < KEY_A + 9)
+        return std::string(1, (char)(ROW2[code - KEY_A] - 32));
+    if (code >= KEY_Z && code < KEY_Z + 7)
+        return std::string(1, (char)(ROW3[code - KEY_Z] - 32));
+    if (code >= KEY_1 && code <= KEY_9)
+        return std::to_string(code - KEY_1 + 1);
+    if (code == KEY_0)
+        return "0";
+    return "Key " + std::to_string(code);
 }
 
 const char *nightModeName(int mode)
@@ -255,6 +303,9 @@ struct SlintOsd::Impl
     int pCamPage = -1, pCamRow = -1;
     bool pCamEditing = false;
     bool camRowsDirty = true;  // the page changed: rebuild its rows
+    int camReturn = 8;         // the screen the view goes back to
+    bool camQuiet = false;     // switched on by a request: no column at first
+    int pCameraKey = -1;
     bool touchSwallow = false; // a touch that only brought the column back
 #ifdef USE_CEDRUS
     enum class CamItem : uint8_t
@@ -344,7 +395,7 @@ struct SlintOsd::Impl
             camRowsDirty = true;
         }
         else
-            bridge.set_screen(8);
+            bridge.set_screen(camReturn);
     }
 
     // A press on a row -- Enter, a knob click (key) or a tap: Back goes
@@ -387,7 +438,7 @@ struct SlintOsd::Impl
         {
             // Hidden: only Back leaves; anything else brings the column back.
             if (!repeat && (nav == OsdKey::Back || nav == OsdKey::Erase))
-                bridge.set_screen(8);
+                bridge.set_screen(camReturn);
             else if (!repeat)
                 showPanel();
             return;
@@ -488,7 +539,9 @@ struct SlintOsd::Impl
         std::string title, code, hint, accept;
     };
     DialogText btDialog;      // the Bluetooth manager's, as last seen
-    int systemAsk = 0;        // the System screen asks: 0 none, 1 reboot, 2 shut down
+    // Our own question: 1 reboot, 2 shut down (the System screen), 3 the
+    // camera key (Video: press the key to learn it). 0 none.
+    int systemAsk = 0;
     bool dialogDirty = true;  // either changed: pumpDialog looks again
     bool dialogLocal = false; // the dialog shown is our own question
     int pPromptKind = 0;
@@ -499,7 +552,13 @@ struct SlintOsd::Impl
         const int asked = systemAsk;
         systemAsk = 0;
         dialogDirty = true;
-        if (yes && asked != 0)
+        if (asked == 3)
+        {
+            ui_bridge::setKeyLearning(false);
+            if (yes) // Clear
+                persist("camera-key", "0", false);
+        }
+        else if (yes && asked != 0)
             ui_bridge::requestPower(asked == 1 ? ui_bridge::Power::Reboot
                                                : ui_bridge::Power::Shutdown);
     }
@@ -884,17 +943,32 @@ struct SlintOsd::Impl
             bridge.set_bt_name(slint::SharedString(pBt));
         }
 
-        // A camera that could not start (or stopped): back to Video, saying why.
+        // A camera that could not start (or stopped): back where it was
+        // opened from, saying why on the Video screen.
         if (std::string why; ui_bridge::takeCameraFailure(why))
         {
             bridge.set_camera_error(slint::SharedString(why));
             if (bridge.get_screen() == 9)
-                bridge.set_screen(8);
+                bridge.set_screen(camReturn);
         }
-        // A dialog over the camera view would be under the picture: show it
-        // on the Video screen instead.
+        // A dialog over the camera view would be under the picture: leave it.
         if (bridge.get_screen() == 9 && bridge.get_prompt_kind() != 0)
-            bridge.set_screen(8);
+            bridge.set_screen(camReturn);
+        // The camera key, just learned (the question closes) or changed.
+        if (int code; ui_bridge::takeLearnedKey(code))
+        {
+            persist("camera-key", std::to_string(code).c_str(), false);
+            if (systemAsk == 3)
+            {
+                systemAsk = 0;
+                dialogDirty = true;
+            }
+        }
+        if (Settings::cameraKey != pCameraKey)
+        {
+            pCameraKey = Settings::cameraKey;
+            bridge.set_camera_key_label(slint::SharedString(keyName(pCameraKey)));
+        }
 
         const int screen = bridge.get_screen();
         const bool modal = bridge.get_prompt_kind() != 0 || editing >= 0;
@@ -904,13 +978,20 @@ struct SlintOsd::Impl
             ui_bridge::setCameraTest(screen == 9);
             if (screen == 9)
             {
-                // The column comes up on the menu, the ring on Back.
+                // The column comes up on the menu, the ring on Back -- unless
+                // a request (the camera key) switched the camera on: then
+                // the picture alone, until a touch or a key.
                 bridge.set_camera_error("");
+                camReturn = pScreen >= 0 && pScreen != 9 ? pScreen : 8;
                 camPage = 0;
                 camRow = 0;
                 camEditing = false;
                 camRowsDirty = true;
-                showPanel();
+                if (camQuiet)
+                    hidePanel();
+                else
+                    showPanel();
+                camQuiet = false;
             }
 #ifdef USE_CEDRUS
             else if (screen == 8 && pScreen != 9)
@@ -1021,7 +1102,15 @@ struct SlintOsd::Impl
         dialogDirty = false;
         DialogText d = btDialog;
         dialogLocal = d.kind == 0 && systemAsk != 0;
-        if (dialogLocal)
+        if (dialogLocal && systemAsk == 3)
+        {
+            d.kind = 2;
+            d.title = "Camera key";
+            d.hint = "Press the key on the Bluetooth keyboard that should switch to the "
+                     "camera and back. Esc cancels.";
+            d.accept = "Clear";
+        }
+        else if (dialogLocal)
         {
             const bool reboot = systemAsk == 1;
             d.kind = 2;
@@ -1154,6 +1243,12 @@ bool SlintOsd::beginDrm(int width, int height)
             Camera::instance().adjustLevel(impl->camItems[(size_t)impl->camRow].index, direction);
     });
     bridge.on_camera_picture([impl] { impl->hidePanel(); });
+    bridge.on_camera_key([impl] {
+        // The next key on a Bluetooth keyboard is learned (key_input.cpp).
+        impl->systemAsk = 3;
+        impl->dialogDirty = true;
+        ui_bridge::setKeyLearning(true);
+    });
 #endif
     bridge.on_system_ask([impl](int what) {
         impl->systemAsk = what;
@@ -1240,6 +1335,31 @@ void SlintOsd::pointer(int x, int y, bool pressed)
     _pressed = pressed;
     if (pressed)
         _pressSeen = true;
+}
+
+void SlintOsd::cameraRequests()
+{
+#ifdef USE_CEDRUS
+    const ui_bridge::CameraRequest request = ui_bridge::takeCameraRequest();
+    if (_impl == nullptr || request == ui_bridge::CameraRequest::None)
+        return;
+    const auto &bridge = _impl->ui->global<Bridge>();
+    const bool showing = bridge.get_screen() == 9;
+    const bool want = request == ui_bridge::CameraRequest::Toggle ? !showing
+                      : request == ui_bridge::CameraRequest::On;
+    if (want == showing)
+        return;
+    if (want)
+    {
+        _impl->camQuiet = true;
+        bridge.set_screen(9);
+    }
+    else
+        bridge.set_screen(_impl->camReturn);
+    // From this turn on the loop runs (or stops) the camera, also over
+    // phone video, where the screens are not ticked to see the change.
+    ui_bridge::setCameraTest(want);
+#endif
 }
 
 bool SlintOsd::overVideo(int &x, int &y, int &w, int &h)

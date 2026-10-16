@@ -159,6 +159,9 @@ public:
     // a control left out is at its default.
     static inline Setting<std::string> cameraDevice{"camera-device", ""};
     static inline Setting<int> cameraInput{"camera-input", 0};
+    // A Bluetooth keyboard key (Linux key code, 0 = none) that switches to
+    // the camera and back; learned in Settings > Video > Camera key.
+    static inline Setting<int> cameraKey{"camera-key", 0};
     static inline Setting<std::string> cameraProfile0{"camera-0", ""};
     static inline Setting<std::string> cameraProfile1{"camera-1", ""};
     static inline Setting<std::string> cameraProfile2{"camera-2", ""};

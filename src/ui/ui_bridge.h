@@ -65,6 +65,27 @@ bool cameraTest();
 void cameraFailed(const std::string &why);
 bool takeCameraFailure(std::string &why);
 
+// The backup camera from outside the screens -- a key, later a reverse
+// signal: Toggle switches it on or off, On / Off set it. Thread-safe; the
+// loop hands it to the screens, which show the camera over anything (phone
+// video included) and go back to where they were.
+enum class CameraRequest
+{
+    None,
+    Toggle,
+    On,
+    Off,
+};
+void requestCamera(CameraRequest request);
+CameraRequest takeCameraRequest();
+
+// Settings > Video > Camera key: while on, the next key pressed on a
+// Bluetooth keyboard is learned instead of acting (Esc/Back still cancel).
+void setKeyLearning(bool on);
+bool keyLearning();
+void keyLearned(int code);
+bool takeLearnedKey(int &code);
+
 // Settings > System: reboot or shut down the head unit. The loops exit and
 // main runs the system's command (reboot-command / shutdown-command).
 enum class Power

@@ -608,6 +608,8 @@ void Application::loopDrm()
 #ifdef USE_OSD_UI
         // Settings > Video > Camera: the camera owns the screen until its
         // view is closed, whatever the phone does meanwhile.
+        if (osd.active())
+            osd.cameraRequests(); // the camera key, from any screen or video
         const bool cameraWanted = osd.active() && ui_bridge::cameraTest();
         if (!cameraWanted)
             cameraDone = false;
@@ -618,6 +620,10 @@ void Application::loopDrm()
             camera.stop();
             cameraDone = cameraWanted;
             uiShowsHome = false; // the screens come back with a full repaint
+            // The phone's picture comes back: its decoder skipped frames
+            // while the camera had the plane, so ask for a fresh keyframe.
+            if (state == PROTOCOL_STATUS_CONNECTED)
+                protocol.send(Message::Control(BTN_SCREEN_REFRESH));
         }
         if (cameraWanted && !cameraDone && !camera.running() && !camera.start())
         {

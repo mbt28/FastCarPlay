@@ -58,6 +58,7 @@ export global Bridge {
     // whether the ringed row is being turned.
     in property <bool> camera-available;
     in property <string> camera-error;        // why the camera could not run
+    in property <string> camera-key-label;    // the key that switches to it, or "None"
     in property <int> camera-page;
     in property <[CameraRow]> camera-rows;
     in property <int> camera-row;
@@ -114,6 +115,7 @@ export global Bridge {
     callback camera-select(int);              // a tap on a row
     callback camera-adjust(int);              // -/+ on the ringed row
     callback camera-picture();                // a tap on the picture: the column hides
+    callback camera-key();                    // learn the switch key (asks for it)
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -660,6 +662,12 @@ component ScreenVideo inherits ListScreen {
         label: "Camera";
         value: Bridge.camera-error;
         clicked => { root.goto(9); }
+    }
+    // A Bluetooth keyboard key that switches to the camera from anywhere.
+    if Bridge.camera-available: Row {
+        label: "Camera key";
+        value: Bridge.camera-key-label;
+        clicked => { Bridge.camera-key(); }
     }
 }
 

@@ -41,6 +41,10 @@ public:
     // queued in order and applied by the next tick().
     void key(OsdKey nav, char ch, int value);
 
+    // A camera switch asked from outside the screens (the camera key):
+    // shows or leaves the camera view. Every loop turn, whatever is shown.
+    void cameraRequests();
+
     // The UI was just hidden (video took the screen): queued keys are stale,
     // and what only runs while a screen is visible (discovery) stops.
     void hidden();
