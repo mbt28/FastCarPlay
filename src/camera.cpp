@@ -258,11 +258,11 @@ bool Camera::start()
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (xioctl(_fd, VIDIOC_STREAMON, &type) < 0)
     {
-        // The TV decoder's comb filter takes 2 MiB more while streaming,
-        // from the memory the phone's video decoder also uses: without it
-        // the picture is a little softer, but there.
+        // The TV decoder's 3D comb filter (off by default) takes 2 MiB more
+        // while streaming, from the memory the phone's video decoder also
+        // uses: without it the picture is a little softer, but there.
         const int err = errno;
-        const uint32_t comb = err == ENOMEM ? findControl(_fd, "3D Comb Filter") : 0;
+        const uint32_t comb = err == ENOMEM ? findControl(_fd, "Comb Filter 3D") : 0;
         v4l2_control off{};
         off.id = comb;
         if (comb == 0 || xioctl(_fd, VIDIOC_S_CTRL, &off) < 0 ||
