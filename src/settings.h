@@ -162,6 +162,11 @@ public:
     // A Bluetooth keyboard key (Linux key code, 0 = none) that switches to
     // the camera and back; learned in Settings > Video > Camera key.
     static inline Setting<int> cameraKey{"camera-key", 0};
+    // Settings > Video > Fast switch: the phone's video decoder keeps running
+    // while the camera shows, so going back to the phone is at once -- when
+    // the video memory holds both (a larger CMA); otherwise the decoder makes
+    // way as without it.
+    static inline Setting<bool> cameraFastSwitch{"camera-fastswitch", false};
     static inline Setting<std::string> cameraProfile0{"camera-0", ""};
     static inline Setting<std::string> cameraProfile1{"camera-1", ""};
     static inline Setting<std::string> cameraProfile2{"camera-2", ""};

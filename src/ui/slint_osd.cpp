@@ -306,6 +306,7 @@ struct SlintOsd::Impl
     int camReturn = 8;         // the screen the view goes back to
     bool camQuiet = false;     // switched on by a request: no column at first
     int pCameraKey = -1;
+    int pFastSwitch = -1;
     bool touchSwallow = false; // a touch that only brought the column back
 #ifdef USE_CEDRUS
     enum class CamItem : uint8_t
@@ -969,6 +970,11 @@ struct SlintOsd::Impl
             pCameraKey = Settings::cameraKey;
             bridge.set_camera_key_label(slint::SharedString(keyName(pCameraKey)));
         }
+        if ((int)Settings::cameraFastSwitch != pFastSwitch)
+        {
+            pFastSwitch = Settings::cameraFastSwitch;
+            bridge.set_camera_fastswitch(pFastSwitch != 0);
+        }
 
         const int screen = bridge.get_screen();
         const bool modal = bridge.get_prompt_kind() != 0 || editing >= 0;
@@ -1249,6 +1255,8 @@ bool SlintOsd::beginDrm(int width, int height)
         impl->dialogDirty = true;
         ui_bridge::setKeyLearning(true);
     });
+    bridge.on_camera_fastswitch_toggle(
+        [] { persist("camera-fastswitch", Settings::cameraFastSwitch ? "false" : "true", false); });
 #endif
     bridge.on_system_ask([impl](int what) {
         impl->systemAsk = what;

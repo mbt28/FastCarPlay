@@ -49,6 +49,8 @@ public:
     // The stream broke after a good start; error() says how.
     bool failed() const { return _failed.load(); }
     const std::string &error() const { return _error; }
+    // The last start or restart failed for lack of video memory.
+    bool outOfMemory() const { return _noMemory; }
 
     // Every loop turn while running: a due restart, the once-a-second check
     // of the signal (and, on Auto, of the standard), the delayed save.
@@ -114,6 +116,7 @@ private:
     std::atomic<bool> _run{false};
     std::atomic<bool> _failed{false};
     std::string _error;
+    bool _noMemory = false;
 
     // Settings
     std::vector<std::string> _inputs;

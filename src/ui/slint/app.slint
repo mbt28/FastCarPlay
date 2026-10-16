@@ -59,6 +59,7 @@ export global Bridge {
     in property <bool> camera-available;
     in property <string> camera-error;        // why the camera could not run
     in property <string> camera-key-label;    // the key that switches to it, or "None"
+    in property <bool> camera-fastswitch;     // the phone's decoder stays while it shows
     in property <int> camera-page;
     in property <[CameraRow]> camera-rows;
     in property <int> camera-row;
@@ -116,6 +117,7 @@ export global Bridge {
     callback camera-adjust(int);              // -/+ on the ringed row
     callback camera-picture();                // a tap on the picture: the column hides
     callback camera-key();                    // learn the switch key (asks for it)
+    callback camera-fastswitch-toggle();
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -668,6 +670,13 @@ component ScreenVideo inherits ListScreen {
         label: "Camera key";
         value: Bridge.camera-key-label;
         clicked => { Bridge.camera-key(); }
+    }
+    // The phone's video stays ready behind the camera, when the memory holds
+    // both: the way back to it is at once.
+    if Bridge.camera-available: Row {
+        label: "Fast switch";
+        value: Bridge.camera-fastswitch ? "On" : "Off";
+        clicked => { Bridge.camera-fastswitch-toggle(); }
     }
 }
 
