@@ -145,6 +145,7 @@ counts are not detents (a Surface Dial makes 3600 a turn).
 | Esc, Back | back | back (cancels a dialog or the editor) |
 | Backspace | -- | delete a character in the editor, else back |
 | Home, Home page | home | home screen |
+| Menu (the PC keyboard's context-menu key, or a remote's Menu) | leaves the phone's video for FastCarPlay's screens, on the home screen (the phone is told the head unit took the screen; Resume goes back) | home screen |
 | Volume up / down (repeats), Mute | the head unit's volume | the head unit's volume |
 | Scroll wheel (one step per detent) | knob rotation (CarPlay) / rotary controller (AA) | next / previous: rows, the editor's keys, a dialog's buttons |
 | Wheel click (middle button) | select, as Enter | activate, as Enter |

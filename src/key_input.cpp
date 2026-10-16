@@ -126,6 +126,9 @@ int phoneButton(int code)
     case KEY_HOME:
     case KEY_HOMEPAGE:
         return BTN_HOME;
+    case KEY_COMPOSE: // a keyboard's Menu key
+    case KEY_MENU:
+        return 501; // video release: the head unit's own screens
     case KEY_PLAYPAUSE:
         return BTN_203;
     case KEY_PLAY:
@@ -209,6 +212,8 @@ OsdKey uiKey(int code)
         return OsdKey::Erase;
     case KEY_HOME:
     case KEY_HOMEPAGE:
+    case KEY_COMPOSE: // Menu: the home screen, the same from the phone's video
+    case KEY_MENU:
         return OsdKey::Home;
     default:
         return OsdKey::None;
@@ -450,6 +455,9 @@ struct KeyInput::Impl
                 return;
             // One state read for both: an UP is owed exactly when the DOWN went out.
             const bool sent = sendPhone(h.button);
+            // Menu left the phone's video: the screens come up on Home.
+            if (h.button == 501 && sent && sink)
+                sink(OsdKey::Home, 0, 1);
             h.selectToPhone = h.button == BTN_SELECT_DOWN && sent;
             if (h.button == BTN_UP || h.button == BTN_DOWN || h.button == BTN_LEFT ||
                 h.button == BTN_RIGHT)
