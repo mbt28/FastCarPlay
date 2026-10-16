@@ -355,6 +355,7 @@ bool Camera::streamOn()
     if (xioctl(_fd, VIDIOC_REQBUFS, &req) < 0 || req.count < MIN_BUFFERS)
     {
         _error = "Not enough video memory for the camera";
+        _noMemory = true;
         return false;
     }
     for (uint32_t i = 0; i < req.count; i++)
@@ -391,6 +392,7 @@ bool Camera::streamOn()
         {
             _error = err == ENOMEM ? "Not enough video memory for the camera"
                                    : std::string("Camera does not start: ") + strerror(err);
+            _noMemory = err == ENOMEM;
             return false;
         }
         log_i("camera: comb filter off -- not enough memory for it");
@@ -448,6 +450,7 @@ bool Camera::start()
         return true;
     _error.clear();
     _failed = false;
+    _noMemory = false;
     _fd = openDevice(&_error);
     if (_fd < 0)
         return false;
@@ -489,6 +492,7 @@ bool Camera::start()
 
 void Camera::restart()
 {
+    _noMemory = false;
     streamOff(false);
     configure(_restartStd);
     if (!streamOn())

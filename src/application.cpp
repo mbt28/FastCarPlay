@@ -536,7 +536,9 @@ void Application::loopDrm()
     bool cameraDone = false; // ended or failed while its view is still up
     // The camera needs the video memory the phone's decoder holds (~19 of
     // 24 MiB): the decoder is parked while the camera shows -- and the phone,
-    // if it had the screen, told so -- and both come back after.
+    // if it had the screen, told so -- and both come back after. With fast
+    // switch the decoder stays when the memory holds both, and the way back
+    // is only the phone's keyframe.
     bool decoderParked = false;
     bool phoneHadScreen = false;
 #endif
@@ -545,12 +547,14 @@ void Application::loopDrm()
     uint32_t frameId = 0;
 
 #ifdef USE_OSD_UI
-    auto parkPhoneVideo = [&] {
-        phoneHadScreen =
-            protocol.state() == PROTOCOL_STATUS_CONNECTED && protocol.videoFocused();
-        if (phoneHadScreen)
+    auto parkPhoneVideo = [&](bool decoderToo) {
+        if (!phoneHadScreen && protocol.state() == PROTOCOL_STATUS_CONNECTED &&
+            protocol.videoFocused())
+        {
+            phoneHadScreen = true;
             protocol.send(Message::Control(501)); // Android Auto: the phone stops its video
-        if (decoderRunning)
+        }
+        if (decoderToo && decoderRunning)
         {
             decoder->stop(); // returns its CMA pool
             decoderRunning = false;
@@ -663,17 +667,34 @@ void Application::loopDrm()
             cameraDone = false;
         if (camera.running() && (!cameraWanted || camera.failed()))
         {
-            if (camera.failed())
+            // A restart that found no memory next to the decoder (fast
+            // switch) starts again below, the decoder parked.
+            const bool again = cameraWanted && camera.outOfMemory() && decoderRunning;
+            if (camera.failed() && !again)
                 ui_bridge::cameraFailed(camera.error());
             camera.stop();
-            cameraDone = cameraWanted;
-            uiShowsHome = false; // the screens come back with a full repaint
-            resumePhoneVideo();
+            if (again)
+                parkPhoneVideo(true);
+            else
+            {
+                cameraDone = cameraWanted;
+                uiShowsHome = false; // the screens come back with a full repaint
+                resumePhoneVideo();
+            }
         }
         if (cameraWanted && !cameraDone && !camera.running())
         {
-            parkPhoneVideo();
-            if (!camera.start())
+            // Fast switch: the camera first tries next to the decoder.
+            const bool together = Settings::cameraFastSwitch && decoderRunning;
+            parkPhoneVideo(!together);
+            bool started = camera.start();
+            if (!started && together && camera.outOfMemory())
+            {
+                log_i("camera: no memory next to the phone's video, parking its decoder");
+                parkPhoneVideo(true);
+                started = camera.start();
+            }
+            if (!started)
             {
                 ui_bridge::cameraFailed(camera.error());
                 cameraDone = true;

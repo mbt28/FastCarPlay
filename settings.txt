@@ -188,6 +188,11 @@
 # code, e.g. 88 = F12; 0 = none). Set it in Settings > Video > Camera key by
 # pressing the key.
 #camera-key = 0
+# Fast switch (Settings > Video): the phone's video decoder keeps running while
+# the camera shows, so going back to the phone is at once. Both need more video
+# memory (CMA) than the stock 24 MiB; when they do not fit, the decoder makes
+# way for the camera and is rebuilt after, as with this off.
+#camera-fastswitch = false
 # Each input's own settings, written by the camera view: the video standard
 # (auto, pal, ntsc), then raw control values; a control left out is at its
 # default. For example:

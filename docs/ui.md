@@ -86,7 +86,11 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   cancels, Clear removes it). That key then switches to the camera and back
   from anywhere -- the screens or phone video -- and does nothing else.
   Code calls the same switch with `ui_bridge::requestCamera()` (Toggle, On,
-  Off -- e.g. for a reverse signal later).
+  Off -- e.g. for a reverse signal later). Fast switch (`camera-fastswitch`,
+  off by default): the phone's decoder keeps running behind the camera, so
+  going back to the phone needs no rebuild -- when the video memory holds
+  both (a CMA larger than the stock 24 MiB); otherwise the decoder makes way
+  as without it.
 - **Camera view** (screen 9): the camera full screen on the video plane, no
   copy -- `src/camera.cpp` exports its capture buffers as dma-bufs and
   `drm_display::showCamera()` scans them out (NV12 in contiguous memory; the
@@ -97,9 +101,10 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   parked while the camera shows and rebuilt after -- from CarPlay's
   replayed parameter sets and a keyframe, or Android Auto's restarted
   stream: a phone that had the screen is told the head unit took it (video
-  focus) and given it back. Over it, a settings
-  column at the
-  right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
+  focus) and given it back. With Fast switch the camera first tries next to
+  the running decoder (whose newest frame waits to be shown again), and
+  parks it only when its buffers do not fit -- also on a restart for a new
+  standard. Over it, a settings column at the right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
   window of the overlay; it hides 5 s after the last input, and a tap on
   the picture hides it at once. Switched on by the camera key it starts
   hidden: just the picture.
