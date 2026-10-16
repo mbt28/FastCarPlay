@@ -38,6 +38,9 @@ constexpr uint32_t POLL_MS = 1000;
 constexpr uint32_t RESTART_DELAY_MS = 300;
 // Changes are saved this long after the last one (NAND writes).
 constexpr uint32_t SAVE_DELAY_MS = 2000;
+// The screens stay up at most this long for the first frame (the decoder
+// locking onto the signal), then give way to whatever the plane has.
+constexpr uint32_t FIRST_FRAME_MS = 1000;
 
 // The per-input profiles: camera-0 .. camera-3.
 Setting<std::string> *const PROFILES[4] = {&Settings::cameraProfile0, &Settings::cameraProfile1,
@@ -451,6 +454,8 @@ bool Camera::start()
     _error.clear();
     _failed = false;
     _noMemory = false;
+    _firstShown = false;
+    _startMs = mono_ms();
     _fd = openDevice(&_error);
     if (_fd < 0)
         return false;
@@ -488,6 +493,11 @@ bool Camera::start()
     _pollAt = mono_ms() + POLL_MS;
     changed(false);
     return true;
+}
+
+bool Camera::pictureReady() const
+{
+    return _firstShown.load() || mono_ms() - _startMs >= FIRST_FRAME_MS;
 }
 
 void Camera::restart()
@@ -556,6 +566,7 @@ void Camera::loop()
                 queue(shown);
             shown = (int)b.index;
             refused = 0;
+            _firstShown = true;
             continue;
         }
         // A flip still pending: this frame is skipped.

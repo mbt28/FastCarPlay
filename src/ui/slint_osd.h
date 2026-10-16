@@ -64,6 +64,12 @@ public:
     // the renderer's buffer always holds the complete current frame).
     void invalidate();
 
+    // Entering the camera view holds the plane on the screen it has (the
+    // camera has no picture yet; with fast switch the phone's last frame is
+    // under the overlay). The camera's picture is up: what the view drew
+    // meanwhile goes to the plane on the next tick.
+    void releaseHeld();
+
 private:
     struct Impl; // Slint types stay out of this header (C++20 only in the .cpp)
     Impl *_impl = nullptr;

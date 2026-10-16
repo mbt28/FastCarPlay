@@ -706,7 +706,11 @@ void Application::loopDrm()
             // The camera is on the video plane; the screens give way to its
             // settings column (or the volume bar) in a window of the
             // overlay. Taps and keys go to the screens, which drive it.
-            if (uiShowsHome)
+            // Not before its first frame is there, though: until then the
+            // plane has nothing, or the phone's last frame (fast switch),
+            // so the screens stay as they were (held, see releaseHeld()).
+            const bool waiting = uiShowsHome && !camera.pictureReady();
+            if (uiShowsHome && !waiting)
             {
                 drm_display::uiHide();
                 osdShown = false;
@@ -717,16 +721,22 @@ void Application::loopDrm()
             keyInput.routeToUi(true);
 #endif
             camera.tick();
-            // Hidden before it is redrawn; shown (or moved: column <-> bar)
-            // after. Neither commit waits, and an unchanged window costs
-            // nothing.
-            int x, y, w, h;
-            const bool window = osd.overVideo(x, y, w, h);
-            if (!window && osdShown && drm_display::uiHide(false))
-                osdShown = false;
-            osd.tick(true);
-            if (window && drm_display::uiShowWindow(x, y, w, h, false))
-                osdShown = true;
+            if (waiting)
+                osd.tick(true);
+            else
+            {
+                osd.releaseHeld();
+                // Hidden before it is redrawn; shown (or moved: column <->
+                // bar) after. Neither commit waits, and an unchanged window
+                // costs nothing.
+                int x, y, w, h;
+                const bool window = osd.overVideo(x, y, w, h);
+                if (!window && osdShown && drm_display::uiHide(false))
+                    osdShown = false;
+                osd.tick(true);
+                if (window && drm_display::uiShowWindow(x, y, w, h, false))
+                    osdShown = true;
+            }
         }
         else
 #endif
