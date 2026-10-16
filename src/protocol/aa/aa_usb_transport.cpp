@@ -213,18 +213,25 @@ void AaUsbTransport::readLoop()
     // outranks a desktop's compositor -- see Settings::realtimePriority.
     setThreadPriority(Settings::realtimePriority ? ThreadPriority::Realtime
                                                  : ThreadPriority::Normal);
-    timeval timeout{0, 1000};
+    // Blocks until there is work: a completed transfer, a transfer's own
+    // timeout (libusb's timerfd) and close()'s interrupt all wake it. The
+    // timeout only bounds how late it sees _connected cleared elsewhere (a
+    // failed write). It was 1 ms -- a thousand wakeups a second with nothing
+    // to do, each flushing the ARM926's caches on the switch: ~17% CPU idle.
+    timeval timeout{0, 500000};
 
     log_d("AA reading thread started");
     while (_connected)
         libusb_handle_events_timeout_completed(_context, &timeout, nullptr);
 
+    // Once per transfer at teardown: a cancellation completes at once.
+    timeval cancelTimeout{0, 1000};
     log_v("Canceling transfer requests");
     for (Context &context : _transfers)
     {
         if (context.transfer)
             libusb_cancel_transfer(context.transfer);
-        libusb_handle_events_timeout_completed(_context, &timeout, nullptr);
+        libusb_handle_events_timeout_completed(_context, &cancelTimeout, nullptr);
     }
     log_v("AA reading thread stopped");
 }
@@ -263,6 +270,9 @@ void AaUsbTransport::close()
 
     _connected = false;
     _processQueue.notify();
+    // The read thread may be blocked in libusb: wake it now.
+    if (_context)
+        libusb_interrupt_event_handler(_context);
 
     if (_readThread.joinable())
         _readThread.join();
