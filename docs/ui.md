@@ -92,7 +92,12 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   `drm_display::showCamera()` scans them out (NV12 in contiguous memory; the
   display engine scales 720x576 to the panel), the phone's frames held off
   the plane meanwhile (`holdVideo`); leaving it goes back to where it was
-  opened from (a phone's video gets a fresh keyframe). Over it, a settings
+  opened from. Its buffers come from the CMA pool the phone's decoder
+  fills during a session (about 1 MiB of 24 left), so the decoder is
+  parked while the camera shows and rebuilt after -- from CarPlay's
+  replayed parameter sets and a keyframe, or Android Auto's restarted
+  stream: a phone that had the screen is told the head unit took it (video
+  focus) and given it back. Over it, a settings
   column at the
   right edge (180 px wide, as tall as its rows: `CameraPanel`) is the only
   window of the overlay; it hides 5 s after the last input, and a tap on

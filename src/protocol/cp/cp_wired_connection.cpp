@@ -224,9 +224,17 @@ void CpWiredConnection::onVideo(const uint8_t *annexB, size_t len)
     // keyframe passing through answers the request; re-ask after 1 s in case
     // one got lost.
     const uint32_t now = mono_ms();
-    if (_keyframePending.load(std::memory_order_relaxed) &&
-        annexbKinds(annexB, len, _codec.load() == AV_CODEC_ID_HEVC).keyframe)
+    const bool hevc = _codec.load() == AV_CODEC_ID_HEVC;
+    const AnnexBKinds kinds = annexbKinds(annexB, (int)len, hevc);
+    if (_keyframePending.load(std::memory_order_relaxed) && kinds.keyframe)
         _keyframePending.store(false, std::memory_order_relaxed);
+    // The stream's parameter sets, kept for a decoder that starts mid-stream
+    // (rebuilt after the camera had the video memory): see replayParamSets().
+    if (kinds.paramSets && !annexbHasPicture(annexB, (int)len, hevc))
+    {
+        std::lock_guard<std::mutex> lock(_paramMutex);
+        _paramSets.assign(annexB, annexB + len);
+    }
     if (!videoStream.pushWaitDropOldest(std::move(msg), VIDEO_BACKPRESSURE_DEPTH,
                                         VIDEO_BACKPRESSURE_TIMEOUT_MS) &&
         (!_keyframePending.load(std::memory_order_relaxed) ||
@@ -290,6 +298,10 @@ void CpWiredConnection::onSessionConnect()
     log_i("CarPlay: phone connected the :7000 control channel");
     clearInput();
     _knobSelect.store(false);
+    {
+        std::lock_guard<std::mutex> lock(_paramMutex);
+        _paramSets.clear(); // a new stream brings its own
+    }
     _sessionLive.store(true, std::memory_order_release);
     if (_state.load() != PROTOCOL_STATUS_CONNECTED)
         _state.store(PROTOCOL_STATUS_ONLINE);
@@ -420,7 +432,10 @@ void CpWiredConnection::handleInput(const Message &m)
             enqueueCommand(siriCommand(2));
             enqueueCommand(siriCommand(3));
             break;
-        case BTN_SCREEN_REFRESH: enqueueCommand(forceKeyFrameCommand()); break;
+        case BTN_SCREEN_REFRESH:
+            replayParamSets();
+            enqueueCommand(forceKeyFrameCommand());
+            break;
         case BTN_NIGHT_ON:
         case BTN_NIGHT_OFF:
         case BTN_NIGHT_AUTO:
@@ -449,7 +464,27 @@ void CpWiredConnection::handleInput(const Message &m)
 void CpWiredConnection::requestVideoFocus()
 {
     _videoFocused.store(true);
+    replayParamSets();
     enqueueCommand(forceKeyFrameCommand());
+}
+
+// A decoder started mid-stream has no parameter sets -- the phone sends them
+// only at the start of the stream -- so the last ones go in front of the
+// keyframe about to be asked for.
+void CpWiredConnection::replayParamSets()
+{
+    std::vector<uint8_t> sets;
+    {
+        std::lock_guard<std::mutex> lock(_paramMutex);
+        sets = _paramSets;
+    }
+    if (sets.empty())
+        return;
+    auto msg = Message::Payload(CMD_VIDEO_DATA, (int32_t)sets.size(), AV_INPUT_BUFFER_PADDING_SIZE);
+    if (!msg->data())
+        return;
+    std::memcpy(msg->data(), sets.data(), sets.size());
+    videoStream.pushDropOldest(std::move(msg));
 }
 
 void CpWiredConnection::writerLoop()
