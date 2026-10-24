@@ -813,7 +813,7 @@ struct SlintOsd::Impl
         if (nav == OsdKey::Erase && !repeat)
             eraseEdits = bridge.get_prompt_kind() == 0 && editing >= 0;
 
-        if (nav == OsdKey::Home)
+        if (nav == OsdKey::Home || nav == OsdKey::Menu)
         {
             if (repeat)
                 return;
@@ -853,6 +853,15 @@ struct SlintOsd::Impl
                 break;
             case OsdKey::Prev:
                 bridge.set_prompt_focus(focus < 0 ? start : focus <= first ? 1 : focus - 1);
+            // Menu on the home screen, nothing open over it: back to the
+            // phone's waiting session, as its Resume row. Elsewhere, Home.
+            if (nav == OsdKey::Menu && bridge.get_screen() == 0 &&
+                bridge.get_prompt_kind() == 0 && editing < 0)
+            {
+                if (ui_bridge::backgroundedSession())
+                    ui_bridge::requestResume();
+                return;
+            }
                 break;
             case OsdKey::Ok:
                 if (focus < 0 && dialogLocal)

@@ -17,6 +17,7 @@ enum class OsdKey : uint8_t
     Back,  // leave the current screen, dialog or editor
     Erase, // delete a character while editing; Back otherwise
     Home,  // straight to the home screen
+    Menu,  // the home screen; on it, back to the phone's waiting session
     Next,  // one rotary detent forward: the next focusable thing, wrapping
     Prev,  // one rotary detent back
 };

@@ -36,7 +36,10 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   own focus traversal and scroll-into-view move an amber ring over the rows;
   Enter activates the focused row (each `Row` has a `FocusScope`). Back/Esc,
   Backspace and Left call the exported `back()` function and Home sets the
-  screen directly, so neither depends on focus. While a Settings row picks
+  screen directly, so neither depends on focus. Menu is Home, except on the
+  home screen with nothing open over it: there it goes back to the phone's
+  waiting session, as the Resume row (from the phone's video it brings the
+  screens up on Home). While a Settings row picks
   in place (below), every key is that row's (`pickKey`). While the editor
   or a dialog is open, keys go straight to its
   callbacks (typed characters -> `osk-key`). In the editor the arrows move a
