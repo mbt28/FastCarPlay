@@ -3,8 +3,11 @@
 #include <alsa/asoundlib.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdio>
 
 #include "audio_volume.h"
+#include "common/clock.h"
 #include "common/functions.h"
 #include "common/logger.h"
 #include "protocol/protocol_const.h"
@@ -33,6 +36,15 @@
 // Samples at or below this are digital silence (-78 dBFS): what a phone sends
 // while a stream stays open and nothing plays.
 #define SILENCE_LEVEL 4
+// The music buffer's range (Settings::audioBufferMs): the music queue holds
+// ~2.7 s (AUDIO_MAIN_QUEUE_SIZE), room for a burst on top of the deepest.
+#define MAX_BUFFER_MS 1500
+// Voice other than a call (navigation, Siri) starts after this many segments.
+#define AUX_PREFILL_SEGMENTS 2
+// Music queued this far past its buffer is a backlog -- what a phone sends in
+// one go once a stalled link recovers -- not jitter: it is skipped down to the
+// buffer, so the music plays at the live edge again instead of seconds late.
+#define LATENCY_SLACK_MS 1000
 
 namespace
 {
@@ -179,6 +191,29 @@ bool AudioMixer::fetchFrame(Source &s, int16_t &l, int16_t &r)
 
 int AudioMixer::renderSource(Source &s, int32_t *mix, int frames, int32_t &volQ15, int32_t targetQ15)
 {
+    // The usual case -- 48 kHz music, no fade under way: each output frame is
+    // the next source frame, the one fetched ahead (phase stays 0). The same
+    // output as the interpolator below, without its arithmetic.
+    if (s.step == 65536 && s.primed && s.phase == 0 && volQ15 == targetQ15)
+    {
+        for (int i = 0; i < frames; i++)
+        {
+            const int32_t l = s.nextL, r = s.nextR;
+            if (!fetchFrame(s, s.nextL, s.nextR))
+            {
+                s.primed = false; // dry: this frame still plays, as below
+                mix[2 * i] += volQ15 == 32768 ? l : (l * volQ15) >> 15;
+                mix[2 * i + 1] += volQ15 == 32768 ? r : (r * volQ15) >> 15;
+                return i + 1;
+            }
+            s.prevL = (int16_t)l;
+            s.prevR = (int16_t)r;
+            mix[2 * i] += volQ15 == 32768 ? l : (l * volQ15) >> 15;
+            mix[2 * i + 1] += volQ15 == 32768 ? r : (r * volQ15) >> 15;
+        }
+        return frames;
+    }
+
     for (int i = 0; i < frames; i++)
     {
         if (volQ15 < targetQ15)
@@ -259,6 +294,64 @@ void AudioMixer::capAuxQueue()
         _aux.q->pop();
 }
 
+int AudioMixer::queuedMs(const Source &s) const
+{
+    int64_t ms = 0;
+    if (s.seg && s.rate > 0 && s.segPos < s.segFrames)
+        ms += (int64_t)(s.segFrames - s.segPos) * 1000 / s.rate;
+    // Segments of one stream are the same size: the head stands for all.
+    if (const Message *head = s.q->peek())
+    {
+        const Fmt f = fmtOf(head);
+        const int64_t frames = head->length() / (2 * f.channels);
+        if (f.rate > 0)
+            ms += frames * (int64_t)s.q->count() * 1000 / f.rate;
+    }
+    return (int)ms;
+}
+
+void AudioMixer::followBuffer(int bufferMs)
+{
+    if (bufferMs == _bufferMs)
+        return;
+    if (_main.live && _bufferMs >= 0)
+    {
+        if (bufferMs > _bufferMs)
+            _main.live = false; // a short pause while it fills to the new depth
+        else
+            while (queuedMs(_main) > bufferMs && _main.q->count() > 0)
+                _main.q->pop(); // the oldest first: it plays sooner from here
+    }
+    _bufferMs = bufferMs;
+}
+
+void AudioMixer::reportStats()
+{
+    const uint32_t now = mono_ms();
+    const int depth = queuedMs(_main);
+    const uint32_t drops = _main.q->drops() + _aux.q->drops();
+    if (_stats.fresh)
+    {
+        _stats = Stats{};
+        _stats.fresh = false;
+        _stats.startMs = now;
+        _stats.depthMin = _stats.depthMax = depth;
+        _stats.drops = drops;
+        return;
+    }
+    _stats.depthMin = std::min(_stats.depthMin, depth);
+    _stats.depthMax = std::max(_stats.depthMax, depth);
+    const uint32_t span = now - _stats.startMs;
+    if (span < 5000)
+        return;
+    fprintf(stderr,
+            "[Audio] music queued %d-%d ms (buffer %d ms), %u dry, %u ms skipped, "
+            "%u underruns, %u dropped (%.1fs)\n",
+            _stats.depthMin, _stats.depthMax, _bufferMs, _stats.dry, _stats.skippedMs,
+            _stats.underruns, drops - _stats.drops, span / 1000.0);
+    _stats.fresh = true;
+}
+
 bool AudioMixer::dropSilence()
 {
     bool audible = false;
@@ -325,25 +418,47 @@ void AudioMixer::loop()
             // came back gets its volume again (from the main loop).
             _volumeQ15 = AudioVolume::instance().softwareGainQ15();
             AudioVolume::instance().outputOpened();
+            _stats.fresh = true;
+        }
+        reportStats();
+
+        const int bufferMs = std::clamp((int)Settings::audioBufferMs, 0, MAX_BUFFER_MS);
+        followBuffer(bufferMs);
+        if (const int queued = queuedMs(_main); queued > bufferMs + LATENCY_SLACK_MS)
+        {
+            while (queuedMs(_main) > bufferMs && _main.q->count() > 0)
+                _main.q->pop(); // the oldest first
+            _stats.skippedMs += (uint32_t)(queued - queuedMs(_main));
         }
 
-        // Source liveness: a dry source needs a short prefill before it starts
-        // feeding (absorbs bursty delivery); a brief gap resumes instantly.
+        // Source liveness: a source that is not playing waits for a prefill
+        // before it starts (absorbs bursty delivery). Music waits for its
+        // buffer -- or as long, should less ever come (a clip shorter than
+        // the buffer still plays); a call and other voice for a few segments.
+        const uint32_t now = mono_ms();
         for (Source *s : {&_main, &_aux})
         {
-            if (!s->live)
+            if (s->live)
+                continue;
+            const Message *head = s->q->peek();
+            if (!head)
             {
-                const Message *head = s->q->peek();
-                if (head)
-                {
-                    const int prefill = (fmtOf(head).channels == 1) ? Settings::audioDelayCall
-                                                                    : Settings::audioDelay;
-                    if (s->q->has((uint16_t)prefill))
-                    {
-                        s->live = true;
-                        s->dryPeriods = 0;
-                    }
-                }
+                s->waitSince = 0;
+                continue;
+            }
+            if (s->waitSince == 0)
+                s->waitSince = now ? now : 1;
+            bool ready;
+            if (s == &_main)
+                ready = queuedMs(*s) >= bufferMs || now - s->waitSince >= (uint32_t)bufferMs;
+            else
+                ready = s->q->has((uint16_t)(fmtOf(head).channels == 1 ? Settings::audioDelayCall
+                                                                       : AUX_PREFILL_SEGMENTS));
+            if (ready)
+            {
+                s->live = true;
+                s->dryPeriods = 0;
+                s->waitSince = 0;
             }
         }
 
@@ -354,6 +469,14 @@ void AudioMixer::loop()
         _aux.zeroAcc = 0;
         if (_main.live)
             mainRendered = renderSource(_main, mix, MIX_PERIOD, _mainVolQ15, _mainTargetQ15);
+        // Music that runs dry refills to its buffer before it plays on: one
+        // pause, then a full buffer again -- not a stutter with every late
+        // packet that follows.
+        if (_main.live && mainRendered < MIX_PERIOD)
+        {
+            _main.live = false;
+            _stats.dry++;
+        }
         int32_t auxVol = 32768;
         if (_aux.live)
             auxRendered = renderSource(_aux, mix, MIX_PERIOD, auxVol, 32768);
@@ -401,6 +524,8 @@ void AudioMixer::loop()
         snd_pcm_sframes_t w = snd_pcm_writei(_pcm, out, MIX_PERIOD);
         if (w < 0)
         {
+            if (w == -EPIPE)
+                _stats.underruns++;
             w = snd_pcm_recover(_pcm, (int)w, 1);
             if (w < 0)
             {
@@ -415,7 +540,9 @@ void AudioMixer::loop()
         // only digital silence from a stream the phone keeps open. The kernel
         // then powers the DAC and the headphone amp down (no idle hiss), the
         // period wakeups stop, and a future owner can reconfigure the hw.
-        if (silent ||
+        // Not while a source fills its buffer: that silence is a pause.
+        const bool filling = (!_main.live && _main.q->has(1)) || (!_aux.live && _aux.q->has(1));
+        if ((silent && !filling) ||
             (mainRendered == 0 && auxRendered == 0 && !_main.q->has(1) && !_aux.q->has(1)))
         {
             if (++idlePeriods * MIX_PERIOD_MS > Settings::audioIdleHoldMs)

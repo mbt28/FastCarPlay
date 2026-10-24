@@ -54,6 +54,7 @@ private:
         bool primed = false; // prev/next hold valid samples
         bool live = false;   // consuming (prefill satisfied)
         int dryPeriods = 0;  // consecutive periods with nothing to consume
+        uint32_t waitSince = 0; // not live with audio queued since (0: not waiting)
         uint32_t zeroAcc = 0; // |sample| OR-accumulator for silence detection
     };
 
@@ -75,6 +76,14 @@ private:
     // With the device closed: drop queued segments of digital silence; true
     // when audible audio waits.
     bool dropSilence();
+    // Every 5 s while the device is open, one line on how the music queue
+    // and the DAC fared (gaps are otherwise recovered silently).
+    void reportStats();
+    // Audio queued for a source, its current segment's rest included, in ms.
+    int queuedMs(const Source &s) const;
+    // The music buffer (Settings::audioBufferMs), followed live: deeper
+    // refills once, shallower drops the excess at once.
+    void followBuffer(int bufferMs);
 
     std::thread _thread;
     std::atomic<bool> _active{false};
@@ -84,6 +93,18 @@ private:
     int32_t _mainTargetQ15 = 32768;
     int32_t _volumeQ15 = 32768;   // software volume, as ramped so far
     int _auxSilentPeriods = 0;
+    int _bufferMs = -1;           // the music buffer applied so far
+
+    struct Stats
+    {
+        uint32_t startMs = 0;
+        uint32_t dry = 0;       // music ran dry and refilled: a gap heard
+        uint32_t skippedMs = 0; // a backlog skipped to the live edge
+        uint32_t underruns = 0; // the DAC ran out (-EPIPE)
+        int depthMin = 0, depthMax = 0; // music queued, ms
+        uint32_t drops = 0;     // queue overflow drops so far (both queues)
+        bool fresh = true;
+    } _stats;
 };
 
 #endif /* SRC_AUDIO_MIXER */

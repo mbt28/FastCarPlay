@@ -153,6 +153,12 @@ constexpr uint32_t KEY_RECENT_MS = 10000;
 // A row picked in place stops this long after the last input.
 constexpr uint32_t PICK_MS = 10000;
 
+// Settings > Audio buffer: its steps and range (the mixer's MAX_BUFFER_MS),
+// and how long after the last step it is saved (NAND writes).
+constexpr int BUFFER_STEP_MS = 50;
+constexpr int BUFFER_MAX_MS = 1500;
+constexpr uint32_t BUFFER_SAVE_MS = 2000;
+
 // The volume bar stays up this long after the last change.
 constexpr uint32_t VOLUME_BAR_MS = 2000;
 
@@ -316,12 +322,37 @@ struct SlintOsd::Impl
         PickNight = 2,
         PickPower = 3,
         PickVolume = 4,
+        PickBuffer = 5,
     };
     int pick = PickNone;
     int pickStep = 0;   // Source: 1 the medium, 2 the phone
     int pickChoice = 0; // the option shown as taken
     int srcMedium = 0;  // taken in Source's step 1: 0 wired, 1 wireless
     uint32_t pickLastMs = 0;
+    int pBufferMs = -1;
+    uint32_t bufferSaveAt = 0; // 0: saved
+
+    // The music buffer one step deeper (+1) or shallower (-1). The mixer
+    // follows the setting at once; the file is written once turning stops.
+    void stepBuffer(int direction)
+    {
+        const int now = Settings::audioBufferMs;
+        const int next =
+            std::clamp((now / BUFFER_STEP_MS + direction) * BUFFER_STEP_MS, 0, BUFFER_MAX_MS);
+        if (next == now)
+            return;
+        Settings::audioBufferMs.value = next;
+        bufferSaveAt = mono_ms() + BUFFER_SAVE_MS;
+        pickLastMs = mono_ms();
+    }
+
+    void saveBuffer()
+    {
+        if (bufferSaveAt == 0)
+            return;
+        bufferSaveAt = 0;
+        persist("audio-buffer-ms", std::to_string((int)Settings::audioBufferMs).c_str(), false);
+    }
 
     void showPick(const Bridge &bridge)
     {
@@ -375,6 +406,9 @@ struct SlintOsd::Impl
                     dialogDirty = true;
                 }
                 break;
+            case PickBuffer:
+                saveBuffer();
+                break;
             default: // Audio: each step applied at once
                 break;
             }
@@ -395,12 +429,12 @@ struct SlintOsd::Impl
         case OsdKey::Left:
             direction = -1;
             break;
-        // Up is louder on the level, back along the options elsewhere.
+        // Up is more on a level, back along the options elsewhere.
         case OsdKey::Up:
-            direction = pick == PickVolume ? 1 : -1;
+            direction = pick == PickVolume || pick == PickBuffer ? 1 : -1;
             break;
         case OsdKey::Down:
-            direction = pick == PickVolume ? -1 : 1;
+            direction = pick == PickVolume || pick == PickBuffer ? -1 : 1;
             break;
         case OsdKey::Ok:
             if (!repeat)
@@ -427,6 +461,8 @@ struct SlintOsd::Impl
         }
         if (pick == PickVolume)
             AudioVolume::instance().step(direction);
+        else if (pick == PickBuffer)
+            stepBuffer(direction);
         else
             pickChoice = std::clamp(pickChoice + direction, 0, pick == PickSource ? 1 : 2);
         showPick(bridge);
@@ -817,6 +853,15 @@ struct SlintOsd::Impl
         {
             if (repeat)
                 return;
+            // Menu on the home screen, nothing open over it: back to the
+            // phone's waiting session, as its Resume row. Elsewhere, Home.
+            if (nav == OsdKey::Menu && bridge.get_screen() == 0 &&
+                bridge.get_prompt_kind() == 0 && editing < 0)
+            {
+                if (ui_bridge::backgroundedSession())
+                    ui_bridge::requestResume();
+                return;
+            }
             if (bridge.get_prompt_kind() != 0)
                 bridge.invoke_prompt_cancel();
             if (editing >= 0)
@@ -853,15 +898,6 @@ struct SlintOsd::Impl
                 break;
             case OsdKey::Prev:
                 bridge.set_prompt_focus(focus < 0 ? start : focus <= first ? 1 : focus - 1);
-            // Menu on the home screen, nothing open over it: back to the
-            // phone's waiting session, as its Resume row. Elsewhere, Home.
-            if (nav == OsdKey::Menu && bridge.get_screen() == 0 &&
-                bridge.get_prompt_kind() == 0 && editing < 0)
-            {
-                if (ui_bridge::backgroundedSession())
-                    ui_bridge::requestResume();
-                return;
-            }
                 break;
             case OsdKey::Ok:
                 if (focus < 0 && dialogLocal)
@@ -1118,6 +1154,14 @@ struct SlintOsd::Impl
             bridge.set_camera_fastswitch(pFastSwitch != 0);
         }
 
+        if (Settings::audioBufferMs != pBufferMs)
+        {
+            pBufferMs = Settings::audioBufferMs;
+            bridge.set_buffer_label(slint::SharedString(std::to_string(pBufferMs) + " ms"));
+        }
+        if (bufferSaveAt != 0 && due(mono_ms(), bufferSaveAt))
+            saveBuffer();
+
         // A row picking in place stops off its screen, under a dialog, or
         // left alone.
         if (pick != PickNone && (bridge.get_screen() != 1 || bridge.get_prompt_kind() != 0 ||
@@ -1360,8 +1404,10 @@ bool SlintOsd::beginDrm(int width, int height)
         impl->pickLastMs = mono_ms(); // the level row stays up while used
     });
     bridge.on_pick_press([impl](int row) { impl->pickPress(impl->ui->global<Bridge>(), row); });
+    bridge.on_buffer_step([impl](int direction) { impl->stepBuffer(direction); });
     bridge.on_pick_option([impl](int option) {
-        if (impl->pick == Impl::PickNone || impl->pick == Impl::PickVolume)
+        if (impl->pick == Impl::PickNone || impl->pick == Impl::PickVolume ||
+            impl->pick == Impl::PickBuffer)
             return;
         impl->pickChoice = option;
         impl->pickPress(impl->ui->global<Bridge>(), impl->pick);

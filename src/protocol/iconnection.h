@@ -19,10 +19,13 @@ extern "C"
 // a stalled consumer could park 6-16 MB of payloads AND 2-4 seconds of A/V
 // behind it. 16 video slots is ~0.27 s at 60 fps (Android Auto video pushes
 // drop-oldest, so overflow costs latency recovered by a keyframe, never fresh
-// frames); 24 audio slots is ~0.5 s of 48 kHz stereo segments.
+// frames); 24 audio slots is ~0.5 s of 48 kHz stereo segments. Music gets
+// 128 (~2.7 s of 21 ms AAC frames): a CarPlay phone sends media ahead, in
+// bursts, and a burst dropped here is a skip heard (audio-buffer-ms).
 #define WRITE_QUEUE_SIZE 32
 #define VIDEO_QUEUE_SIZE 16
 #define AUDIO_QUEUE_SIZE 24
+#define AUDIO_MAIN_QUEUE_SIZE 128
 
 // Video over TCP (CarPlay) is pushed with back-pressure instead: past this
 // many queued frames the stream reader waits, TCP flow control slows the
@@ -42,7 +45,7 @@ public:
     IConnection()
         : writeQueue(WRITE_QUEUE_SIZE),
           videoStream(VIDEO_QUEUE_SIZE),
-          audioStreamMain(AUDIO_QUEUE_SIZE),
+          audioStreamMain(AUDIO_MAIN_QUEUE_SIZE),
           audioStreamAux(AUDIO_QUEUE_SIZE),
           _state(PROTOCOL_STATUS_INITIALISING),
           _method("unknown"),

@@ -75,12 +75,12 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
   a phone is connected over Bluetooth (line drawings, `Path`); a
   double-height Resume row only while a connected session waits behind the
   UI; Settings.
-- **Settings**: Back on top (easiest reach), Audio, Source, Wireless (only
-  four rows fit above the fold: audio, used on the road, then
-  connectivity), Night, Video (screen 8, below), Power, and Restart now -- which
+- **Settings**: Back on top (easiest reach), Audio, Audio buffer, Source
+  (only four rows fit above the fold: audio, used on the road, then
+  Source), Wireless, Night, Video (screen 8, below), Power, and Restart now -- which
   appears only once a staged change needs it. Staged changes never drop a
   live session; the header says "restart to apply".
-- **Rows picked in place** -- Audio, Source, Night, Power -- have no screen
+- **Rows picked in place** -- Audio, Audio buffer, Source, Night, Power -- have no screen
   of their own: built for the knob. Enter (or a tap) starts one; a turn or
   an arrow moves along its options, stopping at the ends so a fast spin
   cannot land anywhere unexpected; Enter takes the one shown, a tap takes
@@ -170,7 +170,25 @@ src/ui/osd.h                selects the toolkit; defines USE_OSD_UI
 - **Audio**: the level in its row -- Enter starts it, the knob (or Up and
   Down, Left and Right) turns it live, Enter or Back ends it; - and + by
   touch. There is no Mute row: 0% is silent and shows as Muted (the volume
-  bar too), and a step up unmutes, as from a mute key. The volume / mute keys of
+  bar too), and a step up unmutes, as from a mute key.
+- **Audio buffer**: how much music is held before it plays -- when it
+  starts and again after it runs dry (`audio-buffer-ms`, 0..1500 ms in
+  50 ms steps, 500 by default: the ESP32 radio routinely goes ~300 ms
+  without Wi-Fi, sharing its time with Bluetooth). More rides out a wireless link's stalls and
+  bursts (a CarPlay phone sends media ahead, in bursts), less starts sooner.
+  Turned like Audio, and the mixer follows each step as the music plays: a
+  deeper buffer pauses once to fill up, a shallower one drops the excess at
+  once. Saved 2 s after the last step. The music queue holds ~2.7 s
+  (`AUDIO_MAIN_QUEUE_SIZE`), so a burst on top of the deepest buffer is kept,
+  and an RTSP FLUSH from the phone (a pause, a skip) empties it. A backlog
+  more than 1 s past the buffer -- what the phone sends in one go once a
+  stalled link recovers -- is skipped down to the buffer, so the music
+  plays at the live edge again rather than seconds late. Every 5 s
+  the log says how it went: `[Audio] music queued A-B ms (buffer N ms), dry,
+  ms skipped, underruns, dropped` from the mixer, and `[CP audio 102] % of realtime, max
+  gap` from CarPlay's receiver -- the network's jitter the buffer has to
+  cover.
+- The volume / mute keys of
   a Bluetooth keyboard or remote work whatever is on screen. A change
   applies at once, shows the volume bar for 2 s and is saved 2 s after the
   last one; mute is never saved. `src/audio_volume.cpp` sets it through the

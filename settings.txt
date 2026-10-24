@@ -130,8 +130,11 @@
 # Percent per volume key press or -/+ tap.
 #volume-step = 5
 
-# Buffers (in 10 ms periods) to hold before starting playback: music / call.
-#audio-buffer-wait = 2
+# Music held before it plays, in ms -- when it starts and again after it runs
+# dry. More rides out a wireless link's stalls and bursts, less starts sooner.
+# Settings > Audio buffer changes it live (0..1500, 50 ms steps).
+#audio-buffer-ms = 500
+# Voice held before a call's audio starts, in queued segments.
 #audio-buffer-wait-call = 6
 
 # Seconds of fade-in after a stream starts or ducks.

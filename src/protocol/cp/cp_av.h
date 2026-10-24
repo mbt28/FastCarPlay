@@ -98,6 +98,9 @@ struct Sinks
     // PCM rate + channel count, and S16 interleaved (native-endian) samples.
     // The pointer is only valid for the duration of the call.
     std::function<void(int type, int rate, int channels, const uint8_t *pcm, size_t bytes)> onAudio;
+    // The phone dropped the media it had sent ahead (RTSP FLUSH: a pause, a
+    // skip): what is queued must not play.
+    std::function<void()> onFlush;
     // The phone tapped the CarPlay dock's car/home icon (a POST /command
     // {type:'requestUI'}), asking us to bring the head-unit's own UI to the
     // foreground -- the CarPlay equivalent of Android Auto's host-ui-requested.

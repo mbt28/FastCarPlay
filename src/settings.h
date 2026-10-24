@@ -109,10 +109,13 @@ public:
     // the machine can stop responding to its own keyboard and mouse. Set
     // false when running FastCarPlay in a window alongside other work.
     static inline Setting<bool> realtimePriority{"realtime-priority", true};
-    // Prefill (in queued segments) before the mixer starts consuming a freshly
-    // started source: absorbs bursty delivery so the first words don't stutter.
-    // Voice (mono) tolerates a longer prefill than music start-up.
-    static inline Setting<int> audioDelay{"audio-buffer-wait", 2};
+    // Music queued before it plays -- when it starts and again after it runs
+    // dry -- in ms: rides out the stalls and bursts of a wireless link (a
+    // CarPlay phone sends media ahead, in bursts). Changed live in Settings >
+    // Audio buffer: a bigger value pauses once to fill up, a smaller one
+    // drops the excess at once.
+    static inline Setting<int> audioBufferMs{"audio-buffer-ms", 500};
+    // Voice (mono) prefill, in queued segments, before a call's audio starts.
     static inline Setting<int> audioDelayCall{"audio-buffer-wait-call", 6};
     static inline Setting<float> audioFade{"audio-fade", 0.3};
     // The ALSA PCM the in-app mixer and the mic capture open DIRECTLY (no

@@ -1,5 +1,6 @@
 #include "cp_av.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -654,8 +655,8 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
     // slow/starved feed from a bursty-but-realtime one.
     struct timespec t0{};
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    int64_t lastLogMs = 0, lastPktMs = 0;
-    size_t lastSamples = 0, totalSamples = 0;
+    int64_t lastLogMs = 0, lastPktMs = 0, maxGapMs = 0;
+    size_t lastSamples = 0, totalSamples = 0, lastPackets = 0;
     while (_running)
     {
         struct pollfd pfds[2] = {{dataFd, POLLIN, 0}, {ctrlFd, POLLIN, 0}};
@@ -771,22 +772,28 @@ void AvSession::audioLoop(int dataFd, int ctrlFd, int64_t streamId, int type,
                   dec.outRate(), dec.outChannels());
             markAudioActive(streamId); // list it in /feedback so the phone keeps it up
         }
-        // Every ~2s report audio-ms delivered vs wall-clock-ms (100% = realtime).
+        // Every 5 s: audio delivered vs wall clock (100% = realtime) and the
+        // longest wait between two packets -- the network's jitter, which the
+        // playback queue has to ride out.
         {
             struct timespec now{};
             clock_gettime(CLOCK_MONOTONIC, &now);
             int64_t elapsedMs = (now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+            if (packets > 1)
+                maxGapMs = std::max(maxGapMs, elapsedMs - lastPktMs);
             lastPktMs = elapsedMs; // liveness for the call-mode safety net
-            if (elapsedMs - lastLogMs >= 2000)
+            if (elapsedMs - lastLogMs >= 5000)
             {
                 const int rate = dec.outRate() > 0 ? dec.outRate() : 44100;
                 int64_t audioMs = (int64_t)(totalSamples - lastSamples) * 1000 / rate;
                 int64_t wallMs = elapsedMs - lastLogMs;
-                log_v("[cp-av] audio %d throughput: %lld ms audio / %lld ms wall (%lld%%), %zu pkts",
-                      type, (long long)audioMs, (long long)wallMs, (long long)(audioMs * 100 / (wallMs ? wallMs : 1)),
-                      packets);
+                fprintf(stderr, "[CP audio %d] %lld%% of realtime, %zu pkts, max gap %lld ms (%.1fs)\n",
+                        type, (long long)(audioMs * 100 / (wallMs ? wallMs : 1)),
+                        packets - lastPackets, (long long)maxGapMs, wallMs / 1000.0);
                 lastLogMs = elapsedMs;
                 lastSamples = totalSamples;
+                lastPackets = packets;
+                maxGapMs = 0;
             }
         }
         if (_sinks.onAudio)
@@ -1167,7 +1174,14 @@ bool AvSession::handle(const cp_rtsp::Request &req, cp_rtsp::Response &res)
         _recorded.store(true);
         return true;
     }
-    if (m == "SET_PARAMETER" || m == "GET_PARAMETER" || m == "OPTIONS" || m == "FLUSH") return true;
+    if (m == "FLUSH")
+    {
+        log_i("[cp-av] FLUSH -- queued media dropped");
+        if (_sinks.onFlush)
+            _sinks.onFlush();
+        return true;
+    }
+    if (m == "SET_PARAMETER" || m == "GET_PARAMETER" || m == "OPTIONS") return true;
     if (m == "TEARDOWN")
     {
         // The body lists the streams being torn down (same shape as SETUP). End

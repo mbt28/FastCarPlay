@@ -42,7 +42,7 @@ export global Bridge {
     in property <bool> session-waiting;       // backgrounded session behind the UI
     in property <bool> restart-needed;        // a staged change awaits a restart
     // Settings rows picked in place, driven from C++: which one is (0 none,
-    // 1 Source, 2 Night, 3 Power, 4 Audio's level), its step (Source: 1
+    // 1 Source, 2 Night, 3 Power, 4 Audio's level, 5 Audio buffer), its step (Source: 1
     // wired or wireless, 2 Android Auto or CarPlay), the option shown as
     // taken, and the medium Source took in step 1 (0 wired, 1 wireless).
     in property <int> pick;
@@ -54,6 +54,7 @@ export global Bridge {
     in property <string> volume-label;        // "60%" / "Muted"
     in property <int> volume-level;           // 0..100
     in property <bool> volume-muted;
+    in property <string> buffer-label;        // the music buffer: "300 ms"
     in property <bool> volume-bar;            // up for a moment after a change
     // How the phone is connected right now (the Home screen's icons).
     in property <bool> link-usb;
@@ -117,6 +118,7 @@ export global Bridge {
     callback restart-now();
     callback cycle-fps();
     callback volume-step(int);                // -1 quieter, +1 louder
+    callback buffer-step(int);                // -1 / +1: 50 ms less / more
     callback camera-select(int);              // a tap on a row
     callback camera-adjust(int);              // -/+ on the ringed row
     callback camera-picture();                // a tap on the picture: the column hides
@@ -721,6 +723,16 @@ component ScreenSettings inherits ListScreen {
         editing: Bridge.pick == 4;
         clicked => { Bridge.pick-press(4); }
         step(direction) => { Bridge.volume-step(direction); }
+    }
+    // Music held before it plays: more rides out a wireless link's stalls
+    // and bursts, less starts sooner. It follows each step as music plays.
+    LevelRow {
+        label: "Audio buffer";
+        value: Bridge.buffer-label;
+        level: Bridge.buffer-label;
+        editing: Bridge.pick == 5;
+        clicked => { Bridge.pick-press(5); }
+        step(direction) => { Bridge.buffer-step(direction); }
     }
     // Wired or wireless, then Android Auto or CarPlay; the pick is saved and
     // waits for a restart, a live session is never dropped.

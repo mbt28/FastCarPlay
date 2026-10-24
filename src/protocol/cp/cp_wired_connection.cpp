@@ -731,6 +731,7 @@ void CpWiredConnection::start()
     sinks.onVideoCodec = [this](bool hevc) { onVideoCodec(hevc); };
     sinks.onVideo = [this](const uint8_t *b, size_t n) { onVideo(b, n); };
     sinks.onAudio = [this](int t, int r, int c, const uint8_t *p, size_t n) { onAudio(t, r, c, p, n); };
+    sinks.onFlush = [this] { audioStreamMain.clear(); };
     sinks.onCallState = [this](bool a) { onCallState(a); };
     // The CarPlay dock's car icon (requestUI) hands the screen back to us.
     sinks.onRequestNativeUI = [this] {
