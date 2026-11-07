@@ -1,5 +1,11 @@
 # FastCarPlay
 
+> **This project is retired.** FastCarPlay has been rewritten in Rust as
+> **[LEHU](https://github.com/mbt28/lehu)**, a lightweight embedded head unit
+> for CarPlay and Android Auto, wired and wireless, built for the same
+> F1C200s boards. New work happens there; this repository stays as it is,
+> read-only.
+
 A C++ CarPlay and Android Auto receiver for small embedded Linux boards,
 built for the Allwinner F1C200s (ARM926EJ-S @ 408 MHz, 64 MB RAM, no FPU).
 It speaks the native protocols directly -- wireless and wired CarPlay,
